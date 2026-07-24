@@ -86,7 +86,7 @@ def print_review_checklist() -> None:
         "Train 02: offset_x=86.074  offset_y=-21.695  rotation=180.0",
         "Train 01 thermal_lensing_passed = false",
         "Train 02 thermal_lensing_passed = true",
-        "Both trains: clearbox.correction_data_shape = [257, 257, 2]",
+        "Both trains: clearbox.correction_data is a 257×257×2 nested list",
         "Train 01 scan_field_correction_file.file_size = 1138799",
         "Train 02 scan_field_correction_file.file_size = 1142763",
         "No OPCUA fields appear anywhere in the output",

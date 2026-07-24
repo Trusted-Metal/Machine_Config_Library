@@ -12,6 +12,7 @@ import numpy as np
 import yaml
 
 from .models import (
+    AxisConfig,
     BuildPlate,
     ClearBox,
     Collimator,
@@ -51,7 +52,28 @@ def _gaussian_correction_grid(shape: tuple[int, int, int] = (257, 257, 2)) -> np
     return grid
 
 
+def _mock_axis(bit_res: int = 20) -> AxisConfig:
+    return AxisConfig(
+        actual_bit_resolution=bit_res,
+        actual_bit_resolution_unit="bits",
+        commanded_bit_resolution=bit_res,
+        commanded_bit_resolution_unit="bits",
+        control_type=None,
+        range_of_motion=None,
+        range_of_motion_unit="mm",
+        smoothing_kernel="GAUSSIAN",
+        smoothing_parameters=60.0,
+        tuning_parameters=None,
+        tuning_type=None,
+    )
+
+
 def _mock_clearbox(ip: str, serial: str) -> ClearBox:
+    grid = _gaussian_correction_grid()
+    inv  = _gaussian_correction_grid() * 0.95
+    # Convert ndarray to nested Python list (no NaNs in synthetic data)
+    correction_data:         list = grid.tolist()
+    inverse_correction_data: list = inv.tolist()
     return ClearBox(
         ip_address=ip,
         serial_number=serial,
@@ -59,8 +81,8 @@ def _mock_clearbox(ip: str, serial: str) -> ClearBox:
         server_port=20101,
         actual_timing_offset=-8,
         commanded_timing_offset=50,
-        correction_data_shape=(257, 257, 2),
-        inverse_correction_data_shape=(257, 257, 2),
+        correction_data=correction_data,
+        inverse_correction_data=inverse_correction_data,
         manufacturer=None,
         model=None,
         output_path="/recordings/",
@@ -122,6 +144,9 @@ def _mock_train(
         scan_head_rotation=rotation,
         scan_head_rotation_unit="degrees",
         axis_configuration="3D",
+        x_axis=_mock_axis(),
+        y_axis=_mock_axis(),
+        z_axis=_mock_axis(),
     )
 
     light_source = LightSource(
@@ -398,6 +423,10 @@ class YamlConfigBuilder:
             scan_head_rotation=_fv(ss, "scan_head_rotation"),
             scan_head_rotation_unit="degrees" if ss.get("scan_head_rotation") is not None else None,
             axis_configuration=ss.get("axis_configuration"),
+            x_axis=_mock_axis(),
+            y_axis=_mock_axis(),
+            z_axis=_mock_axis() if ss.get("axis_configuration") in ("3D", "3D+Focus", None) else None,
+            focus=_mock_axis() if ss.get("axis_configuration") == "3D+Focus" else None,
         )
 
         light_source = LightSource(

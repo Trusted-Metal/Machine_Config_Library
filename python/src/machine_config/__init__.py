@@ -1,5 +1,6 @@
 # machine_config — LPBF machine configuration library (machine-agnostic)
 from .models import (
+    AxisConfig,
     BuildPlate,
     ClearBox,
     Collimator,
@@ -7,6 +8,10 @@ from .models import (
     Machine,
     MachineConfig,
     MachineConfigMeta,
+    OpcuaClientConfig,
+    OpcuaConfig,
+    OpcuaPipeConfig,
+    OpcuaTrigger,
     OpticalTrain,
     ScanFieldCorrectionFile,
     Scanner,
@@ -17,6 +22,7 @@ from .writer import MachineConfigWriter
 from .builder import ConfigEditor, MockConfigBuilder, YamlConfigBuilder
 
 __all__ = [
+    "AxisConfig",
     "BuildPlate",
     "ClearBox",
     "Collimator",
@@ -28,6 +34,10 @@ __all__ = [
     "MachineConfigReader",
     "MachineConfigWriter",
     "MockConfigBuilder",
+    "OpcuaClientConfig",
+    "OpcuaConfig",
+    "OpcuaPipeConfig",
+    "OpcuaTrigger",
     "OpticalTrain",
     "ScanFieldCorrectionFile",
     "Scanner",

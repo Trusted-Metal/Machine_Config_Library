@@ -7,6 +7,7 @@ file, but the library imposes no vendor-specific requirements.
 from __future__ import annotations
 
 import json
+import base64
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,7 @@ import h5py
 import numpy as np
 
 from .models import (
+    AxisConfig,
     BuildPlate,
     ClearBox,
     Collimator,
@@ -22,12 +24,59 @@ from .models import (
     Machine,
     MachineConfig,
     MachineConfigMeta,
+    OpcuaClientConfig,
+    OpcuaConfig,
+    OpcuaPipeConfig,
+    OpcuaTrigger,
     OpticalTrain,
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
 )
 from .schema import SCHEMA, SCHEMA_VERSION
+
+
+_KNOWN_ROOT_KEYS: frozenset[str] = frozenset(
+    {"machine_name", "manufacturer", "model", "serial_number",
+     "File_Version", "Export_Date", "Configuration_Hash"}
+)
+
+# HDF5 attribute names that are modelled as typed fields on OpcuaTrigger.
+# Any attribute NOT in this set is collected into OpcuaTrigger.extra.
+_KNOWN_TRIGGER_KEYS: frozenset[str] = frozenset(
+    {"ID", "Signal", "Subsystem", "Rule_Enabled", "Start_Value", "Stop_Value"}
+)
+
+# HDF5 attribute names that are modelled as typed fields on OpcuaClientConfig.
+# Any attribute NOT in this set is collected into OpcuaClientConfig.extra.
+_KNOWN_CLIENT_KEYS: frozenset[str] = frozenset(
+    {"Server_URL", "Auth_Mode", "Security_Mode", "Security_Policy",
+     "BFS_Max_Depth", "Publish_Interval", "Sampling_Interval", "Session_Timeout"}
+)
+
+# HDF5 attribute names that are modelled as typed fields on OpcuaPipeConfig.
+# Any attribute NOT in this set is collected into OpcuaPipeConfig.extra.
+_KNOWN_PIPE_KEYS: frozenset[str] = frozenset(
+    {"Pipe_Enabled", "Buffer_Size"}
+)
+
+
+def _hdf5_attrs_extra(attrs, known: frozenset[str]) -> dict:
+    """Return all HDF5 attrs not in *known*, converting numpy scalars to Python natives."""
+    import numpy as np
+    result = {}
+    for k, v in attrs.items():
+        if k in known:
+            continue
+        if isinstance(v, np.integer):
+            result[k] = int(v)
+        elif isinstance(v, np.floating):
+            result[k] = float(v)
+        elif isinstance(v, bytes):
+            result[k] = v.decode()
+        else:
+            result[k] = str(v)
+    return result
 
 
 class MachineConfigReader:
@@ -184,6 +233,7 @@ class MachineConfigReader:
             file_version=str(f.attrs.get("File_Version", "")),
             export_date=str(f.attrs.get("Export_Date", "")),
             configuration_hash=str(f.attrs.get("Configuration_Hash", "")),
+            extra=_hdf5_attrs_extra(f.attrs, _KNOWN_ROOT_KEYS),
         )
 
         # ---- Machine group → Machine + BuildPlate --------------------------------
@@ -218,7 +268,15 @@ class MachineConfigReader:
         )
         optical_trains = [self._parse_train(f, tid) for tid in train_ids]
 
-        return MachineConfig(meta=meta, machine=machine, optical_trains=optical_trains)
+        # ---- Optional OPCUA group ------------------------------------------------
+        opcua = self._parse_opcua(f)
+
+        return MachineConfig(
+            meta=meta,
+            machine=machine,
+            optical_trains=optical_trains,
+            opcua=opcua,
+        )
 
     def _parse_train(self, f: h5py.File, train_id: str) -> OpticalTrain:
         base_path = f"Machine/Optical_Trains/{train_id}"
@@ -296,8 +354,29 @@ class MachineConfigReader:
             scan_field_correction_file=sfcf,
         )
 
+    def _parse_axis(self, grp: h5py.Group) -> AxisConfig:
+        a = grp.attrs
+        return AxisConfig(
+            actual_bit_resolution=self._read_int(a, "Actual_Bit_Resolution"),
+            actual_bit_resolution_unit=self._read_str(a, "Actual_Bit_Resolution_unit"),
+            commanded_bit_resolution=self._read_int(a, "Commanded_Bit_Resolution"),
+            commanded_bit_resolution_unit=self._read_str(a, "Commanded_Bit_Resolution_unit"),
+            control_type=self._read_str(a, "Control_Type"),
+            range_of_motion=self._read_float(a, "Range_Of_Motion"),
+            range_of_motion_unit=self._read_str(a, "Range_Of_Motion_unit"),
+            smoothing_kernel=self._read_str(a, "Smoothing_Kernel"),
+            smoothing_parameters=self._read_float(a, "Smoothing_Parameters"),
+            tuning_parameters=self._read_str(a, "Tuning_Parameters"),
+            tuning_type=self._read_str(a, "Tuning_Type"),
+        )
+
     def _parse_scanner(self, grp: h5py.Group) -> Scanner:
         a = grp.attrs
+        axis_cfg = self._read_str(a, "Axis_Configuration")
+        x_axis = self._parse_axis(grp["X_Axis"])
+        y_axis = self._parse_axis(grp["Y_Axis"])
+        z_axis = self._parse_axis(grp["Z_Axis"]) if "Z_Axis" in grp else None
+        focus  = self._parse_axis(grp["Focus"])  if "Focus"  in grp else None
         return Scanner(
             manufacturer=str(a.get("Manufacturer", "")),
             model=str(a.get("Model", "")),
@@ -328,7 +407,11 @@ class MachineConfigReader:
             scan_head_rotation_unit=self._read_str_locked(
                 a, "Scan_Head_Rotation_unit", "degrees"
             ),
-            axis_configuration=self._read_str(a, "Axis_Configuration"),
+            axis_configuration=axis_cfg,
+            x_axis=x_axis,
+            y_axis=y_axis,
+            z_axis=z_axis,
+            focus=focus,
         )
 
     def _parse_light_source(self, grp: h5py.Group) -> LightSource:
@@ -384,10 +467,17 @@ class MachineConfigReader:
             sample_period_unit=self._read_str_locked(a, "Sample_Period_unit", "μs"),
         )
 
+    @staticmethod
+    def _nan_array_to_list(arr: np.ndarray) -> list:
+        """Convert float64 ndarray to nested Python list, mapping NaN → None."""
+        obj = arr.astype(object)
+        obj[np.isnan(arr)] = None
+        return obj.tolist()
+
     def _parse_clearbox(self, grp: h5py.Group) -> ClearBox:
         a = grp.attrs
-        corr_shape: tuple[int, int, int] = tuple(grp["Correction_Data"].shape)  # type: ignore[assignment]
-        inv_shape: tuple[int, int, int] = tuple(grp["Inverse_Correction_Data"].shape)  # type: ignore[assignment]
+        corr_data = self._nan_array_to_list(grp["Correction_Data"][:])
+        inv_data  = self._nan_array_to_list(grp["Inverse_Correction_Data"][:])
         return ClearBox(
             ip_address=str(a.get("Ip_Address", "")),
             serial_number=self._read_str(a, "Serial_Number"),
@@ -395,8 +485,8 @@ class MachineConfigReader:
             server_port=self._read_int(a, "Server_Port"),
             actual_timing_offset=self._read_int(a, "Actual_Timing_Offset"),
             commanded_timing_offset=self._read_int(a, "Commanded_Timing_Offset"),
-            correction_data_shape=corr_shape,
-            inverse_correction_data_shape=inv_shape,
+            correction_data=corr_data,
+            inverse_correction_data=inv_data,
             manufacturer=self._read_str(a, "Manufacturer"),
             model=self._read_str(a, "Model"),
             output_path=self._read_str(a, "Output_Path"),
@@ -423,6 +513,62 @@ class MachineConfigReader:
             document_created_at=self._read_str(a, "document_created_at"),
             document_type=self._read_str(a, "document_type"),
             original_uri=self._read_str(a, "original_uri"),
+            raw_bytes=bytes(ds[()]),
+        )
+
+    def _parse_opcua(self, f: h5py.File) -> Optional[OpcuaConfig]:
+        """Parse the optional OPCUA group tree into an :class:`OpcuaConfig`.
+
+        Returns ``None`` if the file has no ``OPCUA`` group (most machine configs).
+        """
+        if "OPCUA" not in f:
+            return None
+
+        # ---- Client --------------------------------------------------------------
+        ca = f["OPCUA/Client"].attrs
+        client = OpcuaClientConfig(
+            server_url=str(ca.get("Server_URL", "")),
+            auth_mode=str(ca.get("Auth_Mode", "")),
+            security_mode=str(ca.get("Security_Mode", "")),
+            security_policy=str(ca.get("Security_Policy", "")),
+            bfs_max_depth=int(ca.get("BFS_Max_Depth", 0)),
+            publish_interval=int(ca.get("Publish_Interval", 0)),
+            sampling_interval=int(ca.get("Sampling_Interval", 0)),
+            session_timeout=int(ca.get("Session_Timeout", 0)),
+            extra=_hdf5_attrs_extra(ca, _KNOWN_CLIENT_KEYS),
+        )
+
+        # ---- Pipe ----------------------------------------------------------------
+        pa = f["OPCUA/Pipe"].attrs
+        pipe = OpcuaPipeConfig(
+            pipe_enabled=bool(int(pa.get("Pipe_Enabled", 0))),
+            buffer_size=int(pa.get("Buffer_Size", 0)),
+            extra=_hdf5_attrs_extra(pa, _KNOWN_PIPE_KEYS),
+        )
+
+        # ---- Triggers ------------------------------------------------------------
+        triggers_grp = f["OPCUA/Triggers"]
+        triggers_enabled = self._read_bool_from_int(triggers_grp.attrs, "Triggers_Enabled")
+
+        triggers: dict[str, OpcuaTrigger] = {}
+        for name in triggers_grp.keys():
+            ta = triggers_grp[name].attrs
+            extra = _hdf5_attrs_extra(ta, _KNOWN_TRIGGER_KEYS)
+            triggers[name] = OpcuaTrigger(
+                id=self._read_str(ta, "ID"),
+                signal=self._read_str(ta, "Signal"),
+                subsystem=self._read_str(ta, "Subsystem"),
+                rule_enabled=self._read_bool_from_int(ta, "Rule_Enabled"),
+                start_value=self._read_str(ta, "Start_Value"),
+                stop_value=self._read_str(ta, "Stop_Value"),
+                extra=extra,
+            )
+
+        return OpcuaConfig(
+            client=client,
+            pipe=pipe,
+            triggers=triggers,
+            triggers_enabled=triggers_enabled,
         )
 
     # ------------------------------------------------------------------
@@ -430,7 +576,7 @@ class MachineConfigReader:
     # ------------------------------------------------------------------
 
     def _config_to_dict(self, config: MachineConfig) -> dict:
-        return {
+        result = {
             "meta": {
                 "schema_version": config.meta.schema_version,
                 "machine_name": config.meta.machine_name,
@@ -440,6 +586,7 @@ class MachineConfigReader:
                 "file_version": config.meta.file_version,
                 "export_date": config.meta.export_date,
                 "configuration_hash": config.meta.configuration_hash,
+                "extra": config.meta.extra,
             },
             "machine": {
                 "id": config.machine.id,
@@ -460,6 +607,9 @@ class MachineConfigReader:
             },
             "optical_trains": [self._train_to_dict(t) for t in config.optical_trains],
         }
+        if config.opcua is not None:
+            result["opcua"] = self._opcua_to_dict(config.opcua)
+        return result
 
     def _train_to_dict(self, train: OpticalTrain) -> dict:
         return {
@@ -503,6 +653,24 @@ class MachineConfigReader:
             ),
         }
 
+    @staticmethod
+    def _axis_to_dict(ax: Optional[AxisConfig]) -> Optional[dict]:
+        if ax is None:
+            return None
+        return {
+            "actual_bit_resolution": ax.actual_bit_resolution,
+            "actual_bit_resolution_unit": ax.actual_bit_resolution_unit,
+            "commanded_bit_resolution": ax.commanded_bit_resolution,
+            "commanded_bit_resolution_unit": ax.commanded_bit_resolution_unit,
+            "control_type": ax.control_type,
+            "range_of_motion": ax.range_of_motion,
+            "range_of_motion_unit": ax.range_of_motion_unit,
+            "smoothing_kernel": ax.smoothing_kernel,
+            "smoothing_parameters": ax.smoothing_parameters,
+            "tuning_parameters": ax.tuning_parameters,
+            "tuning_type": ax.tuning_type,
+        }
+
     def _scanner_to_dict(self, s: Scanner) -> dict:
         return {
             "manufacturer": s.manufacturer,
@@ -525,6 +693,10 @@ class MachineConfigReader:
             "scan_head_rotation": s.scan_head_rotation,
             "scan_head_rotation_unit": s.scan_head_rotation_unit,
             "axis_configuration": s.axis_configuration,
+            "x_axis": self._axis_to_dict(s.x_axis),
+            "y_axis": self._axis_to_dict(s.y_axis),
+            "z_axis": self._axis_to_dict(s.z_axis),
+            "focus": self._axis_to_dict(s.focus),
         }
 
     def _light_source_to_dict(self, ls: LightSource) -> dict:
@@ -577,8 +749,8 @@ class MachineConfigReader:
             "server_port": cb.server_port,
             "actual_timing_offset": cb.actual_timing_offset,
             "commanded_timing_offset": cb.commanded_timing_offset,
-            "correction_data_shape": list(cb.correction_data_shape),
-            "inverse_correction_data_shape": list(cb.inverse_correction_data_shape),
+            "correction_data": cb.correction_data,
+            "inverse_correction_data": cb.inverse_correction_data,
             "manufacturer": cb.manufacturer,
             "model": cb.model,
             "output_path": cb.output_path,
@@ -606,6 +778,40 @@ class MachineConfigReader:
             "document_created_at": sfcf.document_created_at,
             "document_type": sfcf.document_type,
             "original_uri": sfcf.original_uri,
+            "raw_bytes": base64.b64encode(sfcf.raw_bytes).decode("ascii") if sfcf.raw_bytes is not None else None,
+        }
+
+    def _opcua_to_dict(self, opcua: OpcuaConfig) -> dict:
+        return {
+            "client": {
+                "server_url": opcua.client.server_url,
+                "auth_mode": opcua.client.auth_mode,
+                "security_mode": opcua.client.security_mode,
+                "security_policy": opcua.client.security_policy,
+                "bfs_max_depth": opcua.client.bfs_max_depth,
+                "publish_interval": opcua.client.publish_interval,
+                "sampling_interval": opcua.client.sampling_interval,
+                "session_timeout": opcua.client.session_timeout,
+                "extra": opcua.client.extra,
+            },
+            "pipe": {
+                "pipe_enabled": opcua.pipe.pipe_enabled,
+                "buffer_size": opcua.pipe.buffer_size,
+                "extra": opcua.pipe.extra,
+            },
+            "triggers_enabled": opcua.triggers_enabled,
+            "triggers": {
+                name: {
+                    "id": t.id,
+                    "signal": t.signal,
+                    "subsystem": t.subsystem,
+                    "rule_enabled": t.rule_enabled,
+                    "start_value": t.start_value,
+                    "stop_value": t.stop_value,
+                    "extra": t.extra,
+                }
+                for name, t in opcua.triggers.items()
+            },
         }
 
 
@@ -632,6 +838,7 @@ def config_from_dict(d: dict) -> MachineConfig:
         file_version=meta_d["file_version"],
         export_date=meta_d["export_date"],
         configuration_hash=meta_d["configuration_hash"],
+        extra=meta_d.get("extra", {}),
     )
 
     build_plate = BuildPlate(
@@ -657,7 +864,9 @@ def config_from_dict(d: dict) -> MachineConfig:
     )
 
     optical_trains = [_train_from_dict(t) for t in d["optical_trains"]]
-    return MachineConfig(meta=meta, machine=machine, optical_trains=optical_trains)
+    opcua_d = d.get("opcua")
+    opcua = _opcua_from_dict(opcua_d) if opcua_d is not None else None
+    return MachineConfig(meta=meta, machine=machine, optical_trains=optical_trains, opcua=opcua)
 
 
 def _train_from_dict(t: dict) -> OpticalTrain:
@@ -667,6 +876,30 @@ def _train_from_dict(t: dict) -> OpticalTrain:
     sc = t["scanner_card"]
     cb_d = t.get("clearbox")
     sfcf_d = t.get("scan_field_correction_file")
+
+    def _axis_from_dict(d: Optional[dict]) -> Optional[AxisConfig]:
+        if d is None:
+            return None
+        return AxisConfig(
+            actual_bit_resolution=d.get("actual_bit_resolution"),
+            actual_bit_resolution_unit=d.get("actual_bit_resolution_unit"),
+            commanded_bit_resolution=d.get("commanded_bit_resolution"),
+            commanded_bit_resolution_unit=d.get("commanded_bit_resolution_unit"),
+            control_type=d.get("control_type"),
+            range_of_motion=d.get("range_of_motion"),
+            range_of_motion_unit=d.get("range_of_motion_unit"),
+            smoothing_kernel=d.get("smoothing_kernel"),
+            smoothing_parameters=d.get("smoothing_parameters"),
+            tuning_parameters=d.get("tuning_parameters"),
+            tuning_type=d.get("tuning_type"),
+        )
+
+    x_axis_d = s.get("x_axis")
+    y_axis_d = s.get("y_axis")
+    if x_axis_d is None:
+        x_axis_d = {}
+    if y_axis_d is None:
+        y_axis_d = {}
 
     scanner = Scanner(
         manufacturer=s.get("manufacturer", ""),
@@ -689,6 +922,10 @@ def _train_from_dict(t: dict) -> OpticalTrain:
         scan_head_rotation=s.get("scan_head_rotation"),
         scan_head_rotation_unit=s.get("scan_head_rotation_unit"),
         axis_configuration=s.get("axis_configuration"),
+        x_axis=_axis_from_dict(x_axis_d),
+        y_axis=_axis_from_dict(y_axis_d),
+        z_axis=_axis_from_dict(s.get("z_axis")),
+        focus=_axis_from_dict(s.get("focus")),
     )
 
     light_source = LightSource(
@@ -730,8 +967,6 @@ def _train_from_dict(t: dict) -> OpticalTrain:
 
     clearbox: Optional[ClearBox] = None
     if cb_d is not None:
-        cs = cb_d.get("correction_data_shape", [257, 257, 2])
-        ivs = cb_d.get("inverse_correction_data_shape", [257, 257, 2])
         clearbox = ClearBox(
             ip_address=cb_d.get("ip_address", ""),
             serial_number=cb_d.get("serial_number"),
@@ -739,8 +974,8 @@ def _train_from_dict(t: dict) -> OpticalTrain:
             server_port=cb_d.get("server_port"),
             actual_timing_offset=cb_d.get("actual_timing_offset"),
             commanded_timing_offset=cb_d.get("commanded_timing_offset"),
-            correction_data_shape=tuple(cs),  # type: ignore[arg-type]
-            inverse_correction_data_shape=tuple(ivs),  # type: ignore[arg-type]
+            correction_data=cb_d.get("correction_data"),
+            inverse_correction_data=cb_d.get("inverse_correction_data"),
             manufacturer=cb_d.get("manufacturer"),
             model=cb_d.get("model"),
             output_path=cb_d.get("output_path"),
@@ -757,6 +992,7 @@ def _train_from_dict(t: dict) -> OpticalTrain:
 
     sfcf: Optional[ScanFieldCorrectionFile] = None
     if sfcf_d is not None:
+        raw_b64 = sfcf_d.get("raw_bytes")
         sfcf = ScanFieldCorrectionFile(
             document_name=sfcf_d["document_name"],
             document_id=sfcf_d["document_id"],
@@ -765,6 +1001,7 @@ def _train_from_dict(t: dict) -> OpticalTrain:
             document_created_at=sfcf_d.get("document_created_at"),
             document_type=sfcf_d.get("document_type"),
             original_uri=sfcf_d.get("original_uri"),
+            raw_bytes=base64.b64decode(raw_b64) if raw_b64 is not None else None,
         )
 
     return OpticalTrain(
@@ -805,3 +1042,47 @@ def _train_from_dict(t: dict) -> OpticalTrain:
         clearbox=clearbox,
         scan_field_correction_file=sfcf,
     )
+
+
+def _opcua_from_dict(d: dict) -> OpcuaConfig:
+    """Reconstruct an :class:`OpcuaConfig` from a canonical JSON-compatible dict."""
+    c = d["client"]
+    p = d["pipe"]
+
+    client = OpcuaClientConfig(
+        server_url=c["server_url"],
+        auth_mode=c["auth_mode"],
+        security_mode=c["security_mode"],
+        security_policy=c["security_policy"],
+        bfs_max_depth=c["bfs_max_depth"],
+        publish_interval=c["publish_interval"],
+        sampling_interval=c["sampling_interval"],
+        session_timeout=c["session_timeout"],
+        extra=c.get("extra", {}),
+    )
+
+    pipe = OpcuaPipeConfig(
+        pipe_enabled=p["pipe_enabled"],
+        buffer_size=p["buffer_size"],
+        extra=p.get("extra", {}),
+    )
+
+    triggers: dict[str, OpcuaTrigger] = {}
+    for name, td in d.get("triggers", {}).items():
+        triggers[name] = OpcuaTrigger(
+            id=td.get("id"),
+            signal=td.get("signal"),
+            subsystem=td.get("subsystem"),
+            rule_enabled=td.get("rule_enabled"),
+            start_value=td.get("start_value"),
+            stop_value=td.get("stop_value"),
+            extra=td.get("extra", {}),
+        )
+
+    return OpcuaConfig(
+        client=client,
+        pipe=pipe,
+        triggers=triggers,
+        triggers_enabled=d.get("triggers_enabled"),
+    )
+

@@ -16,7 +16,11 @@
         "serial_number":       { "type": "string" },
         "file_version":        { "type": "string" },
         "export_date":         { "type": "string", "format": "date-time" },
-        "configuration_hash":  { "type": "string", "minLength": 64, "maxLength": 64 }
+        "configuration_hash":  { "type": "string", "minLength": 64, "maxLength": 64 },
+        "extra": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "integer", "number"] }
+        }
       }
     },
     "machine": {
@@ -99,8 +103,95 @@
               "scan_head_offset_z_unit": { "type": ["string", "null"] },
               "scan_head_rotation":      { "type": ["number", "null"] },
               "scan_head_rotation_unit": { "type": ["string", "null"] },
-              "axis_configuration":      { "type": ["string", "null"] }
-            }
+              "axis_configuration":      { "type": ["string", "null"] },
+              "x_axis": {
+                "type": ["object", "null"],
+                "properties": {
+                  "actual_bit_resolution":       { "type": ["integer", "null"] },
+                  "actual_bit_resolution_unit":  { "type": ["string", "null"] },
+                  "commanded_bit_resolution":    { "type": ["integer", "null"] },
+                  "commanded_bit_resolution_unit": { "type": ["string", "null"] },
+                  "control_type":         { "type": ["string", "null"] },
+                  "range_of_motion":      { "type": ["number", "null"] },
+                  "range_of_motion_unit": { "type": ["string", "null"] },
+                  "smoothing_kernel":     { "type": ["string", "null"] },
+                  "smoothing_parameters": { "type": ["number", "null"] },
+                  "tuning_parameters":    { "type": ["string", "null"] },
+                  "tuning_type":          { "type": ["string", "null"] }
+                }
+              },
+              "y_axis": {
+                "type": ["object", "null"],
+                "properties": {
+                  "actual_bit_resolution":       { "type": ["integer", "null"] },
+                  "actual_bit_resolution_unit":  { "type": ["string", "null"] },
+                  "commanded_bit_resolution":    { "type": ["integer", "null"] },
+                  "commanded_bit_resolution_unit": { "type": ["string", "null"] },
+                  "control_type":         { "type": ["string", "null"] },
+                  "range_of_motion":      { "type": ["number", "null"] },
+                  "range_of_motion_unit": { "type": ["string", "null"] },
+                  "smoothing_kernel":     { "type": ["string", "null"] },
+                  "smoothing_parameters": { "type": ["number", "null"] },
+                  "tuning_parameters":    { "type": ["string", "null"] },
+                  "tuning_type":          { "type": ["string", "null"] }
+                }
+              },
+              "z_axis": {
+                "type": ["object", "null"],
+                "properties": {
+                  "actual_bit_resolution":       { "type": ["integer", "null"] },
+                  "actual_bit_resolution_unit":  { "type": ["string", "null"] },
+                  "commanded_bit_resolution":    { "type": ["integer", "null"] },
+                  "commanded_bit_resolution_unit": { "type": ["string", "null"] },
+                  "control_type":         { "type": ["string", "null"] },
+                  "range_of_motion":      { "type": ["number", "null"] },
+                  "range_of_motion_unit": { "type": ["string", "null"] },
+                  "smoothing_kernel":     { "type": ["string", "null"] },
+                  "smoothing_parameters": { "type": ["number", "null"] },
+                  "tuning_parameters":    { "type": ["string", "null"] },
+                  "tuning_type":          { "type": ["string", "null"] }
+                }
+              },
+              "focus": {
+                "type": ["object", "null"],
+                "properties": {
+                  "actual_bit_resolution":       { "type": ["integer", "null"] },
+                  "actual_bit_resolution_unit":  { "type": ["string", "null"] },
+                  "commanded_bit_resolution":    { "type": ["integer", "null"] },
+                  "commanded_bit_resolution_unit": { "type": ["string", "null"] },
+                  "control_type":         { "type": ["string", "null"] },
+                  "range_of_motion":      { "type": ["number", "null"] },
+                  "range_of_motion_unit": { "type": ["string", "null"] },
+                  "smoothing_kernel":     { "type": ["string", "null"] },
+                  "smoothing_parameters": { "type": ["number", "null"] },
+                  "tuning_parameters":    { "type": ["string", "null"] },
+                  "tuning_type":          { "type": ["string", "null"] }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "required": ["axis_configuration"],
+                  "properties": { "axis_configuration": { "const": "3D" } }
+                },
+                "then": { "required": ["x_axis", "y_axis", "z_axis"] }
+              },
+              {
+                "if": {
+                  "required": ["axis_configuration"],
+                  "properties": { "axis_configuration": { "const": "2D" } }
+                },
+                "then": { "required": ["x_axis", "y_axis"] }
+              },
+              {
+                "if": {
+                  "required": ["axis_configuration"],
+                  "properties": { "axis_configuration": { "const": "3D+Focus" } }
+                },
+                "then": { "required": ["x_axis", "y_axis", "z_axis", "focus"] }
+              }
+            ]
           },
           "light_source": {
             "type": "object",
@@ -147,6 +238,7 @@
           },
           "clearbox": {
             "type": ["object", "null"],
+            "additionalProperties": false,
             "properties": {
               "ip_address":                    { "type": "string" },
               "serial_number":                 { "type": ["string", "null"] },
@@ -154,8 +246,26 @@
               "server_port":                   { "type": ["integer", "null"] },
               "actual_timing_offset":          { "type": ["integer", "null"] },
               "commanded_timing_offset":       { "type": ["integer", "null"] },
-              "correction_data_shape":         { "type": "array", "items": {"type": "integer"} },
-              "inverse_correction_data_shape": { "type": "array", "items": {"type": "integer"} },
+              "correction_data": {
+                "type": ["array", "null"],
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": { "type": ["number", "null"] }
+                  }
+                }
+              },
+              "inverse_correction_data": {
+                "type": ["array", "null"],
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": { "type": ["number", "null"] }
+                  }
+                }
+              },
               "manufacturer":                  { "type": ["string", "null"] },
               "model":                         { "type": ["string", "null"] },
               "output_path":                   { "type": ["string", "null"] },
@@ -179,7 +289,63 @@
               "valid_as_of_date":    { "type": "string" },
               "document_created_at": { "type": ["string", "null"] },
               "document_type":       { "type": ["string", "null"] },
-              "original_uri":        { "type": ["string", "null"] }
+              "original_uri":        { "type": ["string", "null"] },
+              "raw_bytes":           { "type": ["string", "null"], "contentEncoding": "base64" }
+            }
+          }
+        }
+      }
+    },
+    "opcua": {
+      "type": ["object", "null"],
+      "properties": {
+        "client": {
+          "type": "object",
+          "required": ["server_url", "auth_mode", "security_mode", "security_policy",
+                       "bfs_max_depth", "publish_interval", "sampling_interval", "session_timeout"],
+          "properties": {
+            "server_url":        { "type": "string" },
+            "auth_mode":         { "type": "string" },
+            "security_mode":     { "type": "string" },
+            "security_policy":   { "type": "string" },
+            "bfs_max_depth":     { "type": "integer" },
+            "publish_interval":  { "type": "integer" },
+            "sampling_interval": { "type": "integer" },
+            "session_timeout":   { "type": "integer" },
+            "extra": {
+              "type": "object",
+              "additionalProperties": { "type": ["string", "integer", "number"] }
+            }
+          }
+        },
+        "pipe": {
+          "type": "object",
+          "required": ["pipe_enabled", "buffer_size"],
+          "properties": {
+            "pipe_enabled": { "type": "boolean" },
+            "buffer_size":  { "type": "integer" },
+            "extra": {
+              "type": "object",
+              "additionalProperties": { "type": ["string", "integer", "number"] }
+            }
+          }
+        },
+        "triggers_enabled": { "type": ["boolean", "null"] },
+        "triggers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "id":           { "type": ["string", "null"] },
+              "signal":       { "type": ["string", "null"] },
+              "subsystem":    { "type": ["string", "null"] },
+              "rule_enabled": { "type": ["boolean", "null"] },
+              "start_value":  { "type": ["string", "null"] },
+              "stop_value":   { "type": ["string", "null"] },
+              "extra": {
+                "type": "object",
+                "additionalProperties": { "type": ["string", "integer", "number"] }
+              }
             }
           }
         }

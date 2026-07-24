@@ -15,6 +15,16 @@ This document covers *how to use it once built*.
 
 - [Shared Concepts](#shared-concepts)
 - [Python](#python)
+  - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file)
+  - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json)
+  - [Use case 3 — Reconstruct a config from JSON](#use-case-3--reconstruct-a-config-from-json)
+  - [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5)
+  - [Use case 5 — Edit a field and save to a new file](#use-case-5--edit-a-field-and-save-to-a-new-file)
+  - [Use case 6 — Generate a synthetic test config](#use-case-6--generate-a-synthetic-test-config)
+  - [Use case 7 — Build a config from a YAML specification](#use-case-7--build-a-config-from-a-yaml-specification)
+  - [Use case 8 — Read OPCUA telemetry configuration](#use-case-8--read-opcua-telemetry-configuration)
+  - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays)
+  - [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema)
 - [Node.js](#nodejs) ← *coming in Phase 2*
 - [Rust](#rust) ← *coming in Phase 3*
 - [C++](#c) ← *coming in Phase 4*
@@ -92,7 +102,13 @@ print(f"{bp.x} x {bp.y} x {bp.z} {bp.x_unit}")  # 250.0 x 250.0 x 20.0 mm
 for i, train in enumerate(config.optical_trains):
     s = train.scanner
     print(f"Train {i+1}: WD={s.working_distance} {s.working_distance_unit}  "
-          f"offset=({s.scan_head_offset_x}, {s.scan_head_offset_y}) mm")
+          f"offset=({s.scan_head_offset_x}, {s.scan_head_offset_y}) mm  "
+          f"axis_config={s.axis_configuration}")
+    # Access axis subgroups — always present: x_axis, y_axis
+    # z_axis present for '3D' and '3D+Focus'; focus present only for '3D+Focus'
+    print(f"  X smoothing_kernel: {s.x_axis.smoothing_kernel}")
+    if s.z_axis is not None:
+        print(f"  Z bit_resolution: {s.z_axis.actual_bit_resolution} {s.z_axis.actual_bit_resolution_unit}")
 ```
 
 ---
@@ -253,7 +269,43 @@ result = reader.get_raw_group("OPCUA")     # {} on standard (non-OPCUA) fixture
 
 ---
 
-### Use case 9 — Validate a config against the schema
+### Use case 9 — Access ClearBox correction arrays
+
+ClearBox correction grids are stored as `(257, 257, 2)` float64 arrays in HDF5 and
+represented in JSON as nested Python lists. Out-of-field points that are `NaN` in HDF5
+become `None` in the list (and `null` in JSON); finite floats pass through as-is.
+
+```python
+from machine_config import MachineConfigReader
+
+reader = MachineConfigReader("fixtures/reference_config.h5")
+config = reader.parse()
+
+cb = config.optical_trains[0].clearbox
+if cb is not None:
+    data = cb.correction_data        # list[list[list[float | None]]], shape 257×257×2
+    inv  = cb.inverse_correction_data
+
+    # Shape inspection
+    assert len(data) == 257          # first dimension
+    assert len(data[0]) == 257       # second dimension
+    assert len(data[0][0]) == 2      # two channels (X warp, Y warp)
+
+    # Sample values — None means the point is outside the correction field
+    centre_x = data[128][128][0]     # X-channel at centre; float or None
+    centre_y = data[128][128][1]     # Y-channel at centre
+    print(f"Centre correction: x={centre_x}, y={centre_y}")
+
+# For bulk numerical work, use the raw numpy API (unchanged from earlier phases):
+arr = reader.get_correction_data(0)          # np.ndarray, shape (257, 257, 2), float64
+inv = reader.get_inverse_correction_data(0)  # same shape; NaN preserved
+import numpy as np
+print(f"Non-finite cells: {np.sum(~np.isfinite(arr))}")
+```
+
+---
+
+### Use case 10 — Validate a config against the schema
 
 ```python
 import json, jsonschema
@@ -271,6 +323,8 @@ print("Schema valid.")
 ### CLI reference (Python)
 
 ```powershell
+# PowerShell
+
 # Inspect a config — brief summary
 .\.venv\Scripts\machine-config.exe inspect fixtures/reference_config.h5
 
@@ -303,8 +357,37 @@ print("Schema valid.")
 ```
 
 ```bash
-# Git Bash — same commands, forward slashes
+# Git Bash
+
+# Inspect a config — brief summary
+.venv/Scripts/machine-config.exe inspect fixtures/reference_config.h5
+
+# Inspect with full YAML dump of every field
 .venv/Scripts/machine-config.exe inspect fixtures/reference_config.h5 --verbose
+
+# Validate against the schema
+.venv/Scripts/machine-config.exe validate fixtures/reference_config.h5
+
+# Export canonical JSON to stdout
+.venv/Scripts/machine-config.exe export-json fixtures/reference_config.h5
+
+# Export canonical JSON to a file
+.venv/Scripts/machine-config.exe export-json fixtures/reference_config.h5 --output out.json
+
+# Write a canonical JSON file back to HDF5
+.venv/Scripts/machine-config.exe write out.json --output reconstructed.h5
+
+# Build from a YAML spec
+.venv/Scripts/machine-config.exe build --from-yaml spec.yaml --output config.h5
+
+# Build a synthetic 2-laser mock config
+.venv/Scripts/machine-config.exe build --mock --output test_config.h5
+
+# Build a synthetic 1-laser mock config
+.venv/Scripts/machine-config.exe build --mock --lasers 1 --output single.h5
+
+# Generate a synthetic config and print its full JSON (no files needed)
+.venv/Scripts/machine-config.exe demo
 ```
 
 ---
@@ -312,15 +395,29 @@ print("Schema valid.")
 ### Running the Python test suite
 
 ```powershell
-# Full suite (161 tests after Phase 1.7 golden file is generated)
+# PowerShell — full suite (301 tests)
 .\.venv\Scripts\python.exe -m pytest python/tests/ -v
 
 # Individual suites
 .\.venv\Scripts\python.exe -m pytest python/tests/test_reader.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_writer.py -v
-.\.venv\Scripts\python.exe -m pytest python/tests/test_builder.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_writer_roundtrip.py -v.\.\.venv\Scripts\python.exe -m pytest python/tests/test_opcua_roundtrip.py -v.\.venv\Scripts\python.exe -m pytest python/tests/test_builder.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_cli.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_schema.py -v
+```
+
+```bash
+# Git Bash — full suite (301 tests)
+.venv/Scripts/python.exe -m pytest python/tests/ -v
+
+# Individual suites
+.venv/Scripts/python.exe -m pytest python/tests/test_reader.py -v
+.venv/Scripts/python.exe -m pytest python/tests/test_writer.py -v
+.venv/Scripts/python.exe -m pytest python/tests/test_writer_roundtrip.py -v
+.venv/Scripts/python.exe -m pytest python/tests/test_opcua_roundtrip.py -v
+.venv/Scripts/python.exe -m pytest python/tests/test_builder.py -v
+.venv/Scripts/python.exe -m pytest python/tests/test_cli.py -v
+.venv/Scripts/python.exe -m pytest python/tests/test_schema.py -v
 ```
 
 ---
@@ -372,7 +469,13 @@ Section will cover:
 Before committing, run this outside the `python/` package to simulate a real caller:
 
 ```powershell
+# PowerShell
 .\.venv\Scripts\python.exe scratch/smoke_test.py
+```
+
+```bash
+# Git Bash
+.venv/Scripts/python.exe scratch/smoke_test.py
 ```
 
 This exercises the public API from a caller's perspective — it catches missing exports,
@@ -382,14 +485,26 @@ confusing API surfaces, and path-dependent bugs that pytest's `pythonpath` injec
 
 ### Generating the golden file and synthetic fixture (Phase 1.7)
 
-**Prerequisites:** all 160 tests pass (1 skipped — the golden file test).
+**Prerequisites:** all 170 tests pass (1 skipped — the golden file test).
 
 ```powershell
+# PowerShell
+
 # Step 1 — confirm the suite is green
 .\.venv\Scripts\python.exe -m pytest python/tests/ -v
 
 # Step 2 — generate the three fixture files
 .\.venv\Scripts\python.exe tools/generate_fixtures.py
+```
+
+```bash
+# Git Bash
+
+# Step 1 — confirm the suite is green
+.venv/Scripts/python.exe -m pytest python/tests/ -v
+
+# Step 2 — generate the three fixture files
+.venv/Scripts/python.exe tools/generate_fixtures.py
 ```
 
 This writes:
@@ -398,9 +513,15 @@ This writes:
 - `fixtures/synthetic_2laser.h5` — MockConfigBuilder output for non-Python language tests
 
 ```powershell
-# Step 3 — re-run the suite; the previously-skipped test now activates
+# PowerShell — Step 3: re-run the suite; the previously-skipped test now activates
 .\.venv\Scripts\python.exe -m pytest python/tests/ -v
-# Expected: 161 passed, 0 skipped
+# Expected: 171 passed, 0 skipped
+```
+
+```bash
+# Git Bash — Step 3
+.venv/Scripts/python.exe -m pytest python/tests/ -v
+# Expected: 171 passed, 0 skipped
 ```
 
 **Human review checklist** — verify `fixtures/reference_output.json` against
@@ -414,13 +535,19 @@ This writes:
 - [ ] Train 02: `scan_head_offset_x` = 86.074, `scan_head_offset_y` = −21.695, `scan_head_rotation` = 180.0
 - [ ] Train 01 `thermal_lensing_passed` = false
 - [ ] Train 02 `thermal_lensing_passed` = true
-- [ ] Both trains: `clearbox.correction_data_shape` = [257, 257, 2]
+- [ ] Both trains: `clearbox.correction_data` is a 257×257×2 nested list (outer dimensions 257, inner dimension 2)
 - [ ] Train 01 `scan_field_correction_file.file_size` = 1138799
 - [ ] Train 02 `scan_field_correction_file.file_size` = 1142763
 - [ ] No OPCUA fields appear anywhere in the output
 
 ```powershell
-# Step 4 — commit all three files together (never split across commits)
+# PowerShell — Step 4: commit all three files together (never split across commits)
+git add fixtures/reference_output.json fixtures/reference_output.sha256 fixtures/synthetic_2laser.h5
+git commit -m "Phase 1.7: golden file + synthetic fixture"
+```
+
+```bash
+# Git Bash — Step 4
 git add fixtures/reference_output.json fixtures/reference_output.sha256 fixtures/synthetic_2laser.h5
 git commit -m "Phase 1.7: golden file + synthetic fixture"
 ```

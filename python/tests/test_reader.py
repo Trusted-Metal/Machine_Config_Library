@@ -102,6 +102,24 @@ class TestScanner:
                 "empty string must become None"
             )
 
+    def test_axis_configuration_is_3D(self, reference_config):
+        assert reference_config.optical_trains[0].scanner.axis_configuration == "3D"
+
+    def test_x_axis_smoothing_kernel(self, reference_config):
+        assert reference_config.optical_trains[0].scanner.x_axis.smoothing_kernel == "GAUSSIAN"
+
+    def test_y_axis_bit_resolution(self, reference_config):
+        assert reference_config.optical_trains[0].scanner.y_axis.actual_bit_resolution == 20
+
+    def test_z_axis_present_for_3D(self, reference_config):
+        for train in reference_config.optical_trains:
+            if train.scanner.axis_configuration == "3D":
+                assert train.scanner.z_axis is not None
+                assert train.scanner.focus is None
+
+    def test_focus_absent_for_3D(self, reference_config):
+        assert reference_config.optical_trains[0].scanner.focus is None
+
 
 # ===========================================================================
 # LightSource
@@ -163,15 +181,48 @@ class TestClearBox:
         for train in reference_config.optical_trains:
             assert train.clearbox is not None
 
-    def test_correction_data_shape(self, reference_reader):
+    def test_correction_data_shape(self, reference_config):
+        data = reference_config.optical_trains[0].clearbox.correction_data
+        assert data is not None
+        assert len(data) == 257
+        assert len(data[0]) == 257
+        assert len(data[0][0]) == 2
+
+    def test_inverse_correction_data_shape(self, reference_config):
+        data = reference_config.optical_trains[0].clearbox.inverse_correction_data
+        assert data is not None
+        assert len(data) == 257
+        assert len(data[0]) == 257
+        assert len(data[0][0]) == 2
+
+    def test_correction_data_values_are_float_or_none(self, reference_config):
+        data = reference_config.optical_trains[0].clearbox.correction_data
+        # Sample a few cells to verify type contract
+        for i in range(0, 257, 64):
+            for j in range(0, 257, 64):
+                for k in range(2):
+                    v = data[i][j][k]
+                    assert v is None or isinstance(v, float), (
+                        f"Expected float or None at [{i}][{j}][{k}], got {type(v)}"
+                    )
+
+    def test_correction_data_numpy_api_unchanged(self, reference_reader):
+        """get_correction_data() still returns the raw numpy array."""
         data = reference_reader.get_correction_data(0)
         assert data.shape == (257, 257, 2)
         assert data.dtype == np.float64
 
-    def test_inverse_correction_data_shape(self, reference_reader):
+    def test_inverse_correction_data_numpy_api_unchanged(self, reference_reader):
         data = reference_reader.get_inverse_correction_data(0)
         assert data.shape == (257, 257, 2)
         assert data.dtype == np.float64
+
+    def test_clearbox_ip_address(self, reference_config):
+        assert reference_config.optical_trains[0].clearbox.ip_address != ""
+
+    def test_clearbox_data_port_is_int(self, reference_config):
+        dp = reference_config.optical_trains[0].clearbox.data_port
+        assert dp is None or isinstance(dp, int)
 
 
 # ===========================================================================
@@ -315,6 +366,67 @@ class TestOpcua:
         """Standard (non-OPCUA) fixture must have no OPCUA group at all."""
         result = reference_reader.get_raw_group("OPCUA")
         assert result == {}
+
+
+# ===========================================================================
+# OPCUA — model-level (parse() result on reference_config_opcua.h5)
+# These complement TestOpcua (get_raw_group level) and assert that parse()
+# now returns a fully-populated OpcuaConfig object.
+# ===========================================================================
+
+class TestOpcuaModel:
+    def test_opcua_is_none_on_reference_config(self, reference_config):
+        """Standard fixture has no OPCUA group — config.opcua must be None."""
+        assert reference_config.opcua is None
+
+    def test_opcua_is_populated_on_opcua_fixture(self, opcua_reader):
+        config = opcua_reader.parse()
+        assert config.opcua is not None
+
+    def test_opcua_client_server_url(self, opcua_reader):
+        config = opcua_reader.parse()
+        assert config.opcua.client.server_url == (
+            "opc.tcp://172.17.20.240:62541/TM_OPCUA_DevTemplate_V0.1/TelemetryServer"
+        )
+
+    def test_opcua_client_auth_mode(self, opcua_reader):
+        config = opcua_reader.parse()
+        assert config.opcua.client.auth_mode == "UsernamePassword"
+
+    def test_opcua_client_integer_fields(self, opcua_reader):
+        config = opcua_reader.parse()
+        assert config.opcua.client.bfs_max_depth == 16
+        assert config.opcua.client.publish_interval == 250
+        assert config.opcua.client.sampling_interval == 250
+        assert config.opcua.client.session_timeout == 60000
+
+    def test_opcua_pipe_enabled(self, opcua_reader):
+        config = opcua_reader.parse()
+        assert config.opcua.pipe.pipe_enabled is True
+
+    def test_opcua_pipe_buffer_size(self, opcua_reader):
+        config = opcua_reader.parse()
+        assert config.opcua.pipe.buffer_size == 65536
+
+    def test_opcua_triggers_enabled(self, opcua_reader):
+        config = opcua_reader.parse()
+        assert config.opcua.triggers_enabled is True
+
+    def test_opcua_trigger_laser_emission_interlock(self, opcua_reader):
+        config = opcua_reader.parse()
+        t = config.opcua.triggers["Laser Emission Interlock"]
+        assert t.id == "trigger_1"
+        assert t.signal == "yellow_light"
+        assert t.subsystem == "Chamber"
+        assert t.rule_enabled is True
+
+    def test_opcua_trigger_chamber_oxygen(self, opcua_reader):
+        config = opcua_reader.parse()
+        t = config.opcua.triggers["Chamber Oxygen Level"]
+        assert t.id == "trigger_2"
+        assert t.signal == "oxygen_level"
+        assert t.start_value == "700"
+        assert t.stop_value == "1000"
 
 
 # ===========================================================================

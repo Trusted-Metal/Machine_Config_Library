@@ -1,6 +1,6 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 
 @dataclass
@@ -12,6 +12,7 @@ class ScanFieldCorrectionFile:
     document_created_at: Optional[str]
     document_type: Optional[str]
     original_uri: Optional[str]
+    raw_bytes: Optional[bytes] = None  # raw .fc3 binary content
 
 
 @dataclass
@@ -22,8 +23,8 @@ class ClearBox:
     server_port: Optional[int]
     actual_timing_offset: Optional[int]
     commanded_timing_offset: Optional[int]
-    correction_data_shape: tuple[int, int, int]          # e.g. (257, 257, 2)
-    inverse_correction_data_shape: tuple[int, int, int]  # same shape
+    correction_data: list[list[list[float | None]]] | None
+    inverse_correction_data: list[list[list[float | None]]] | None
     manufacturer: Optional[str]
     model: Optional[str]
     output_path: Optional[str]
@@ -58,6 +59,21 @@ class ScannerCard:
 
 
 @dataclass
+class AxisConfig:
+    actual_bit_resolution: Optional[int]
+    actual_bit_resolution_unit: Optional[str]
+    commanded_bit_resolution: Optional[int]
+    commanded_bit_resolution_unit: Optional[str]
+    control_type: Optional[str]
+    range_of_motion: Optional[float]
+    range_of_motion_unit: Optional[str]
+    smoothing_kernel: Optional[str]
+    smoothing_parameters: Optional[float]
+    tuning_parameters: Optional[str]
+    tuning_type: Optional[str]
+
+
+@dataclass
 class Scanner:
     manufacturer: str
     model: str
@@ -79,6 +95,32 @@ class Scanner:
     scan_head_rotation: Optional[float]
     scan_head_rotation_unit: Optional[str]
     axis_configuration: Optional[str]
+    x_axis: AxisConfig
+    y_axis: AxisConfig
+    z_axis: Optional[AxisConfig] = None
+    focus: Optional[AxisConfig] = None
+
+    def __post_init__(self) -> None:
+        cfg = self.axis_configuration
+        if cfg == "2D":
+            if self.z_axis is not None or self.focus is not None:
+                raise ValueError(
+                    "axis_configuration='2D' forbids z_axis and focus subgroups"
+                )
+        elif cfg == "3D":
+            if self.z_axis is None:
+                raise ValueError(
+                    "axis_configuration='3D' requires z_axis subgroup"
+                )
+            if self.focus is not None:
+                raise ValueError(
+                    "axis_configuration='3D' forbids focus subgroup"
+                )
+        elif cfg == "3D+Focus":
+            if self.z_axis is None or self.focus is None:
+                raise ValueError(
+                    "axis_configuration='3D+Focus' requires both z_axis and focus subgroups"
+                )
 
 
 @dataclass
@@ -176,6 +218,46 @@ class MachineConfigMeta:
     file_version: str
     export_date: str
     configuration_hash: str
+    extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed root HDF5 attrs
+
+
+@dataclass
+class OpcuaClientConfig:
+    server_url: str
+    auth_mode: str
+    security_mode: str
+    security_policy: str
+    bfs_max_depth: int
+    publish_interval: int
+    sampling_interval: int
+    session_timeout: int
+    extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed HDF5 attrs
+
+
+@dataclass
+class OpcuaPipeConfig:
+    pipe_enabled: bool                   # HDF5 int 0/1
+    buffer_size: int
+    extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed HDF5 attrs
+
+
+@dataclass
+class OpcuaTrigger:
+    id: Optional[str] = None
+    signal: Optional[str] = None
+    subsystem: Optional[str] = None
+    rule_enabled: Optional[bool] = None  # HDF5 int 0/1
+    start_value: Optional[str] = None
+    stop_value: Optional[str] = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class OpcuaConfig:
+    client: OpcuaClientConfig
+    pipe: OpcuaPipeConfig
+    triggers: dict[str, OpcuaTrigger]
+    triggers_enabled: Optional[bool] = None  # HDF5 float 0.0/1.0 on OPCUA/Triggers group
 
 
 @dataclass
@@ -183,3 +265,4 @@ class MachineConfig:
     meta: MachineConfigMeta
     machine: Machine
     optical_trains: list[OpticalTrain]
+    opcua: Optional[OpcuaConfig] = None

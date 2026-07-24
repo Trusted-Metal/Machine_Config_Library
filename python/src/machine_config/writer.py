@@ -21,10 +21,12 @@ import h5py
 import numpy as np
 
 from .models import (
+    AxisConfig,
     ClearBox,
     Collimator,
     LightSource,
     MachineConfig,
+    OpcuaConfig,
     OpticalTrain,
     ScanFieldCorrectionFile,
     Scanner,
@@ -48,6 +50,8 @@ class MachineConfigWriter:
             self._write_root_attrs(f)
             self._write_machine(f)
             self._write_optical_trains(f)
+            if self.config.opcua is not None:
+                self._write_opcua(f, self.config.opcua)
 
     # ------------------------------------------------------------------
     # Type-conversion helpers — exact inverses of reader helpers
@@ -86,6 +90,8 @@ class MachineConfigWriter:
         f.attrs["File_Version"]       = meta.file_version
         f.attrs["Export_Date"]        = meta.export_date
         f.attrs["Configuration_Hash"] = meta.configuration_hash
+        for k, v in meta.extra.items():
+            f.attrs[k] = v
 
     # ------------------------------------------------------------------
     # Machine group → Machine + BuildPlate
@@ -184,6 +190,25 @@ class MachineConfigWriter:
         grp.attrs["Scan_Head_Rotation"]      = self._f(s.scan_head_rotation)
         grp.attrs["Scan_Head_Rotation_unit"] = s.scan_head_rotation_unit or "degrees"
         grp.attrs["Axis_Configuration"]      = self._s(s.axis_configuration)
+        self._write_axis(grp.require_group("X_Axis"), s.x_axis)
+        self._write_axis(grp.require_group("Y_Axis"), s.y_axis)
+        if s.z_axis is not None:
+            self._write_axis(grp.require_group("Z_Axis"), s.z_axis)
+        if s.focus is not None:
+            self._write_axis(grp.require_group("Focus"), s.focus)
+
+    def _write_axis(self, grp: h5py.Group, ax: AxisConfig) -> None:
+        grp.attrs["Actual_Bit_Resolution"]      = self._i(ax.actual_bit_resolution)
+        grp.attrs["Actual_Bit_Resolution_unit"] = self._s(ax.actual_bit_resolution_unit)
+        grp.attrs["Commanded_Bit_Resolution"]      = self._i(ax.commanded_bit_resolution)
+        grp.attrs["Commanded_Bit_Resolution_unit"] = self._s(ax.commanded_bit_resolution_unit)
+        grp.attrs["Control_Type"]        = self._s(ax.control_type)
+        grp.attrs["Range_Of_Motion"]      = self._f(ax.range_of_motion)
+        grp.attrs["Range_Of_Motion_unit"] = self._s(ax.range_of_motion_unit)
+        grp.attrs["Smoothing_Kernel"]     = self._s(ax.smoothing_kernel)
+        grp.attrs["Smoothing_Parameters"] = self._f(ax.smoothing_parameters)
+        grp.attrs["Tuning_Parameters"]    = self._s(ax.tuning_parameters)
+        grp.attrs["Tuning_Type"]          = self._s(ax.tuning_type)
 
     def _write_light_source(self, grp: h5py.Group, ls: LightSource) -> None:
         grp.attrs["Manufacturer"]  = ls.manufacturer
@@ -220,6 +245,18 @@ class MachineConfigWriter:
         grp.attrs["Sample_Period"]      = self._f(sc.sample_period)
         grp.attrs["Sample_Period_unit"] = sc.sample_period_unit or "μs"
 
+    @staticmethod
+    def _correction_list_to_array(data: Optional[list], shape: tuple = (257, 257, 2)) -> np.ndarray:
+        """Convert nested Python list (None = NaN) back to float64 ndarray."""
+        if data is None:
+            return np.zeros(shape, dtype=np.float64)
+        obj = np.array(data, dtype=object)
+        result = np.empty(obj.shape, dtype=np.float64)
+        result.flat[:] = [
+            float("nan") if v is None else float(v) for v in obj.flat
+        ]
+        return result
+
     def _write_clearbox(self, grp: h5py.Group, cb: ClearBox) -> None:
         grp.attrs["Ip_Address"]           = cb.ip_address
         grp.attrs["Serial_Number"]        = self._s(cb.serial_number)
@@ -239,12 +276,22 @@ class MachineConfigWriter:
         grp.attrs["Volts_To_Watts_Params"]     = self._s(cb.volts_to_watts_params)
         grp.attrs["Correction_Grid_Domain_Shape"]  = self._s(cb.correction_grid_domain_shape)
         grp.attrs["Inverse_Grid_Domain_Shape"]     = self._s(cb.inverse_grid_domain_shape)
-        # Write placeholder zero arrays — callers that need real data
-        # (e.g. MockConfigBuilder) patch these after construction.
-        shape = cb.correction_data_shape or (257, 257, 2)
-        inv   = cb.inverse_correction_data_shape or (257, 257, 2)
-        grp.create_dataset("Correction_Data",         data=np.zeros(shape, dtype=np.float64))
-        grp.create_dataset("Inverse_Correction_Data", data=np.zeros(inv,   dtype=np.float64))
+        grp.create_dataset(
+            "Correction_Data",
+            data=self._correction_list_to_array(cb.correction_data),
+        )
+        cds = grp["Correction_Data"]
+        cds.attrs["dimensions"] = "H,W,D"
+        cds.attrs["dtype"]      = "float64"
+        cds.attrs["shape"]      = f"{cds.shape[0]}x{cds.shape[1]}x{cds.shape[2]}"
+        grp.create_dataset(
+            "Inverse_Correction_Data",
+            data=self._correction_list_to_array(cb.inverse_correction_data),
+        )
+        ids = grp["Inverse_Correction_Data"]
+        ids.attrs["dimensions"] = "H,W,D"
+        ids.attrs["dtype"]      = "float64"
+        ids.attrs["shape"]      = f"{ids.shape[0]}x{ids.shape[1]}x{ids.shape[2]}"
 
     def _write_sfcf(
         self,
@@ -252,8 +299,10 @@ class MachineConfigWriter:
         train_path: str,
         sfcf: ScanFieldCorrectionFile,
     ) -> None:
-        # Dataset contains the raw .fc3 bytes; write a zero-filled placeholder.
-        data = np.zeros(max(sfcf.file_size, 1), dtype=np.uint8)
+        if sfcf.raw_bytes is not None:
+            data = np.frombuffer(sfcf.raw_bytes, dtype=np.uint8)
+        else:
+            data = np.zeros(max(sfcf.file_size, 1), dtype=np.uint8)
         ds = f.create_dataset(f"{train_path}/scan_field_correction_file", data=data)
         ds.attrs["document_name"]    = sfcf.document_name
         ds.attrs["document_id"]      = sfcf.document_id
@@ -262,3 +311,43 @@ class MachineConfigWriter:
         ds.attrs["document_created_at"] = self._s(sfcf.document_created_at)
         ds.attrs["document_type"]       = self._s(sfcf.document_type)
         ds.attrs["original_uri"]        = self._s(sfcf.original_uri)
+
+    def _write_opcua(self, f: h5py.File, opcua: OpcuaConfig) -> None:
+        # ---- Client --------------------------------------------------------------
+        cg = f.require_group("OPCUA/Client")
+        c  = opcua.client
+        cg.attrs["Server_URL"]        = c.server_url
+        cg.attrs["Auth_Mode"]         = c.auth_mode
+        cg.attrs["Security_Mode"]     = c.security_mode
+        cg.attrs["Security_Policy"]   = c.security_policy
+        cg.attrs["BFS_Max_Depth"]     = int(c.bfs_max_depth)
+        cg.attrs["Publish_Interval"]  = int(c.publish_interval)
+        cg.attrs["Sampling_Interval"] = int(c.sampling_interval)
+        cg.attrs["Session_Timeout"]   = int(c.session_timeout)
+        for k, v in c.extra.items():
+            cg.attrs[k] = v
+
+        # ---- Pipe ----------------------------------------------------------------
+        pg = f.require_group("OPCUA/Pipe")
+        p  = opcua.pipe
+        pg.attrs["Pipe_Enabled"] = 1 if p.pipe_enabled else 0
+        pg.attrs["Buffer_Size"]  = int(p.buffer_size)
+        for k, v in p.extra.items():
+            pg.attrs[k] = v
+
+        # ---- Triggers ------------------------------------------------------------
+        tg = f.require_group("OPCUA/Triggers")
+        if opcua.triggers_enabled is not None:
+            tg.attrs["Triggers_Enabled"] = np.float64(1.0 if opcua.triggers_enabled else 0.0)
+
+        for name, trigger in opcua.triggers.items():
+            sg = tg.require_group(name)
+            sg.attrs["ID"]           = self._s(trigger.id)
+            sg.attrs["Signal"]       = self._s(trigger.signal)
+            sg.attrs["Subsystem"]    = self._s(trigger.subsystem)
+            sg.attrs["Rule_Enabled"] = self._b(trigger.rule_enabled)
+            sg.attrs["Start_Value"]  = self._s(trigger.start_value)
+            sg.attrs["Stop_Value"]   = self._s(trigger.stop_value)
+            for k, v in trigger.extra.items():
+                sg.attrs[k] = v
+
