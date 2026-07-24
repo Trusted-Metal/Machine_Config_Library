@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MachineConfig",
+  "type": "object",
+  "required": ["meta", "machine", "optical_trains"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["schema_version", "machine_name", "manufacturer", "model", "serial_number",
+                   "file_version", "export_date", "configuration_hash"],
+      "properties": {
+        "schema_version":      { "type": "string" },
+        "machine_name":        { "type": "string" },
+        "manufacturer":        { "type": "string" },
+        "model":               { "type": "string" },
+        "serial_number":       { "type": "string" },
+        "file_version":        { "type": "string" },
+        "export_date":         { "type": "string", "format": "date-time" },
+        "configuration_hash":  { "type": "string", "minLength": 64, "maxLength": 64 }
+      }
+    },
+    "machine": {
+      "type": "object",
+      "properties": {
+        "id":                      { "type": ["string", "null"] },
+        "machine_name":            { "type": ["string", "null"] },
+        "manufacturer":            { "type": ["string", "null"] },
+        "model":                   { "type": ["string", "null"] },
+        "serial_number":           { "type": ["string", "null"] },
+        "build_plate_x":           { "type": ["number", "null"] },
+        "build_plate_x_unit":      { "type": ["string", "null"] },
+        "build_plate_y":           { "type": ["number", "null"] },
+        "build_plate_y_unit":      { "type": ["string", "null"] },
+        "build_plate_z":           { "type": ["number", "null"] },
+        "build_plate_z_unit":      { "type": ["string", "null"] },
+        "build_plate_radius":      { "type": ["number", "null"] },
+        "build_plate_radius_unit": { "type": ["string", "null"] },
+        "gas_flow_direction":      { "type": ["string", "null"] },
+        "recoat_direction":        { "type": ["string", "null"] }
+      }
+    },
+    "optical_trains": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "required": ["train_id", "scanner", "light_source", "collimator", "scanner_card"],
+        "properties": {
+          "train_id":                                   { "type": "string" },
+          "beam_waist_major":                           { "type": ["number", "null"] },
+          "beam_waist_major_unit":                      { "type": ["string", "null"] },
+          "beam_waist_minor":                           { "type": ["number", "null"] },
+          "beam_waist_minor_unit":                      { "type": ["string", "null"] },
+          "beam_waist_offset_z":                        { "type": ["number", "null"] },
+          "beam_waist_offset_z_unit":                   { "type": ["string", "null"] },
+          "m2_major":                                   { "type": ["number", "null"] },
+          "m2_minor":                                   { "type": ["number", "null"] },
+          "rayleigh_length_major":                      { "type": ["number", "null"] },
+          "rayleigh_length_major_unit":                 { "type": ["string", "null"] },
+          "rayleigh_length_minor":                      { "type": ["number", "null"] },
+          "rayleigh_length_minor_unit":                 { "type": ["string", "null"] },
+          "thermal_lensing_passed":                     { "type": ["boolean", "null"] },
+          "thermal_lensing_focal_plane_shift":          { "type": ["number", "null"] },
+          "thermal_lensing_focal_plane_shift_unit":     { "type": ["string", "null"] },
+          "thermal_lensing_threshold":                  { "type": ["number", "null"] },
+          "thermal_lensing_threshold_unit":             { "type": ["string", "null"] },
+          "id":                                          { "type": ["string", "null"] },
+          "beam_profile_type":                           { "type": ["string", "null"] },
+          "beam_waist_definition":                       { "type": ["string", "null"] },
+          "build_plane_offset_major":                    { "type": ["number", "null"] },
+          "build_plane_offset_major_unit":               { "type": ["string", "null"] },
+          "build_plane_offset_minor":                    { "type": ["number", "null"] },
+          "build_plane_offset_minor_unit":               { "type": ["string", "null"] },
+          "collimator_focal_length":                     { "type": ["number", "null"] },
+          "collimator_focal_length_unit":                { "type": ["string", "null"] },
+          "major_axis_angle":                            { "type": ["number", "null"] },
+          "major_axis_angle_unit":                       { "type": ["string", "null"] },
+          "scanner_number":                              { "type": ["string", "null"] },
+          "scanner": {
+            "type": "object",
+            "properties": {
+              "manufacturer":           { "type": "string" },
+              "model":                  { "type": "string" },
+              "serial_number":          { "type": "string" },
+              "working_distance":        { "type": ["number", "null"] },
+              "working_distance_unit":   { "type": ["string", "null"] },
+              "scan_field_x":            { "type": ["number", "null"] },
+              "scan_field_x_unit":       { "type": ["string", "null"] },
+              "scan_field_y":            { "type": ["number", "null"] },
+              "scan_field_y_unit":       { "type": ["string", "null"] },
+              "scan_field_z":            { "type": ["number", "null"] },
+              "scan_field_z_unit":       { "type": ["string", "null"] },
+              "scan_head_offset_x":      { "type": ["number", "null"] },
+              "scan_head_offset_x_unit": { "type": ["string", "null"] },
+              "scan_head_offset_y":      { "type": ["number", "null"] },
+              "scan_head_offset_y_unit": { "type": ["string", "null"] },
+              "scan_head_offset_z":      { "type": ["number", "null"] },
+              "scan_head_offset_z_unit": { "type": ["string", "null"] },
+              "scan_head_rotation":      { "type": ["number", "null"] },
+              "scan_head_rotation_unit": { "type": ["string", "null"] },
+              "axis_configuration":      { "type": ["string", "null"] }
+            }
+          },
+          "light_source": {
+            "type": "object",
+            "properties": {
+              "manufacturer":             { "type": "string" },
+              "model":                    { "type": "string" },
+              "serial_number":            { "type": "string" },
+              "wavelength":               { "type": ["number", "null"] },
+              "wavelength_unit":          { "type": ["string", "null"] },
+              "power_max_nominal":        { "type": ["number", "null"] },
+              "power_max_nominal_unit":   { "type": ["string", "null"] },
+              "power_max_actual":         { "type": ["number", "null"] },
+              "power_max_actual_unit":    { "type": ["string", "null"] },
+              "power_min_actual":         { "type": ["number", "null"] },
+              "power_min_actual_unit":    { "type": ["string", "null"] },
+              "power_min_nominal":        { "type": ["number", "null"] },
+              "power_min_nominal_unit":   { "type": ["string", "null"] },
+              "power_bit_resolution":     { "type": ["number", "null"] },
+              "power_bit_resolution_unit":{ "type": ["string", "null"] },
+              "watts_to_volts_algorithm": { "type": ["string", "null"] },
+              "watts_to_volts_params":    { "type": ["string", "null"] }
+            }
+          },
+          "collimator": {
+            "type": "object",
+            "properties": {
+              "manufacturer":    { "type": "string" },
+              "model":           { "type": "string" },
+              "serial_number":   { "type": "string" },
+              "focal_length":      { "type": ["number", "null"] },
+              "focal_length_unit": { "type": ["string", "null"] }
+            }
+          },
+          "scanner_card": {
+            "type": "object",
+            "properties": {
+              "manufacturer":           { "type": "string" },
+              "model":                  { "type": "string" },
+              "serial_number":          { "type": "string" },
+              "communication_protocol": { "type": ["string", "null"] },
+              "sample_period":          { "type": ["number", "null"] },
+              "sample_period_unit":     { "type": ["string", "null"] }
+            }
+          },
+          "clearbox": {
+            "type": ["object", "null"],
+            "properties": {
+              "ip_address":                    { "type": "string" },
+              "serial_number":                 { "type": ["string", "null"] },
+              "data_port":                     { "type": ["integer", "null"] },
+              "server_port":                   { "type": ["integer", "null"] },
+              "actual_timing_offset":          { "type": ["integer", "null"] },
+              "commanded_timing_offset":       { "type": ["integer", "null"] },
+              "correction_data_shape":         { "type": "array", "items": {"type": "integer"} },
+              "inverse_correction_data_shape": { "type": "array", "items": {"type": "integer"} },
+              "manufacturer":                  { "type": ["string", "null"] },
+              "model":                         { "type": ["string", "null"] },
+              "output_path":                   { "type": ["string", "null"] },
+              "selected_camera":               { "type": ["string", "null"] },
+              "custom_video_format":           { "type": ["string", "null"] },
+              "video_output":                  { "type": ["string", "null"] },
+              "show_console":                  { "type": ["boolean", "null"] },
+              "software_trigger_delay":        { "type": ["integer", "null"] },
+              "volts_to_watts_algorithm":      { "type": ["string", "null"] },
+              "volts_to_watts_params":         { "type": ["string", "null"] },
+              "correction_grid_domain_shape":  { "type": ["string", "null"] },
+              "inverse_grid_domain_shape":     { "type": ["string", "null"] }
+            }
+          },
+          "scan_field_correction_file": {
+            "type": ["object", "null"],
+            "properties": {
+              "document_name":       { "type": "string" },
+              "document_id":         { "type": "string" },
+              "file_size":           { "type": "integer" },
+              "valid_as_of_date":    { "type": "string" },
+              "document_created_at": { "type": ["string", "null"] },
+              "document_type":       { "type": ["string", "null"] },
+              "original_uri":        { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

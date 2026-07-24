@@ -1,0 +1,21 @@
+/Reference Materials
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Scratch / ad-hoc outputs at repo root (not fixtures, not examples/)
+/example_config.h5
+/example_spec.yaml
+/single_test_config.h5
+/test_config.h5
+/testconfig.json
+
+# Node / Rust / C++ build outputs
+nodejs/node_modules/
+rust/target/
+cpp/build/
+
+# Editor
+.vscode/
+*.egg-info/
