@@ -86,9 +86,9 @@ def print_review_checklist() -> None:
         "Train 02: offset_x=86.074  offset_y=-21.695  rotation=180.0",
         "Train 01 thermal_lensing_passed = false",
         "Train 02 thermal_lensing_passed = true",
-        "Both trains: clearbox.correction_data is a 257×257×2 nested list",
-        "Train 01 scan_field_correction_file.file_size = 1138799",
-        "Train 02 scan_field_correction_file.file_size = 1142763",
+        "Both trains: clearbox present with scalar fields (no correction_data arrays — use include_binary=True to inspect)",
+        "Train 01 scan_field_correction_file.file_size = 1138799  (no raw_bytes — use include_binary=True)",
+        "Train 02 scan_field_correction_file.file_size = 1142763  (no raw_bytes — use include_binary=True)",
         "No OPCUA fields appear anywhere in the output",
     ]
     for item in checklist:
@@ -99,7 +99,7 @@ def print_review_checklist() -> None:
     print("    fixtures/reference_output.json")
     print("    fixtures/reference_output.sha256")
     print()
-    print("  Then re-run the test suite — it should now be 161 passed, 0 skipped.")
+    print("  Then re-run the test suite — all tests should pass.")
 
 
 if __name__ == "__main__":

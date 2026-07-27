@@ -63,7 +63,7 @@ python -m pytest python/tests/ -v
 |---|---|---|---|---|
 | Schema self-tests | `python/tests/test_schema.py` | 0.4 | `.\.venv\Scripts\python.exe -m pytest python/tests/test_schema.py -v` | Schema parses as JSON; draft 2020-12 meta-validation; all `required` constraints; `minItems`/`maxItems`; hash length; golden file validation (skipped until Phase 1.7) |
 | Generator tests | `python/tests/test_generator.py` | 0.7 | `.\.venv\Scripts\python.exe -m pytest python/tests/test_generator.py -v` | Generator runs cleanly on empty spec dir; all 4 templates are valid Jinja2; header, version strings, all 3 change types, empty-changes rendering |
-| Reader tests | `python/tests/test_reader.py` | 1.3/1.6 | `.\.venv\Scripts\python.exe -m pytest python/tests/test_reader.py -v` | Full parse of real AconityMIDI `.h5` fixtures; all HDF5 → model field mappings; Rule 8 unit locking; ClearBox; scan-field correction file; thermal lensing; `get_raw_group`; JSON/schema round-trip; MockConfigBuilder roundtrip; unit-mismatch error; absent ClearBox; File_Version warning; OPCUA group values (Client/Pipe/Triggers/trigger subgroups) |
+| Reader tests | `python/tests/test_reader.py` | 1.3/1.6 | `.\.venv\Scripts\python.exe -m pytest python/tests/test_reader.py -v` | Full parse of real AconityMIDI `.h5` fixtures; all HDF5 → model field mappings; Rule 8 unit locking; ClearBox; scan-field correction file; thermal lensing; `get_raw_group`; JSON/schema round-trip; MockConfigBuilder roundtrip; unit-mismatch error; absent ClearBox; File_Version warning; OPCUA group values (Client/Pipe/Triggers/trigger subgroups); `include_binary` flag (`TestIncludeBinaryFlag`: default excludes correction arrays and raw bytes; `include_binary=True` restores them with full data) |
 | CLI tests | `python/tests/test_cli.py` | 1.4/1.5 | `.\.venv\Scripts\python.exe -m pytest python/tests/test_cli.py -v` | `inspect`, `validate`, `export-json` against real fixture; `write`, `build --mock`, `build --from-yaml`, `demo` (Phase 1.5 implemented); `--version`, `--help` |
 | Writer tests | `python/tests/test_writer.py` | 1.6 | `.\.venv\Scripts\python.exe -m pytest python/tests/test_writer.py -v` | HDF5 write → re-parse roundtrip for machine name, hash, build plate, train count, scanner offsets, thermal lensing, null fields, schema validity |
 | Builder tests | `python/tests/test_builder.py` | 1.6 | `.\.venv\Scripts\python.exe -m pytest python/tests/test_builder.py -v` | `MockConfigBuilder` (1 and 2 lasers, plate dims, correction grid shape/non-zero); `YamlConfigBuilder` roundtrip; `ConfigEditor` offset mutation |
@@ -160,9 +160,9 @@ machine-config inspect fixtures/reference_config.h5
 | `python/src/machine_config/models.py` | 1.2 | All 11 dataclasses — full type-annotated model layer; hybrid unit field naming throughout |
 | `python/src/machine_config/schema.py` | 1.2 | Schema loader — resolves `schema/machine_config_v1.schema.json` from repo root; exposes `SCHEMA: dict` |
 | `python/src/machine_config/__init__.py` | 1.5 | Package exports: 11 model classes + `MachineConfigReader`, `MachineConfigWriter`, `MockConfigBuilder`, `YamlConfigBuilder`, `ConfigEditor`, `config_from_dict` |
-| `python/src/machine_config/reader.py` | 1.3/1.5 | `MachineConfigReader` — parses `.h5` → `MachineConfig`; Rule 8 unit locking; `to_json()` produces schema-valid output; `config_from_dict()` module-level deserialiser (JSON dict → `MachineConfig`) |
+| `python/src/machine_config/reader.py` | 1.3/1.5 | `MachineConfigReader` — parses `.h5` → `MachineConfig`; Rule 8 unit locking; `to_json(include_binary=False)` produces schema-valid metadata-only JSON (correction arrays and raw `.fc3` bytes excluded by default, accessible via `get_correction_data()` / `get_scan_field_correction_bytes()` or `to_json(include_binary=True)`); `config_from_dict()` module-level deserialiser (JSON dict → `MachineConfig`) |
 | `python/tests/conftest.py` | 1.3 | Session-scoped fixtures: `reference_reader`, `reference_config`, `opcua_reader` |
-| `python/tests/test_reader.py` | 1.3/1.6 | Reader test suite: 61 tests across 10 classes (includes `TestOpcua` with 12 OPCUA value tests against `reference_config_opcua.h5`; `scan_head_offset_y` asserted for both trains) |
+| `python/tests/test_reader.py` | 1.3/1.6 | Reader test suite: 68 tests across 11 classes (includes `TestOpcua` with 12 OPCUA value tests against `reference_config_opcua.h5`; `scan_head_offset_y` asserted for both trains; `TestIncludeBinaryFlag` with 7 tests covering the `include_binary` flag) |
 | `python/src/machine_config/cli.py` | 1.4/1.5 | `machine-config` CLI: all 6 commands fully implemented (`inspect --verbose`, `validate`, `export-json`, `write`, `build --mock/--from-yaml`, `demo`) |
 | `python/tests/test_cli.py` | 1.4/1.5 | CLI test suite: 40 tests across 5 classes using Click `CliRunner` |
 | `python/src/machine_config/writer.py` | 1.5 | `MachineConfigWriter` — serialises `MachineConfig` → machine-config-schema-compatible `.h5`; machine-agnostic; exact mirror of `reader.py` type conventions |
@@ -988,10 +988,16 @@ class MachineConfigReader:
                 return {}
             return dict(f[hdf5_path].attrs)
 
-    def to_json(self, indent: int = 2) -> str:
-        """Parse and serialize to canonical JSON string."""
+    def to_json(self, indent: int = 2, include_binary: bool = False) -> str:
+        """Parse and serialize to canonical JSON string.
+
+        By default (include_binary=False) correction arrays and raw .fc3 bytes
+        are omitted — the JSON contains only scalar/metadata fields, keeping
+        the output compact and human-readable.  Pass include_binary=True to
+        add correction_data, inverse_correction_data, and raw_bytes (base64).
+        """
         config = self.parse()
-        return json.dumps(self._config_to_dict(config), indent=indent)
+        return json.dumps(self._config_to_dict(config, include_binary=include_binary), indent=indent)
 
     # ------------------------------------------------------------------
     # Attribute-reading helpers — all HDF5 attribute access goes through
@@ -1756,7 +1762,7 @@ Two datasets — both currently unread beyond shape:
 
 #### 1.8e — OPCUA as Optional First-Class Field
 
-> **Status: Complete (2026-07-24). 301 tests pass (10 new in `test_opcua_roundtrip.py`, 11 new in `TestOpcuaModel` in `test_reader.py`).**
+> **Status: Complete (2026-07-24). 308 tests pass (10 new in `test_opcua_roundtrip.py`, 11 new in `TestOpcuaModel` in `test_reader.py`, 7 new in `TestIncludeBinaryFlag` in `test_reader.py`). Golden file regenerated after `include_binary` flag introduced — `reference_output.json` reduced from ~14 MB to ~13 KB by excluding binary datasets from default `to_json()` output.**
 
 **Background**: OPCUA connectivity configuration is currently accessible only via `reader.get_raw_group("OPCUA/Client")` etc. — a raw escape hatch with no model, no write path, and no schema coverage. As of this phase, OPCUA becomes a typed optional field on `MachineConfig` (`opcua: OpcuaConfig | None = None`), fully supported by reader, writer, JSON serialization, and schema validation.
 
@@ -1818,7 +1824,7 @@ opcua: Optional[OpcuaConfig] = None
 | `python/tests/test_reader.py` | Add assertions that `parse()` on `reference_config_opcua.h5` now populates `config.opcua` with correct typed values (complements existing `get_raw_group`-level `TestOpcua` class). |
 | `python/tests/test_opcua_roundtrip.py` | New test file — see below. |
 
-> **Note on golden file**: The canonical golden file is generated from `reference_config.h5`, which has no OPCUA group. After Phase 1.8e, `config.opcua` will be `None` for that file and `to_json()` will emit no `opcua` key — identical output to before. The SHA-256 does not change.
+> **Note on golden file**: The canonical golden file is generated from `reference_config.h5`, which has no OPCUA group. `config.opcua` is `None` for that file and `to_json()` emits no `opcua` key. The golden file was regenerated after the `include_binary` flag was introduced — binary datasets (correction arrays, raw `.fc3` bytes) are excluded from the default `to_json()` output, so `reference_output.json` is a compact metadata-only snapshot (~13 KB). The SHA-256 reflects this content.
 
 **`test_opcua_roundtrip.py` tests**:
 - `test_opcua_client_fields_roundtrip` — construct `OpcuaConfig` with known `OpcuaClientConfig` values; write via `MachineConfigWriter`; read back via `MachineConfigReader.parse()`; assert each `client` field matches

@@ -115,18 +115,29 @@ for i, train in enumerate(config.optical_trains):
 
 ### Use case 2 — Export to canonical JSON
 
+By default, `to_json()` produces a compact, human-readable JSON snapshot containing all **scalar and metadata fields**. Binary datasets — ClearBox correction arrays and raw `.fc3` scan-field correction bytes — are intentionally excluded. The HDF5 file is the source of truth for those; use the dedicated accessors or `include_binary=True` when you need them.
+
 ```python
 from machine_config import MachineConfigReader
+import pathlib
 
 reader = MachineConfigReader("fixtures/reference_config.h5")
 
-# To stdout
+# Default: metadata + scalars only (~13 KB for a typical 2-laser config)
 print(reader.to_json(indent=2))
-
-# To a file
-import pathlib
 pathlib.Path("output.json").write_text(reader.to_json(indent=2), encoding="utf-8")
+
+# With binary data included: adds correction_data, inverse_correction_data (257×257×2
+# float64 arrays as nested lists) and raw_bytes (base64-encoded .fc3 file bytes).
+# Output is large (~14 MB for a 2-laser config with ClearBox).
+pathlib.Path("output_full.json").write_text(
+    reader.to_json(indent=2, include_binary=True), encoding="utf-8"
+)
 ```
+
+> **When to use `include_binary=True`**: debugging correction array values, creating a fully self-contained JSON archive, or comparing correction grids between two configs programmatically. For routine inspection, logging, or CI drift detection, the default is preferred — it is fast and the output is readable.
+
+> **Accessing binary data without JSON**: use `reader.get_correction_data(train_index)` (returns a `numpy.ndarray` of shape `(257, 257, 2)`) and `reader.get_scan_field_correction_bytes(train_index)` (returns raw `bytes`). These are the recommended paths for numerical work.
 
 ---
 
@@ -334,11 +345,14 @@ print("Schema valid.")
 # Validate against the schema
 .\.venv\Scripts\machine-config.exe validate fixtures/reference_config.h5
 
-# Export canonical JSON to stdout
+# Export canonical JSON to stdout (metadata + scalars only, ~13 KB)
 .\.venv\Scripts\machine-config.exe export-json fixtures/reference_config.h5
 
 # Export canonical JSON to a file
 .\.venv\Scripts\machine-config.exe export-json fixtures/reference_config.h5 --output out.json
+
+# Include correction arrays and raw .fc3 bytes (large output, ~14 MB)
+.\.venv\Scripts\machine-config.exe export-json fixtures/reference_config.h5 --include-binary --output full.json
 
 # Write a canonical JSON file back to HDF5
 .\.venv\Scripts\machine-config.exe write out.json --output reconstructed.h5
@@ -368,11 +382,14 @@ print("Schema valid.")
 # Validate against the schema
 .venv/Scripts/machine-config.exe validate fixtures/reference_config.h5
 
-# Export canonical JSON to stdout
+# Export canonical JSON to stdout (metadata + scalars only, ~13 KB)
 .venv/Scripts/machine-config.exe export-json fixtures/reference_config.h5
 
 # Export canonical JSON to a file
 .venv/Scripts/machine-config.exe export-json fixtures/reference_config.h5 --output out.json
+
+# Include correction arrays and raw .fc3 bytes (large output, ~14 MB)
+.venv/Scripts/machine-config.exe export-json fixtures/reference_config.h5 --include-binary --output full.json
 
 # Write a canonical JSON file back to HDF5
 .venv/Scripts/machine-config.exe write out.json --output reconstructed.h5

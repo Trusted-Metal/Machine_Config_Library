@@ -152,10 +152,20 @@ def validate(path: str) -> None:
     show_default=True,
     help="JSON indentation level.",
 )
-def export_json(path: str, output: str | None, indent: int) -> None:
+@click.option(
+    "--include-binary",
+    is_flag=True,
+    default=False,
+    help=(
+        "Include correction arrays and raw .fc3 bytes in the output. "
+        "Produces large output (~14 MB for a 2-laser config). "
+        "Default: metadata and scalar fields only."
+    ),
+)
+def export_json(path: str, output: str | None, indent: int, include_binary: bool) -> None:
     """Export a machine config HDF5 file to canonical JSON."""
     try:
-        json_str = MachineConfigReader(path).to_json(indent=indent)
+        json_str = MachineConfigReader(path).to_json(indent=indent, include_binary=include_binary)
     except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)

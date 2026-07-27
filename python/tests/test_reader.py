@@ -485,3 +485,54 @@ def test_file_version_warning(tmp_path):
         warnings.simplefilter("always")
         MachineConfigReader(out).parse()
     assert any("File_Version" in str(warning.message) for warning in w)
+
+
+# ===========================================================================
+# include_binary flag
+# ===========================================================================
+
+class TestIncludeBinaryFlag:
+    """to_json() include_binary=False (default) omits correction arrays and
+    raw fc3 bytes; include_binary=True restores them."""
+
+    def test_default_excludes_correction_data(self, reference_reader):
+        output = json.loads(reference_reader.to_json())
+        cb = output["optical_trains"][0]["clearbox"]
+        assert "correction_data" not in cb
+
+    def test_default_excludes_inverse_correction_data(self, reference_reader):
+        output = json.loads(reference_reader.to_json())
+        cb = output["optical_trains"][0]["clearbox"]
+        assert "inverse_correction_data" not in cb
+
+    def test_default_excludes_raw_bytes(self, reference_reader):
+        output = json.loads(reference_reader.to_json())
+        sfcf = output["optical_trains"][0]["scan_field_correction_file"]
+        assert "raw_bytes" not in sfcf
+
+    def test_include_binary_adds_correction_data(self, reference_reader):
+        output = json.loads(reference_reader.to_json(include_binary=True))
+        cb = output["optical_trains"][0]["clearbox"]
+        assert "correction_data" in cb
+        assert len(cb["correction_data"]) > 0
+
+    def test_include_binary_adds_inverse_correction_data(self, reference_reader):
+        output = json.loads(reference_reader.to_json(include_binary=True))
+        cb = output["optical_trains"][0]["clearbox"]
+        assert "inverse_correction_data" in cb
+        assert len(cb["inverse_correction_data"]) > 0
+
+    def test_include_binary_adds_raw_bytes(self, reference_reader):
+        output = json.loads(reference_reader.to_json(include_binary=True))
+        sfcf = output["optical_trains"][0]["scan_field_correction_file"]
+        assert "raw_bytes" in sfcf
+        assert sfcf["raw_bytes"]  # non-empty base64 string
+
+    def test_clearbox_scalar_fields_present_regardless_of_flag(self, reference_reader):
+        """Scalar clearbox fields appear in both modes."""
+        for flag in (False, True):
+            output = json.loads(reference_reader.to_json(include_binary=flag))
+            cb = output["optical_trains"][0]["clearbox"]
+            assert "ip_address" in cb
+            assert "data_port" in cb
+            assert "correction_grid_domain_shape" in cb

@@ -10,6 +10,10 @@ __pycache__/
 /single_test_config.h5
 /test_config.h5
 /testconfig.json
+/test_script.py
+
+# Developer scratch scripts — personal/machine-specific, not for CI
+scratch/
 
 # Node / Rust / C++ build outputs
 nodejs/node_modules/

@@ -166,6 +166,20 @@ class TestExportJson:
         # 4-space indent produces wider output than 2-space
         assert len(result_4.output) > len(result_2.output)
 
+    def test_default_excludes_correction_data(self, runner):
+        result = runner.invoke(main, ["export-json", REFERENCE_H5])
+        parsed = json.loads(result.output)
+        cb = parsed["optical_trains"][0]["clearbox"]
+        assert "correction_data" not in cb
+
+    def test_include_binary_flag_adds_correction_data(self, runner):
+        result = runner.invoke(main, ["export-json", REFERENCE_H5, "--include-binary"])
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        cb = parsed["optical_trains"][0]["clearbox"]
+        assert "correction_data" in cb
+        assert len(cb["correction_data"]) > 0
+
 
 # ===========================================================================
 # Phase 1.5 — write / build / demo commands

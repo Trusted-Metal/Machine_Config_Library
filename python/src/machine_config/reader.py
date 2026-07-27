@@ -128,10 +128,26 @@ class MachineConfigReader:
                 return {}
             return dict(f[hdf5_path].attrs)
 
-    def to_json(self, indent: int = 2) -> str:
-        """Parse and return the canonical JSON representation."""
+    def to_json(self, indent: int = 2, include_binary: bool = False) -> str:
+        """Parse and return the canonical JSON representation.
+
+        Args:
+            indent: JSON indentation level.
+            include_binary: When ``True``, correction arrays
+                (``correction_data``, ``inverse_correction_data``) and the
+                raw ``.fc3`` bytes (``raw_bytes``) are included in the output.
+                Defaults to ``False`` — the JSON contains only scalar/metadata
+                fields, keeping the output compact and human-readable.
+                The HDF5 file remains the source of truth for binary data;
+                use :meth:`get_correction_data` and
+                :meth:`get_scan_field_correction_bytes` to access it.
+        """
         config = self.parse()
-        return json.dumps(self._config_to_dict(config), indent=indent, default=str)
+        return json.dumps(
+            self._config_to_dict(config, include_binary=include_binary),
+            indent=indent,
+            default=str,
+        )
 
     # ------------------------------------------------------------------
     # Attribute-reading helpers (all static; all attribute access flows here)
@@ -575,7 +591,7 @@ class MachineConfigReader:
     # JSON serialisation helpers
     # ------------------------------------------------------------------
 
-    def _config_to_dict(self, config: MachineConfig) -> dict:
+    def _config_to_dict(self, config: MachineConfig, include_binary: bool = False) -> dict:
         result = {
             "meta": {
                 "schema_version": config.meta.schema_version,
@@ -605,13 +621,16 @@ class MachineConfigReader:
                 "gas_flow_direction": config.machine.gas_flow_direction,
                 "recoat_direction": config.machine.recoat_direction,
             },
-            "optical_trains": [self._train_to_dict(t) for t in config.optical_trains],
+            "optical_trains": [
+                self._train_to_dict(t, include_binary=include_binary)
+                for t in config.optical_trains
+            ],
         }
         if config.opcua is not None:
             result["opcua"] = self._opcua_to_dict(config.opcua)
         return result
 
-    def _train_to_dict(self, train: OpticalTrain) -> dict:
+    def _train_to_dict(self, train: OpticalTrain, include_binary: bool = False) -> dict:
         return {
             "train_id": train.train_id,
             "id": train.id,
@@ -647,9 +666,9 @@ class MachineConfigReader:
             "light_source": self._light_source_to_dict(train.light_source),
             "collimator": self._collimator_to_dict(train.collimator),
             "scanner_card": self._scanner_card_to_dict(train.scanner_card),
-            "clearbox": self._clearbox_to_dict(train.clearbox),
+            "clearbox": self._clearbox_to_dict(train.clearbox, include_binary=include_binary),
             "scan_field_correction_file": self._sfcf_to_dict(
-                train.scan_field_correction_file
+                train.scan_field_correction_file, include_binary=include_binary
             ),
         }
 
@@ -739,18 +758,18 @@ class MachineConfigReader:
             "sample_period_unit": sc.sample_period_unit,
         }
 
-    def _clearbox_to_dict(self, cb: Optional[ClearBox]) -> Optional[dict]:
+    def _clearbox_to_dict(
+        self, cb: Optional[ClearBox], include_binary: bool = False
+    ) -> Optional[dict]:
         if cb is None:
             return None
-        return {
+        d: dict = {
             "ip_address": cb.ip_address,
             "serial_number": cb.serial_number,
             "data_port": cb.data_port,
             "server_port": cb.server_port,
             "actual_timing_offset": cb.actual_timing_offset,
             "commanded_timing_offset": cb.commanded_timing_offset,
-            "correction_data": cb.correction_data,
-            "inverse_correction_data": cb.inverse_correction_data,
             "manufacturer": cb.manufacturer,
             "model": cb.model,
             "output_path": cb.output_path,
@@ -764,13 +783,19 @@ class MachineConfigReader:
             "correction_grid_domain_shape": cb.correction_grid_domain_shape,
             "inverse_grid_domain_shape": cb.inverse_grid_domain_shape,
         }
+        if include_binary:
+            d["correction_data"] = cb.correction_data
+            d["inverse_correction_data"] = cb.inverse_correction_data
+        return d
 
     def _sfcf_to_dict(
-        self, sfcf: Optional[ScanFieldCorrectionFile]
+        self,
+        sfcf: Optional[ScanFieldCorrectionFile],
+        include_binary: bool = False,
     ) -> Optional[dict]:
         if sfcf is None:
             return None
-        return {
+        d: dict = {
             "document_name": sfcf.document_name,
             "document_id": sfcf.document_id,
             "file_size": sfcf.file_size,
@@ -778,8 +803,14 @@ class MachineConfigReader:
             "document_created_at": sfcf.document_created_at,
             "document_type": sfcf.document_type,
             "original_uri": sfcf.original_uri,
-            "raw_bytes": base64.b64encode(sfcf.raw_bytes).decode("ascii") if sfcf.raw_bytes is not None else None,
         }
+        if include_binary:
+            d["raw_bytes"] = (
+                base64.b64encode(sfcf.raw_bytes).decode("ascii")
+                if sfcf.raw_bytes is not None
+                else None
+            )
+        return d
 
     def _opcua_to_dict(self, opcua: OpcuaConfig) -> dict:
         return {
