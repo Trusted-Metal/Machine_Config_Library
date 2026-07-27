@@ -1,0 +1,77 @@
+name: Python
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "python/**"
+      - "fixtures/**"
+      - ".github/workflows/python.yml"
+  pull_request:
+    paths:
+      - "python/**"
+      - "fixtures/**"
+      - ".github/workflows/python.yml"
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package and dependencies
+        run: pip install -e "python/[dev]"
+
+      - name: Verify golden file checksum
+        run: |
+          ACTUAL=$(sha256sum fixtures/reference_output.json | cut -d' ' -f1)
+          EXPECTED=$(tr -d '[:space:]' < fixtures/reference_output.sha256)
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "FAIL: reference_output.json checksum mismatch."
+            echo "  actual:   $ACTUAL"
+            echo "  expected: $EXPECTED"
+            echo "Regenerate with tools/generate_fixtures.py, review manually, then commit both."
+            exit 1
+          fi
+          echo "Golden file checksum OK: $ACTUAL"
+
+      - name: Run test suite
+        run: python -m pytest python/tests/ -v --tb=short
+
+      - name: Validate reference fixture (CLI)
+        run: machine-config validate fixtures/reference_config.h5
+
+      - name: Export reference fixture to JSON (CLI)
+        run: machine-config export-json fixtures/reference_config.h5 --output /tmp/reference_output_ci.json
+
+      - name: Confirm exported JSON matches golden file
+        run: |
+          python - <<'EOF'
+          import json, pathlib, sys
+          golden = json.loads(pathlib.Path("fixtures/reference_output.json").read_text())
+          ci_out = json.loads(pathlib.Path("/tmp/reference_output_ci.json").read_text())
+          if golden != ci_out:
+              import pprint
+              print("FAIL: CLI export does not match committed golden file.")
+              sys.exit(1)
+          print("CLI export matches golden file.")
+          EOF
+
+      - name: Upload exported JSON as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference_output_py${{ matrix.python-version }}
+          path: /tmp/reference_output_ci.json
+          retention-days: 14

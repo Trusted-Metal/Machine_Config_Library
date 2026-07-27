@@ -1,0 +1,35 @@
+// AUTO-GENERATED from schema/adapters/{{ name }}.yaml
+// DO NOT EDIT MANUALLY — regenerate with: python tools/generate_adapters.py
+import type { MachineConfig } from '../models';
+
+export const fromVersion = '{{ spec.from_version }}';
+export const toVersion   = '{{ spec.to_version }}';
+
+export function adapt(config: MachineConfig): MachineConfig {
+    {% for change in spec.changes %}
+    {% if change.type == 'field_add' %}
+    // field_add: {{ change.field }} (path: {{ change.path }})
+    for (const train of config.optical_trains) {
+        const t = train as Record<string, unknown>;
+        if (!Object.prototype.hasOwnProperty.call(t, '{{ change.field }}')) {
+            t['{{ change.field }}'] = null;
+        }
+    }
+    {% elif change.type == 'field_rename' %}
+    // field_rename: {{ change.old_field }} -> {{ change.new_field }} (path: {{ change.path }})
+    for (const train of config.optical_trains) {
+        const t = train as Record<string, unknown>;
+        if (Object.prototype.hasOwnProperty.call(t, '{{ change.old_field }}')) {
+            t['{{ change.new_field }}'] = t['{{ change.old_field }}'];
+            delete t['{{ change.old_field }}'];
+        }
+    }
+    {% elif change.type == 'field_remove' %}
+    // field_remove: {{ change.field }} dropped (path: {{ change.path }})
+    for (const train of config.optical_trains) {
+        delete (train as Record<string, unknown>)['{{ change.field }}'];
+    }
+    {% endif %}
+    {% endfor %}
+    return config;
+}
