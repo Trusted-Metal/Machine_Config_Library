@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -103,6 +104,12 @@ RUNNERS: dict[str, Callable[[Path], list[str]]] = {
     # "cpp":    lambda fix: [str(REPO / f"cpp/build/machine_config_cli{_EXT}"), "export-json", str(fix)],
 }
 
+# Binary paths for subcommands other than export-json (e.g. correction-hash).
+BINARIES: dict[str, Callable[[], str]] = {
+    "python": _python_cli,
+    "rust":   lambda: str(_rust_bin()),
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -115,12 +122,26 @@ WARN = "[WARN]"
 
 def _run(cmd: list[str]) -> dict:
     """Run a CLI command; return its stdout parsed as JSON. Raises on error."""
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+    # PYTHONUTF8=1 forces the subprocess's stdout to UTF-8 on Windows (default
+    # is the console code page, e.g. CP1252, which cannot encode μ, etc.).
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
     if r.returncode != 0:
         raise RuntimeError(
             f"{Path(cmd[0]).name} exited {r.returncode}\nstderr: {r.stderr.strip()}"
         )
     return json.loads(r.stdout)
+
+
+def _run_text(cmd: list[str]) -> str:
+    """Run a CLI command; return stripped stdout text. Raises on error."""
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"{Path(cmd[0]).name} exited {r.returncode}\nstderr: {r.stderr.strip()}"
+        )
+    return r.stdout.strip()
 
 
 def _diff(a: dict, b: dict) -> list[str]:
@@ -291,13 +312,120 @@ def phase_write_interop(langs: list[str], verbose: bool) -> bool:
     finally:
         rt_path.unlink(missing_ok=True)
 
+    # 3c — Rust writer roundtrip: reference → JSON → Rust write-hdf5 → Python + Rust read
+    # Validates that Rust-written HDF5 is readable by both languages (parity)
+    # and that the scalar fields survive the JSON → HDF5 → JSON roundtrip (fidelity).
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as jf:
+        json_tmp = Path(jf.name)
+    with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as hf:
+        rust_rt_path = Path(hf.name)
+    try:
+        ref_json = _run(RUNNERS["python"](FIXTURES["reference"]))
+        json_tmp.write_text(json.dumps(ref_json, ensure_ascii=False), encoding="utf-8")
+        r = subprocess.run(
+            [str(_rust_bin()), "write-hdf5", str(json_tmp), str(rust_rt_path)],
+            capture_output=True, text=True, encoding="utf-8",
+        )
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"write-hdf5 exited {r.returncode}\nstderr: {r.stderr.strip()}"
+            )
+        py_out   = _run(RUNNERS["python"](rust_rt_path))
+        rust_out = _run(RUNNERS["rust"](rust_rt_path))
+        # Check 1: Python and Rust agree on what the Rust-written file contains.
+        lang_diffs = _diff(py_out, rust_out)
+        if lang_diffs:
+            tag = "rust-writer roundtrip → python vs rust reading"
+            print(f"{FAIL} {tag}:")
+            for line in lang_diffs:
+                print(f"  {line}")
+            failures.append(tag)
+        else:
+            # Check 2: Scalar fields survive the roundtrip unchanged.
+            rt_diffs = _diff(ref_json, py_out)
+            if rt_diffs:
+                tag = "rust-writer roundtrip → fidelity"
+                print(f"{FAIL} {tag}:")
+                for line in rt_diffs:
+                    print(f"  {line}")
+                failures.append(tag)
+            elif verbose:
+                print(f"{PASS} rust-writer roundtrip (parity + fidelity)")
+    except Exception as exc:
+        print(f"{FAIL} rust-writer roundtrip: {exc}")
+        failures.append("rust-writer roundtrip")
+    finally:
+        json_tmp.unlink(missing_ok=True)
+        rust_rt_path.unlink(missing_ok=True)
+
     if not failures:
         print(f"{PASS} Write interoperability checks passed.")
     return not failures
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Phase 4 — Correction data hash parity
+# ---------------------------------------------------------------------------
+
+def _correction_hash_cmd(
+    lang: str, path: Path, train: int = 0, inverse: bool = False
+) -> list[str]:
+    """Build the correction-hash CLI invocation for the given language."""
+    cmd = [BINARIES[lang](), "correction-hash", str(path), "--train", str(train)]
+    if inverse:
+        cmd.append("--inverse")
+    return cmd
+
+
+def phase_correction_hash(langs: list[str], verbose: bool) -> bool:
+    """Python and Rust must produce identical SHA-256 hashes for correction grids.
+
+    Values are hashed as flat little-endian float64 bytes, so the digest is
+    independent of platform byte order and directly comparable across languages.
+    """
+    print("\n=== Phase 4: Correction Data Hashes ===")
+    if len(langs) < 2:
+        print(f"{SKIP} Need ≥2 languages for hash parity check.")
+        return True
+
+    ref_lang = langs[0]
+    failures: list[str] = []
+
+    for name, path in FIXTURES.items():
+        for inverse in [False, True]:
+            kind = "inverse_correction" if inverse else "correction"
+            hashes: dict[str, str] = {}
+            for lang in langs:
+                try:
+                    hashes[lang] = _run_text(
+                        _correction_hash_cmd(lang, path, inverse=inverse)
+                    )
+                except Exception as exc:
+                    tag = f"{lang}/{name}/{kind}"
+                    print(f"{FAIL} {tag}: {exc}")
+                    failures.append(tag)
+
+            if ref_lang not in hashes:
+                continue
+
+            for lang, h in hashes.items():
+                if lang == ref_lang:
+                    continue
+                tag = f"{ref_lang} vs {lang} / {name} {kind}"
+                if h != hashes[ref_lang]:
+                    print(f"{FAIL} {tag}:")
+                    print(f"  {ref_lang}: {hashes[ref_lang]}")
+                    print(f"  {lang}:   {h}")
+                    failures.append(tag)
+                elif verbose:
+                    print(f"{PASS} {tag}")
+
+    if not failures:
+        combos = len(langs) * (len(langs) - 1) // 2 * len(FIXTURES) * 2
+        print(f"{PASS} Correction data hashes match ({combos} comparisons).")
+    return not failures
+
+
 # ---------------------------------------------------------------------------
 
 def _parse_args() -> argparse.Namespace:
@@ -314,6 +442,21 @@ def _parse_args() -> argparse.Namespace:
         "--skip-write-interop",
         action="store_true",
         help="Skip Phase 3 (write interoperability).",
+    )
+    p.add_argument(
+        "--skip-schema",
+        action="store_true",
+        help="Skip Phase 1 (schema validation).",
+    )
+    p.add_argument(
+        "--skip-read-parity",
+        action="store_true",
+        help="Skip Phase 2 (read parity).",
+    )
+    p.add_argument(
+        "--skip-correction-hash",
+        action="store_true",
+        help="Skip Phase 4 (correction data hash parity).",
     )
     p.add_argument(
         "--verbose", "-v",
@@ -354,12 +497,15 @@ def main() -> None:
 
     schema = json.loads(SCHEMA_FILE.read_text())
 
-    results = [
-        phase_schema(reachable, schema, args.verbose),
-        phase_read_parity(reachable, args.verbose),
-    ]
+    results = []
+    if not args.skip_schema:
+        results.append(phase_schema(reachable, schema, args.verbose))
+    if not args.skip_read_parity:
+        results.append(phase_read_parity(reachable, args.verbose))
     if not args.skip_write_interop:
         results.append(phase_write_interop(reachable, args.verbose))
+    if not args.skip_correction_hash:
+        results.append(phase_correction_hash(reachable, args.verbose))
 
     print()
     if all(results):

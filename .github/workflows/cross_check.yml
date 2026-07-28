@@ -30,8 +30,12 @@ on:
 
 jobs:
   cross_check:
-    name: Cross-Language Check (Python ↔ Rust)
-    runs-on: ubuntu-latest
+    name: Cross-Language Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -67,22 +71,47 @@ jobs:
       # Cross-check
       # -----------------------------------------------------------------------
       - name: Phase 1 — Schema validation
-        run: python tools/cross_check.py --langs python,rust --skip-write-interop --verbose
+        run: python tools/cross_check.py --langs python,rust --skip-read-parity --skip-write-interop --verbose
 
       - name: Phase 2 — Read parity (all fixtures)
-        run: python tools/cross_check.py --langs python,rust --skip-write-interop --verbose
+        run: python tools/cross_check.py --langs python,rust --skip-schema --skip-write-interop --verbose
 
       - name: Phase 3 — Write interoperability
-        run: python tools/cross_check.py --langs python,rust --verbose
+        run: python tools/cross_check.py --langs python,rust --skip-schema --skip-read-parity --verbose
+
+      - name: Phase 4 — Correction data hash parity
+        run: python tools/cross_check.py --langs python,rust --skip-schema --skip-read-parity --skip-write-interop --verbose
 
       # Upload both outputs so developers can diff them manually if a check fails.
       - name: Export Python JSON artifact
         if: always()
+        shell: bash
         run: machine-config export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/python_output.json"
 
-      - name: Export Rust JSON artifact
+      # Download the Rust JSON that rust.yml already produced on the Linux
+      # runner rather than re-exporting; guarantees cross-check sees the same
+      # bytes that the rust.yml platform-parity job verified.
+      - name: Download Rust JSON artifact
         if: always()
-        run: rust/target/release/machine-config-cli export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output_xcheck.json"
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-output-ubuntu-latest
+          path: ${{ runner.temp }}/rust-artifact
+        continue-on-error: true
+
+      - name: Fall back to local Rust export if artifact unavailable
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/rust-artifact/rust_output.json" ]; then
+            cp "$RUNNER_TEMP/rust-artifact/rust_output.json" "$RUNNER_TEMP/rust_output_xcheck.json"
+            echo "Using pre-built artifact from rust.yml"
+          else
+            bin="rust/target/release/machine-config-cli"
+            [[ "$RUNNER_OS" == "Windows" ]] && bin="${bin}.exe"
+            "${bin}" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output_xcheck.json"
+            echo "Artifact unavailable (parallel run?); used local build"
+          fi
 
       - name: Upload language outputs for manual inspection
         if: always()
