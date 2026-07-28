@@ -338,19 +338,31 @@ impl MachineConfigReader {
     }
 
     /// Returns the `(257, 257, 2)` float64 correction grid for optical train
-    /// `train_index` (0-indexed).
-    pub fn get_correction_data(&self, train_index: usize) -> Result<Array3<f64>> {
+    /// `train_index` (0-indexed) as a version-agnostic [`CorrectionData`].
+    ///
+    /// Data is row-major; NaN cells (outside the scan-field boundary) are
+    /// preserved as IEEE 754 NaN. See [`CorrectionData`] for indexing details
+    /// and instructions on reconstructing an `ndarray::Array3` if needed.
+    pub fn get_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
         let f = H5File::open(&self.path)?;
         let path = format!("{}/Correction_Data", Self::clearbox_path(train_index));
-        Ok(f.dataset(&path)?.read::<f64, ndarray::Ix3>()?)
+        let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
+        let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
+        Ok(CorrectionData { data: arr.into_raw_vec(), shape })
     }
 
-    /// Returns the `(257, 257, 2)` float64 inverse correction grid for
-    /// optical train `train_index` (0-indexed).
-    pub fn get_inverse_correction_data(&self, train_index: usize) -> Result<Array3<f64>> {
+    /// Returns the `(257, 257, 2)` float64 *inverse* correction grid for
+    /// optical train `train_index` (0-indexed) as a version-agnostic
+    /// [`CorrectionData`].
+    ///
+    /// Data is row-major; NaN cells are preserved as IEEE 754 NaN.
+    /// See [`CorrectionData`] for indexing details.
+    pub fn get_inverse_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
         let f = H5File::open(&self.path)?;
         let path = format!("{}/Inverse_Correction_Data", Self::clearbox_path(train_index));
-        Ok(f.dataset(&path)?.read::<f64, ndarray::Ix3>()?)
+        let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
+        let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
+        Ok(CorrectionData { data: arr.into_raw_vec(), shape })
     }
 
     /// Returns the raw `.fc3` bytes embedded as a `uint8` dataset for optical
@@ -846,10 +858,10 @@ mod tests {
     #[test]
     fn get_correction_data_shape_and_nan_present() {
         let reader = MachineConfigReader::open(REFERENCE).unwrap();
-        let data = reader.get_correction_data(0).unwrap();
-        assert_eq!(data.shape(), &[257, 257, 2]);
+        let cd = reader.get_correction_data(0).unwrap();
+        assert_eq!(cd.shape, [257, 257, 2]);
         // Out-of-field corners of a real correction grid are NaN.
-        assert!(data.iter().any(|v| v.is_nan()));
+        assert!(cd.data.iter().any(|v| v.is_nan()));
     }
 
     #[test]

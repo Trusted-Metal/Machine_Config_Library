@@ -17,6 +17,45 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+/// Raw correction grid read directly from a ClearBox HDF5 dataset.
+///
+/// Values are stored in **row-major (C-order)** layout — the same memory order
+/// used by HDF5 and NumPy. Given a shape `[d0, d1, d2]`, the element at
+/// `(i, j, k)` lives at index `i * d1 * d2 + j * d2 + k`.
+///
+/// For an AconityMIDI machine the shape is `[257, 257, 2]`: 257 × 257 spatial
+/// positions with an X-correction and a Y-correction value at each position.
+/// Cells outside the scan-field boundary are encoded as IEEE 754 NaN.
+///
+/// # Why not `ndarray::Array3<f64>`?
+///
+/// Returning `Array3` in the public API would expose `ndarray` as an implicit
+/// version constraint on every downstream crate. By returning a plain-`std`
+/// type instead, this library stays version-agnostic: consumers may use any
+/// `ndarray` release they like and reconstruct the array with a single call:
+///
+/// ```rust,ignore
+/// let arr = ndarray::Array3::from_shape_vec(cd.shape, cd.data)
+///     .expect("shape is always consistent");
+/// ```
+///
+/// # Accessing elements without ndarray
+///
+/// ```rust,ignore
+/// // value at (i, j, k)
+/// let [_, d1, d2] = cd.shape;
+/// let val = cd.data[i * d1 * d2 + j * d2 + k];
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorrectionData {
+    /// Flat, row-major buffer of `f64` values.
+    /// `data.len() == shape[0] * shape[1] * shape[2]` is always true.
+    /// NaN values represent out-of-field cells.
+    pub data: Vec<f64>,
+    /// Array dimensions as `[d0, d1, d2]`, e.g. `[257, 257, 2]`.
+    pub shape: [usize; 3],
+}
+
 /// Arbitrary, non-schema HDF5 attributes preserved verbatim.
 /// `IndexMap` (not `HashMap`) to preserve HDF5 attribute enumeration order,
 /// matching Python's `dict` insertion-order semantics for JSON parity.

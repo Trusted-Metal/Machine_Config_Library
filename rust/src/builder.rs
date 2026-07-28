@@ -340,19 +340,20 @@ mod tests {
     fn builder_correction_grid_shape() {
         let tmp = tempfile();
         MockConfigBuilder::new(1).save(&tmp).unwrap();
-        let arr = MachineConfigReader::open(&tmp).unwrap().get_correction_data(0).unwrap();
-        assert_eq!(arr.shape(), &[257, 257, 2]);
+        let cd = MachineConfigReader::open(&tmp).unwrap().get_correction_data(0).unwrap();
+        assert_eq!(cd.shape, [257, 257, 2]);
     }
 
     #[test]
     fn builder_correction_grid_nonzero() {
         let tmp = tempfile();
         MockConfigBuilder::new(1).save(&tmp).unwrap();
-        let arr = MachineConfigReader::open(&tmp).unwrap().get_correction_data(0).unwrap();
-        // Centre cell must be the Gaussian peak (warp ≈ 2.0 for r=0)
-        let centre = arr[[128, 128, 0]];
+        let cd = MachineConfigReader::open(&tmp).unwrap().get_correction_data(0).unwrap();
+        // Centre cell (128, 128, 0) must be the Gaussian peak (warp ≈ 2.0 for r=0).
+        // Row-major index: i * d1 * d2 + j * d2 + k  where shape = [257, 257, 2].
+        let centre = cd.data[128 * 257 * 2 + 128 * 2];
         assert!(centre > 1.9 && centre < 2.1, "centre={centre}");
-        assert!(arr.iter().any(|v| v.abs() > 0.0), "all zeros");
+        assert!(cd.data.iter().any(|v| v.abs() > 0.0), "all zeros");
     }
 
     #[test]

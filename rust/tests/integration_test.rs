@@ -83,15 +83,15 @@ fn test_meta_extra_preserved() {
 #[test]
 fn test_correction_data_shape() {
     let reader = MachineConfigReader::open(FIXTURE).unwrap();
-    let data = reader.get_correction_data(0).unwrap();
-    assert_eq!(data.shape(), &[257, 257, 2]);
+    let cd = reader.get_correction_data(0).unwrap();
+    assert_eq!(cd.shape, [257, 257, 2]);
 }
 
 #[test]
 fn test_correction_data_is_nonzero() {
     let reader = MachineConfigReader::open(FIXTURE).unwrap();
-    let data = reader.get_correction_data(0).unwrap();
-    assert!(data.iter().any(|&v| v != 0.0_f64));
+    let cd = reader.get_correction_data(0).unwrap();
+    assert!(cd.data.iter().any(|&v| v != 0.0_f64));
 }
 
 #[test]
@@ -172,12 +172,13 @@ fn test_writer_roundtrip_scalars() {
 
 #[test]
 fn test_writer_roundtrip_correction_data_checksum() {
+    use machine_config::models::CorrectionData;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    fn arr_hash(arr: &ndarray::Array3<f64>) -> u64 {
+    fn cd_hash(cd: &CorrectionData) -> u64 {
         let mut h = DefaultHasher::new();
-        for v in arr.iter() {
+        for v in &cd.data {
             v.to_bits().hash(&mut h);
         }
         h.finish()
@@ -194,8 +195,8 @@ fn test_writer_roundtrip_correction_data_checksum() {
         .get_correction_data(0)
         .unwrap();
     assert_eq!(
-        arr_hash(&original),
-        arr_hash(&roundtripped),
+        cd_hash(&original),
+        cd_hash(&roundtripped),
         "Correction data hash changed across write roundtrip"
     );
 }

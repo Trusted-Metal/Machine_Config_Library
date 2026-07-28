@@ -603,12 +603,13 @@ mod tests {
 
     #[test]
     fn roundtrip_correction_data_sha256() {
+        use crate::models::CorrectionData;
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        fn arr_hash(arr: &ndarray::Array3<f64>) -> u64 {
+        fn cd_hash(cd: &CorrectionData) -> u64 {
             let mut h = DefaultHasher::new();
-            for v in arr.iter() {
+            for v in &cd.data {
                 v.to_bits().hash(&mut h);
             }
             h.finish()
@@ -626,13 +627,13 @@ mod tests {
         let rt_inv = rt_reader.get_inverse_correction_data(0).unwrap();
 
         assert_eq!(
-            arr_hash(&original_corr),
-            arr_hash(&rt_corr),
+            cd_hash(&original_corr),
+            cd_hash(&rt_corr),
             "Correction_Data hash changed across write roundtrip"
         );
         assert_eq!(
-            arr_hash(&original_inv),
-            arr_hash(&rt_inv),
+            cd_hash(&original_inv),
+            cd_hash(&rt_inv),
             "Inverse_Correction_Data hash changed across write roundtrip"
         );
     }
