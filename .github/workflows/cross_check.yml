@@ -36,6 +36,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONUTF8: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -88,36 +90,19 @@ jobs:
         shell: bash
         run: machine-config export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/python_output.json"
 
-      # Download the Rust JSON that rust.yml already produced on the Linux
-      # runner rather than re-exporting; guarantees cross-check sees the same
-      # bytes that the rust.yml platform-parity job verified.
-      - name: Download Rust JSON artifact
-        if: always()
-        uses: actions/download-artifact@v4
-        with:
-          name: rust-output-ubuntu-latest
-          path: ${{ runner.temp }}/rust-artifact
-        continue-on-error: true
-
-      - name: Fall back to local Rust export if artifact unavailable
+      - name: Export Rust JSON artifact
         if: always()
         shell: bash
         run: |
-          if [ -f "$RUNNER_TEMP/rust-artifact/rust_output.json" ]; then
-            cp "$RUNNER_TEMP/rust-artifact/rust_output.json" "$RUNNER_TEMP/rust_output_xcheck.json"
-            echo "Using pre-built artifact from rust.yml"
-          else
-            bin="rust/target/release/machine-config-cli"
-            [[ "$RUNNER_OS" == "Windows" ]] && bin="${bin}.exe"
-            "${bin}" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output_xcheck.json"
-            echo "Artifact unavailable (parallel run?); used local build"
-          fi
+          bin="rust/target/release/machine-config-cli"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="${bin}.exe"
+          "${bin}" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output_xcheck.json"
 
       - name: Upload language outputs for manual inspection
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cross-check-outputs
+          name: cross-check-outputs-${{ matrix.os }}
           path: |
             ${{ runner.temp }}/python_output.json
             ${{ runner.temp }}/rust_output_xcheck.json
