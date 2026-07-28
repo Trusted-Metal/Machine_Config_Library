@@ -1,0 +1,68 @@
+name: Rust
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "rust/**"
+      - "fixtures/**"
+      - "schema/**"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "rust/**"
+      - "fixtures/**"
+      - "schema/**"
+      - ".github/workflows/rust.yml"
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No apt-get for libhdf5 — hdf5-metno compiles libhdf5 from source
+      # via the `static` feature.  First cold run takes ~2-3 min; subsequent
+      # runs use the Swatinem cache below.
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Run unit and integration tests
+        run: cargo test
+        working-directory: rust
+
+      - name: Build release binary
+        run: cargo build --release
+        working-directory: rust
+
+      # Export the reference fixture to JSON and upload as an artifact.
+      # The cross_check workflow consumes this to verify parity with other
+      # language implementations.  Only uploaded from the Linux runner to
+      # avoid duplicate artifacts; the Windows runner still builds and tests.
+      - name: Smoke-test CLI and export reference fixture
+        shell: bash
+        run: |
+          bin="./target/release/machine-config-cli"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="${bin}.exe"
+          "${bin}" export-json ../fixtures/reference_config.h5 > /tmp/rust_output.json
+          echo "Exported $(wc -c < /tmp/rust_output.json) bytes"
+        working-directory: rust
+
+      - name: Upload JSON artefact
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-output
+          path: /tmp/rust_output.json
+          retention-days: 14

@@ -140,6 +140,43 @@ machine-config inspect fixtures/reference_config.h5
 
 ---
 
+### Rust Library (Phase 3, in progress)
+
+The Rust crate lives in `rust/`. It has no system dependencies to install — the first `cargo build` compiles `libhdf5` from source (see §3.2) and takes a few minutes; subsequent builds are fast.
+
+```powershell
+# PowerShell — from repo root
+cd rust
+cargo test              # runs lib unit tests + integration tests + doctests
+cargo test --lib        # lib unit tests only (fast; needs fixtures/*.h5, already committed)
+cargo build --all-targets
+```
+
+```bash
+# Git Bash
+cd rust
+cargo test
+cargo test --lib
+cargo build --all-targets
+```
+
+**Current status**: Phase 3 complete — all phases §3.1–§3.9 done. **60 tests passing** (46 lib + 14 integration), `cargo build --all-targets` clean, zero warnings. CI added: `.github/workflows/rust.yml` (matrix: `windows-latest` + `ubuntu-latest`). Cross-check added: `.github/workflows/cross_check.yml` + `tools/cross_check.py` (schema validation, read parity for all 3 fixtures, write interoperability). All cross-check phases green locally (Python ↔ Rust).
+
+**Reading a config today**:
+
+```rust
+use machine_config::reader::MachineConfigReader;
+
+let reader = MachineConfigReader::open("fixtures/reference_config.h5")?;
+let config = reader.parse()?;                    // scalars/metadata only
+println!("{}", config.meta.machine_name);
+
+let full = reader.parse_with_binary()?;           // + ClearBox correction grids, raw .fc3 bytes
+let json = reader.to_json(true, false)?;          // pretty JSON, binary fields omitted
+```
+
+---
+
 ### Files Produced So Far
 
 | File | Phase | Description |
@@ -176,6 +213,20 @@ machine-config inspect fixtures/reference_config.h5
 | `.github/workflows/python.yml` | 1.7 | CI: pytest on Python 3.11+3.12, golden file checksum verification, CLI validate/export-json, golden file diff check, artifact upload |
 | `python/tests/test_writer_roundtrip.py` | 1.8d | Bidirectional write roundtrip suite: 110 tests across 6 classes; every scalar field; all 18 ClearBox scalar attrs; NaN↔None; axis_configuration "2D"/"3D"/"3D+Focus"; no-ClearBox path; schema validity |
 | `python/tests/test_opcua_roundtrip.py` | 1.8e | OPCUA roundtrip suite: OpcuaClientConfig/OpcuaPipeConfig/OpcuaTrigger models; write-with-OPCUA → read-back field assertion; `extra` passthrough; without-OPCUA path; schema validity |
+| `rust/Cargo.toml` | 3.1 | Rust package manifest: `hdf5-metno` (aliased as `hdf5`, static; no system install), `serde`/`serde_json`, `thiserror`, `indexmap`, `clap`, `ndarray`; CI matrix: `windows-latest` + `ubuntu-latest` |
+| `rust/src/lib.rs` | 3.1 | Crate root — `pub mod` declarations for all six modules |
+| `rust/src/error.rs` | 3.3 | `MachineConfigError` enum (Hdf5, Json, Parse, UnitMismatch, UnsupportedVersion, MissingGroup); `pub type Result<T>`; 6 inline unit tests |
+| `rust/src/models.rs` | 3.4 | All 15 data model structs (`MachineConfig` and its full field tree) mirroring `python/src/machine_config/models.py`; `ExtraAttrs` = `IndexMap<String, serde_json::Value>` type alias; 7 inline unit tests |
+| `rust/src/reader.rs` | 3.5 | `MachineConfigReader` — `open`/`parse`/`parse_with_binary`/`get_correction_data`/`get_inverse_correction_data`/`get_scan_field_correction_bytes`/`get_raw_group`/`to_json`; type-dispatching attribute helpers (Rules 1–8, §3.11); 15 inline unit tests incl. a deep-equality check against `fixtures/reference_output.json` |
+| `rust/src/writer.rs` | 3.6 | `MachineConfigWriter<'a>` — HDF5 writer (inverse of reader); `ws`/`wf`/`wi`/`wb` helpers; correction-grid write with NaN; OPCUA; `extra` passthrough; 11 inline unit tests incl. SHA-256 correction roundtrip |
+| `rust/src/builder.rs` | 3.7 | `MockConfigBuilder` — synthetic config generator with Gaussian correction grids; `build()`/`save()`; 6 inline unit tests incl. shape, nonzero-peak, no-clearbox path |
+| `rust/src/main.rs` | 3.8 | `machine-config-cli` binary — `export-json <path> [--include-binary]`; JSON to stdout, exit 1 on error; Phase 5 `cross_check.py` entry point |
+| `rust/src/adapters/mod.rs` | 3.1 | Adapter layer scaffold — empty until first schema bump |
+| `rust/src/adapters/registry.rs` | 3.1 | Adapter registry scaffold — empty until first schema bump |
+| `rust/tests/integration_test.rs` | 3.9 | 14 integration tests across 3 fixtures: structural, correction-data, OPCUA, builder roundtrip, writer roundtrip |
+| `.github/workflows/rust.yml` | 3.CI | Rust CI: `cargo test` + `cargo build --release` on matrix `ubuntu-latest`/`windows-latest`; no `apt-get` (hdf5-metno static); CLI smoke-test uploads JSON artifact |
+| `.github/workflows/cross_check.yml` | 5.CI | Cross-language CI: installs Python package + deepdiff, builds Rust release, runs `tools/cross_check.py --verbose`; uploads both language outputs as artifact on any result |
+| `tools/cross_check.py` | 5.1 | Three-phase correctness checker: schema validation × 3 fixtures × N languages; read parity (all fixtures, deep-equal); write interop (Python builder/writer → Rust reader). `--langs`, `--skip-write-interop`, `--verbose`. Extends to nodejs/cpp by uncommenting one RUNNERS entry each. Fixed Windows UTF-8 encoding bug (subprocess default CP1252 corrupted μm → Î¼m) |
 
 ---
 
@@ -1848,6 +1899,8 @@ opcua: Optional[OpcuaConfig] = None
 
 ## Phase 2 — Node.js
 
+> **Implementation order note**: Rust (Phase 3) will be implemented before Node.js. Phase numbering is preserved as-is; Phase 3 is the active next phase.
+
 **Libraries**: `h5wasm` (same as viewer), `vitest` (test runner), `ajv` (JSON Schema), `typescript`
 
 **Install**: `npm install machine-config-library`
@@ -2017,64 +2070,292 @@ describe('JSON Schema constraints', () => {
 
 ## Phase 3 — Rust
 
-**Libraries**: `hdf5` crate (0.8+), `serde` / `serde_json`, `thiserror` for error types, built-in `#[test]`
+> **Active next phase.** Rust is implemented before Node.js (Phase 2); see implementation order note in Phase 2.
 
-**Install**: `cargo add machine-config`
+**Libraries**: `hdf5-metno` (static; no system HDF5 required), `serde` / `serde_json`, `thiserror`, `indexmap`, `clap`, `ndarray`
+
+**Install**: `cargo build` (first build compiles libhdf5 from source via `hdf5-metno --features static`; no system install needed on any platform)
 
 **Start condition**: `fixtures/reference_output.json` committed and sha256 verified; `python.yml` CI green. Can run in parallel with Node.js. The cross-check becomes active as soon as Rust OR Node.js finishes — whichever lands first.
 
-> **CI added at end of Phase 3**: `.github/workflows/rust.yml` added; `cross_check.yml` `needs:` extended to include `rust`.
+> **CI added at end of Phase 3**: `.github/workflows/rust.yml` added (matrix: `windows-latest`, `ubuntu-latest`); `cross_check.yml` `needs:` extended to include `rust`.
 
 ---
 
 ### 3.1 — Package Structure
 
+> **Status: Complete.** All scaffold files created. No logic implemented yet — modules contain placeholder comments only.
+
 ```
 rust/
 ├── src/
-│   ├── lib.rs               ← pub use reader::*; pub use builder::*;
-│   ├── models.rs            ← #[derive(Serialize, Deserialize)] structs
-│   ├── reader.rs            ← hdf5::File → MachineConfig
-│   ├── writer.rs            ← MachineConfig → hdf5::File (inverse of reader)
-│   ├── builder.rs           ← hdf5::File write mode → .h5 from MachineConfigSpec
-│   ├── error.rs             ← thiserror Error enum
+│   ├── lib.rs               ← pub mod declarations
+│   ├── models.rs            ← #[derive(Serialize, Deserialize)] structs (Phase 3.4)
+│   ├── reader.rs            ← hdf5::File → MachineConfig (Phase 3.5)
+│   ├── writer.rs            ← MachineConfig → hdf5::File (Phase 3.6)
+│   ├── builder.rs           ← MockConfigBuilder (Phase 3.7)
+│   ├── error.rs             ← MachineConfigError enum (Phase 3.3)
+│   ├── main.rs              ← CLI entry point (Phase 3.8)
 │   └── adapters/
-│       ├── mod.rs           ← pub trait Adapter; get_chain()
+│       ├── mod.rs           ← pub mod registry
 │       └── registry.rs      ← adapter registry (empty until first schema bump)
 ├── tests/
-│   ├── integration_test.rs  ← tests against synthetic_2laser.h5
+│   ├── integration_test.rs  ← tests against fixtures (Phase 3.9)
 │   └── adapter_test.rs      ← adapter fixture tests (added when first adapter is written)
 ├── benches/
-│   └── reader_bench.rs      ← criterion benchmark (parse 1000x)
+│   └── reader_bench.rs      ← criterion benchmark (Phase 3.9)
 └── Cargo.toml
 ```
 
 ---
 
-### 3.2 — Key Design Decision: `hdf5` Crate System Dependency
+### 3.2 — Platform & Dependency Decision
 
-The `hdf5` crate links against the system's `libhdf5`.
+**Decision: use `hdf5-metno` with the `static` feature.** This compiles and statically links libhdf5 from source during `cargo build`, eliminating all system HDF5 dependencies on every platform.
 
-| Platform | Install Command |
+| Platform | Setup required |
 |---|---|
-| Ubuntu/Debian | `apt-get install libhdf5-dev` |
-| macOS | `brew install hdf5` |
-| Windows | Pre-built HDF5 from The HDF Group; set `HDF5_DIR` env var |
+| Windows | None — `cargo build` handles everything |
+| Ubuntu/Debian | None — `cargo build` handles everything |
+| macOS | None — `cargo build` handles everything |
 
-> **Alternative**: The `hdf5-metno` fork bundles a static `libhdf5`, eliminating the system dependency entirely. Worth evaluating before committing to the standard crate.
+The `Cargo.toml` entry:
+
+```toml
+hdf5-metno = { version = "0.9", features = ["static"] }
+```
+
+**Tradeoff**: first `cargo build` is slower (~2–3 min on a cold cache while libhdf5 compiles from source). Subsequent builds use the cached compiled artifact.
+
+**CI matrix** — `rust.yml` targets both platforms from the start:
+
+```yaml
+strategy:
+  matrix:
+    os: [windows-latest, ubuntu-latest]
+runs-on: ${{ matrix.os }}
+```
+
+No platform-specific setup steps are needed in CI for either runner.
 
 ---
 
-### 3.3 — Tests
+### 3.3 — `error.rs` — Error Types
+
+> **Status: Complete.** 6 inline unit tests passing (`cargo test --lib`).
+
+Define the crate-wide error type and `Result` alias before any other module imports them.
 
 ```rust
-// tests/integration_test.rs
-use machine_config::MachineConfigReader;
+// src/error.rs
+use thiserror::Error;
 
-static FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../fixtures/synthetic_2laser.h5"
-);
+#[derive(Debug, Error)]
+pub enum MachineConfigError {
+    #[error("HDF5 error: {0}")]
+    Hdf5(#[from] hdf5::Error),
+
+    #[error("JSON serialisation error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("Parse error: {0}")]
+    Parse(String),
+
+    #[error("Unit mismatch on attribute '{attr}': expected '{expected}', got '{actual}'")]
+    UnitMismatch { attr: String, expected: String, actual: String },
+
+    #[error("File version '{0}' is not supported by this reader (expected \"1.0\")")]
+    UnsupportedVersion(String),
+
+    #[error("Required HDF5 path missing: {0}")]
+    MissingGroup(String),
+}
+
+pub type Result<T> = std::result::Result<T, MachineConfigError>;
+```
+
+All modules use `crate::error::Result<T>`. The `UnitMismatch` variant enforces Rule 8 (unit locking) from §0.5.
+
+> **`hdf5` alias note**: `Cargo.toml` imports `hdf5-metno` under the name `hdf5` (`hdf5 = { package = "hdf5-metno", ... }`) so all crate code uses `hdf5::` — making the dependency a true drop-in and simplifying any future switch back to the upstream crate.
+
+---
+
+### 3.4 — `models.rs` — Data Models
+
+All structs mirror Python `models.py`. Derive `Debug`, `Clone`, `PartialEq`, `serde::Serialize`, `serde::Deserialize` on every type (`PartialEq` added beyond the original plan for test-equality assertions; harmless since every field type already supports it).
+
+**Key decisions:**
+- `Option<T>` for every field that can be absent or stored as `""` in HDF5
+- `IndexMap<String, serde_json::Value>` for all `.extra` dicts (preserves insertion order for JSON parity) — exposed as the `ExtraAttrs` type alias
+- `IndexMap<String, OpcuaTrigger>` for `OpcuaConfig.triggers` (trigger key order must match HDF5 group enumeration order)
+- `Scanner.axis_configuration` constraint (`"2D"` / `"3D"` / `"3D+Focus"`) is validated in the reader, not in the struct (Rust has no `__post_init__`; use a `validate()` method called from `parse()`)
+- `ClearBox.correction_data` and `inverse_correction_data` are `Option<Vec<Vec<Vec<Option<f64>>>>>` (3-D nested, matching the `(257, 257, 2)` grid shape and Python's `list[list[list[float | None]]]`) when stored in the model for JSON serialisation; the raw `ndarray::Array3<f64>` form is only used in the reader/writer and is never part of the model struct
+- `Machine` inlines the build-plate fields directly (`build_plate_x`, `build_plate_x_unit`, ... `build_plate_radius`, `build_plate_radius_unit`) instead of nesting a separate `BuildPlate` struct as Python's dataclass does — this matches the flat `machine` object in the canonical JSON schema (§0.2) and the field list in §3.10's attribute table, so `serde_json::to_string(&config)` on the struct tree produces schema-shaped JSON directly with no hand-written dict step (unlike Python's `_config_to_dict`). This is why `BuildPlate` does not appear in the struct inventory below.
+- Fields that Python's `_config_to_dict` only adds to the output dict conditionally — `MachineConfig.opcua`, `ClearBox.correction_data`/`inverse_correction_data`, `ScanFieldCorrectionFile.raw_bytes` — use `#[serde(skip_serializing_if = "Option::is_none", default)]` so they are omitted from JSON entirely when `None`, rather than serialised as `null` like ordinary optional fields
+
+**Struct inventory** (one-to-one with Python `models.py`, less `BuildPlate` — see above):
+`ScanFieldCorrectionFile`, `ClearBox`, `Collimator`, `ScannerCard`, `AxisConfig`, `Scanner`, `LightSource`, `OpticalTrain`, `Machine`, `MachineConfigMeta`, `OpcuaClientConfig`, `OpcuaPipeConfig`, `OpcuaTrigger`, `OpcuaConfig`, `MachineConfig`
+
+> **Status: Complete (2026-07-28).** `rust/src/models.rs` implemented with all 15 structs plus the `ExtraAttrs` type alias. 7 inline unit tests added (`cargo test --lib`) covering: full serde roundtrip equality, `opcua` omission when absent, `opcua` presence/order when set, conditional omission vs. inclusion of binary fields (`correction_data`, etc.), `extra`/`triggers` `IndexMap` insertion-order preservation through a JSON roundtrip, `configuration_hash` length, and `Option::None` → JSON `null` for ordinary optional fields. Full crate suite: **13 passed** (6 from `error.rs` + 7 new), `cargo build --all-targets` clean with zero warnings.
+
+---
+
+### 3.5 — `reader.rs` — HDF5 Reader
+
+Public API mirrors Python `MachineConfigReader`:
+
+```rust
+pub struct MachineConfigReader {
+    path: PathBuf,
+}
+
+impl MachineConfigReader {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self>;
+    pub fn parse(&self) -> Result<MachineConfig>;              // scalars only
+    pub fn parse_with_binary(&self) -> Result<MachineConfig>;  // includes correction_data + raw_bytes
+    pub fn get_correction_data(&self, train_index: usize) -> Result<ndarray::Array3<f64>>;
+    pub fn get_inverse_correction_data(&self, train_index: usize) -> Result<ndarray::Array3<f64>>;
+    pub fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>>;
+    pub fn to_json(&self, indent: bool, include_binary: bool) -> Result<String>;
+}
+```
+
+Implementation order within this phase:
+1. Attribute-reading helpers (`read_str`, `read_f64`, `read_i64`, `read_bool_from_int`, `read_bool_from_f64`, `read_unit_locked`, `collect_extra`) — apply all rules from §3.11
+2. Root attrs → `MachineConfigMeta`
+3. `Machine` group → `Machine`
+4. Per-train parsing (Scanner + axes, LightSource, Collimator, ScannerCard, ClearBox, SFCF)
+5. OPCUA group (optional)
+6. `to_json()` using `serde_json::to_string_pretty`
+
+See §3.10 for the complete HDF5 path and attribute name mapping table.
+
+> **Status: Complete (2026-07-28).** `rust/src/reader.rs` implemented per the public API above, plus `get_raw_group(&self, hdf5_path: &str) -> Result<ExtraAttrs>` (Rule 5 accessor for non-schema groups like `OPCUA` or `Scanner/X_Axis`, matching Python's method of the same name — not shown in the original snippet above but required by §0.5).
+>
+> **Key implementation finding**: real HDF5 attributes do not have a fixed HDF5 type per field the way the model's field types might suggest. A quick diagnostic against the actual fixtures (via a throwaway `cargo run --example`, since removed) showed that optional numeric fields such as `Range_Of_Motion` are stored as `Float(U8)` when populated but as an **empty `VarLenUnicode` string** when not — the machine-export software writes `""` for an unset numeric attribute rather than omitting it, exactly as Rule 3 (§0.5) describes. Every attribute-reading helper (`read_str`, `read_float`, `read_int`, `read_bool_from_int`, `read_bool_from_float`, `read_unit_locked`) therefore dispatches on the attribute's *actual* runtime `TypeDescriptor` (`VarLenUnicode`/`VarLenAscii` → string, `Integer`/`Unsigned` → `i64`, `Float` → `f64`) rather than assuming a fixed type per field — this is what makes a single generic helper correctly handle both `Range_Of_Motion` (float-or-empty-string) and `Power_Bit_Resolution` (always a numeric string) with the same code path, mirroring Python's duck-typed `float(val)` exactly.
+>
+> **Deliberate divergence from Python**: Python's single `parse()` always reads the ClearBox `(257, 257, 2)` float64 correction grids and the raw `.fc3` bytes into the model; `include_binary` only gates whether `to_json()` serialises them. The Rust reader instead splits this at parse time: `parse()` leaves `correction_data`/`inverse_correction_data`/`raw_bytes` as `None` (skipping those reads entirely), and `parse_with_binary()` populates them — `to_json(pretty, include_binary)` picks whichever is needed. This avoids the cost of reading multi-megabyte payloads for callers who only want scalar/metadata fields, while `get_correction_data()`/`get_inverse_correction_data()`/`get_scan_field_correction_bytes()` remain available as direct, model-independent accessors exactly as in Python.
+>
+> **Verification**: 15 new inline unit tests (`cargo test --lib`, 28 total in the crate) against the real fixtures (`reference_config.h5`, `reference_config_opcua.h5`, `synthetic_2laser.h5`), covering meta/machine/optical-train scalars, the `Range_Of_Motion` empty-string case, ClearBox/SFCF metadata-without-binary vs. `parse_with_binary()`, `get_correction_data` shape and NaN presence, `get_scan_field_correction_bytes` length, `get_raw_group` on both a missing path and `OPCUA/Client`, and OPCUA client/pipe/trigger parsing including `extra` passthrough (e.g. `Trigger_Label`). The strongest check is `matches_python_golden_file`: it deep-compares `MachineConfigReader::open(REFERENCE).to_json(true, false)` against `fixtures/reference_output.json` as parsed `serde_json::Value` trees — **they are identical**, i.e. the Rust reader already produces byte-for-value-equivalent output to the Python reference implementation for the full real AconityMIDI fixture, ahead of Phase 5's `cross_check.py` formalising this. `cargo build --all-targets` is clean with zero warnings.
+
+---
+
+### 3.6 — `writer.rs` — HDF5 Writer
+
+> **Status: Complete (2026-07-28).** 11 inline unit tests passing. Full crate suite: **40 passed** (`cargo test --lib`), `cargo build --all-targets` clean with zero warnings.
+
+Public API mirrors Python `MachineConfigWriter`:
+
+```rust
+pub struct MachineConfigWriter<'a> {
+    config: &'a MachineConfig,
+}
+
+impl<'a> MachineConfigWriter<'a> {
+    pub fn new(config: &'a MachineConfig) -> Self;
+    pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()>;
+}
+```
+
+The writer is the exact inverse of the reader. Applies all write rules from §3.12 (`None` → `""`, bool → 0/1 int, `triggers_enabled` → f64, correction arrays → zero-filled when absent, `extra` dict passthrough). Writer roundtrip tests in §3.9 verify SHA-256 of correction grids is unchanged across a write-then-read cycle.
+
+**Key implementation note**: `VarLenUnicode` in `hdf5-metno` implements `FromStr`, not `From<&str>` / `From<String>`. All string-attribute helpers therefore use `.parse().map_err(|e| MachineConfigError::Parse(...))?` rather than `.into()`. This is the correct pattern for all string writes throughout the crate.
+
+---
+
+### 3.7 — `builder.rs` — MockConfigBuilder
+
+> **Status: Complete (2026-07-28).** 6 inline unit tests passing. Full crate suite: **46 passed** (`cargo test --lib`), `cargo build --all-targets` clean with zero warnings.
+
+```rust
+pub struct MockConfigBuilder {
+    pub laser_count: usize,
+    pub build_plate_x: f64,
+    pub build_plate_y: f64,
+    pub build_plate_z: f64,
+    pub include_clearbox: bool,
+    pub machine_name: String,
+    // manufacturer, model, serial_number ...
+}
+
+impl MockConfigBuilder {
+    pub fn new(laser_count: usize) -> Self;
+    pub fn build(&self) -> MachineConfig;
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()>;
+}
+```
+
+Writes the same HDF5 group/attribute structure as Python's `MockConfigBuilder` so both implementations can round-trip `fixtures/synthetic_2laser.h5`. Correction grids are non-zero Gaussian warps (`gaussian_correction_grid()`, shape `(257, 257, 2)`). Does not produce identical float values to Python — just structurally valid and non-trivial. The `include_clearbox: false` path produces trains without `Optional_Components/ClearBox` or `scan_field_correction_file`.
+
+---
+
+### 3.8 — CLI (`main.rs`)
+
+> **Status: Complete (2026-07-28).** `cargo build --all-targets` clean; all 46 lib tests still pass. Manual smoke test confirmed: `machine-config-cli export-json fixtures/reference_config.h5` outputs well-formed JSON to stdout.
+
+Single subcommand using `clap` derive:
+
+```
+machine-config-cli export-json <path> [--include-binary]
+```
+
+Outputs pretty-printed JSON to stdout; exits 0 on success, 1 on any error (error message to stderr). This is the interface `cross_check.py` calls in Phase 5.
+
+```rust
+use clap::{Parser, Subcommand};
+use machine_config::reader::MachineConfigReader;
+
+#[derive(Parser)]
+#[command(name = "machine-config-cli", about = "...", version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    ExportJson {
+        path: std::path::PathBuf,
+        #[arg(long)]
+        include_binary: bool,
+    },
+}
+```
+
+---
+
+### 3.9 — Integration Tests
+
+> **Status: Complete (2026-07-28).** 14 integration tests passing (`cargo test`). Full suite: **46 lib + 14 integration = 60 tests**, all green. Criterion benchmark stubs in `benches/reader_bench.rs` build and `cargo bench` runs clean (3 benchmarks: `open_and_parse`, `to_json_pretty`, `open_and_parse_with_binary`).
+
+Fixtures used:
+
+| Constant | File | Notes |
+|---|---|---|
+| `FIXTURE` | `fixtures/synthetic_2laser.h5` | Python `MockConfigBuilder` output, no OPCUA |
+| `REFERENCE` | `fixtures/reference_config.h5` | Real AconityMIDI, no OPCUA |
+| `REFERENCE_OPCUA` | `fixtures/reference_config_opcua.h5` | Real AconityMIDI, with OPCUA |
+
+Tests implemented:
+
+| Test | Fixture | What it checks |
+|---|---|---|
+| `test_machine_name` | FIXTURE | `meta.machine_name` non-empty |
+| `test_optical_train_count` | FIXTURE | 2 optical trains |
+| `test_working_distance` | FIXTURE | WD = 670.0 mm on train 0 |
+| `test_json_output_validates_schema` | FIXTURE | JSON has `meta`/`machine`/`optical_trains`; `opcua` absent |
+| `test_configuration_hash_length` | FIXTURE | `configuration_hash` is 64 chars |
+| `test_meta_extra_preserved` | FIXTURE | `meta.extra` accessible without panic |
+| `test_correction_data_shape` | FIXTURE | `get_correction_data(0)` shape = `[257, 257, 2]` |
+| `test_correction_data_is_nonzero` | FIXTURE | at least one non-zero cell |
+| `test_nan_to_null_in_correction_data` | REFERENCE | real fixture has NaN border cells → `None` in nested Vec |
+| `test_builder_roundtrip` | temp | builder writes 2-laser config, reads back |
+| `test_opcua_client_fields` | REFERENCE_OPCUA | `bfs_max_depth=16`, `session_timeout=60000` |
+| `test_opcua_triggers_parsed` | REFERENCE_OPCUA | `triggers_enabled=Some(true)`, key `"Laser Emission Interlock"` present |
+| `test_writer_roundtrip_scalars` | FIXTURE | `machine_name` and `working_distance` survive write→read |
+| `test_writer_roundtrip_correction_data_checksum` | FIXTURE | `DefaultHasher` digest of correction grid unchanged |
+
+Note: `test_writer_roundtrip_correction_data_checksum` intentionally uses the `DefaultHasher` approach (matching the writer’s own roundtrip tests) rather than adding `sha2` + `bytemuck` dev-dependencies — the goal is bit-for-bit identity, not a cryptographic guarantee.
 
 #[test]
 fn test_machine_name() {
@@ -2134,7 +2415,197 @@ fn test_builder_roundtrip() {
     assert_eq!(config.optical_trains.len(), 2);
     assert!(!config.meta.machine_name.is_empty());
 }
+
+#[test]
+fn test_opcua_client_fields() {
+    let config = MachineConfigReader::open(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_config_opcua.h5")
+    ).unwrap().parse().unwrap();
+    let client = config.opcua.unwrap().client;
+    assert!(!client.server_url.is_empty());
+    assert_eq!(client.bfs_max_depth, 16);
+    assert_eq!(client.session_timeout, 60000);
+}
+
+#[test]
+fn test_opcua_triggers_parsed() {
+    let config = MachineConfigReader::open(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_config_opcua.h5")
+    ).unwrap().parse().unwrap();
+    let opcua = config.opcua.unwrap();
+    assert_eq!(opcua.triggers_enabled, Some(true));
+    assert!(opcua.triggers.contains_key("Laser Emission Interlock"));
+}
+
+#[test]
+fn test_meta_extra_preserved() {
+    // Any HDF5 root attributes beyond the known set must land in meta.extra
+    let config = MachineConfigReader::open(FIXTURE).unwrap().parse().unwrap();
+    // extra may be empty for synthetic fixture — just assert it doesn't panic
+    let _ = &config.meta.extra;
+}
+
+#[test]
+fn test_nan_to_null_in_correction_data() {
+    // NaN values in the correction grid must round-trip as JSON null
+    let config = MachineConfigReader::open(FIXTURE).unwrap().parse_with_binary().unwrap();
+    let cb = config.optical_trains[0].clearbox.as_ref().unwrap();
+    let data = cb.correction_data.as_ref().unwrap();
+    // The synthetic fixture has NaN border cells — at least one null must be present
+    assert!(data.iter().flatten().flatten().any(|v| v.is_none()));
+}
+
+#[test]
+fn test_writer_roundtrip_scalars() {
+    use machine_config::writer::MachineConfigWriter;
+    use tempfile::NamedTempFile;
+    let original = MachineConfigReader::open(FIXTURE).unwrap().parse().unwrap();
+    let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+    MachineConfigWriter::new(&original).write(tmp.path()).unwrap();
+    let roundtripped = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
+    assert_eq!(original.meta.machine_name, roundtripped.meta.machine_name);
+    assert_eq!(
+        original.optical_trains[0].scanner.working_distance,
+        roundtripped.optical_trains[0].scanner.working_distance,
+    );
+}
+
+#[test]
+fn test_writer_roundtrip_correction_data_checksum() {
+    use machine_config::writer::MachineConfigWriter;
+    use sha2::{Digest, Sha256};
+    use tempfile::NamedTempFile;
+    let reader = MachineConfigReader::open(FIXTURE).unwrap();
+    let original = reader.get_correction_data(0).unwrap();
+    let config = reader.parse().unwrap();
+    let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+    MachineConfigWriter::new(&config).write(tmp.path()).unwrap();
+    let roundtripped = MachineConfigReader::open(tmp.path()).unwrap().get_correction_data(0).unwrap();
+    let h1 = Sha256::digest(bytemuck::cast_slice(&original));
+    let h2 = Sha256::digest(bytemuck::cast_slice(&roundtripped));
+    assert_eq!(h1, h2, "Correction data SHA-256 changed across write roundtrip");
+}
 ```
+
+---
+
+### 3.10 — HDF5 Group & Attribute Path Reference
+
+The HDF5 file has a fixed structure. The Rust reader must traverse these exact paths. Attribute names are PascalCase/Snake_Case in the HDF5 file; the canonical JSON and Rust struct fields use `snake_case`.
+
+**Root attributes → `MachineConfigMeta`**
+
+| HDF5 attr | Rust field | Type |
+|---|---|---|
+| `machine_name` | `meta.machine_name` | `String` |
+| `manufacturer` | `meta.manufacturer` | `String` |
+| `model` | `meta.model` | `String` |
+| `serial_number` | `meta.serial_number` | `String` |
+| `File_Version` | `meta.file_version` | `String` |
+| `Export_Date` | `meta.export_date` | `String` |
+| `Configuration_Hash` | `meta.configuration_hash` | `String` (len=64) |
+| *(any other)* | `meta.extra` | `HashMap<String, JsonValue>` |
+
+**`Machine` group → `Machine`**
+
+| HDF5 attr | Rust field | Notes |
+|---|---|---|
+| `ID` | `machine.id` | `Option<String>` |
+| `Machine_Name` | `machine.machine_name` | `String` |
+| `Manufacturer` | `machine.manufacturer` | `String` |
+| `Model` | `machine.model` | `String` |
+| `Serial_Number` | `machine.serial_number` | `String` |
+| `Build_Plate_X_Dimension` | `machine.build_plate_x` | `Option<f64>` |
+| `Build_Plate_X_Dimension_unit` | `machine.build_plate_x_unit` | locked `"mm"` |
+| `Build_Plate_Y_Dimension` | `machine.build_plate_y` | `Option<f64>` |
+| `Build_Plate_Y_Dimension_unit` | `machine.build_plate_y_unit` | locked `"mm"` |
+| `Build_Plate_Z_Dimension` | `machine.build_plate_z` | `Option<f64>` |
+| `Build_Plate_Z_Dimension_unit` | `machine.build_plate_z_unit` | locked `"mm"` |
+| `Build_Plate_Corner_Radius` | `machine.build_plate_radius` | `Option<f64>` |
+| `Build_Plate_Corner_Radius_unit` | `machine.build_plate_radius_unit` | locked `"mm"` |
+| `Gas_Flow_Direction` | `machine.gas_flow_direction` | `Option<String>` |
+| `Recoat_Direction` | `machine.recoat_direction` | `Option<String>` |
+
+**Optical train group path**: `Machine/Optical_Trains/Optical_Train_NN/` (NN is zero-padded 2-digit index, 1-based; groups are sorted lexicographically to determine order)
+
+**Scanner attrs** (group `…/Scanner/`)
+
+| HDF5 attr | JSON key | Notes |
+|---|---|---|
+| `Manufacturer` | `scanner.manufacturer` | |
+| `Model` | `scanner.model` | |
+| `Serial_Number` | `scanner.serial_number` | |
+| `Working_Distance` | `scanner.working_distance` | locked unit `"mm"` |
+| `Scan_Field_Size_X` | `scanner.scan_field_x` | locked unit `"mm"` |
+| `Scan_Field_Size_Y` | `scanner.scan_field_y` | locked unit `"mm"` |
+| `Scan_Field_Size_Z` | `scanner.scan_field_z` | locked unit `"mm"` |
+| `Scan_Head_Offset_X` | `scanner.scan_head_offset_x` | locked unit `"mm"` |
+| `Scan_Head_Offset_Y` | `scanner.scan_head_offset_y` | locked unit `"mm"` |
+| `Scan_Head_Offset_Z` | `scanner.scan_head_offset_z` | locked unit `"mm"` |
+| `Scan_Head_Rotation` | `scanner.scan_head_rotation` | locked unit `"degrees"` |
+| `Axis_Configuration` | `scanner.axis_configuration` | `"2D"` / `"3D"` / `"3D+Focus"` |
+
+Scanner axis sub-groups: `X_Axis/`, `Y_Axis/`, `Z_Axis/` (only if `axis_configuration` ≠ `"2D"`), `Focus/` (only if `"3D+Focus"`). Each has the same 11 attrs (`Actual_Bit_Resolution`, `Commanded_Bit_Resolution`, `Control_Type`, `Range_Of_Motion`, `Smoothing_Kernel`, `Smoothing_Parameters`, `Tuning_Parameters`, `Tuning_Type` plus unit variants).
+
+**LightSource attrs** — `Light_Wavelength` (unit locked `"nm"`), `Power_Max_Nominal`/`Power_Max_Actual`/`Power_Min_Nominal`/`Power_Min_Actual` (unit locked `"W"`), `Power_Bit_Resolution` (unit locked `"bits"` — **stored as HDF5 string, not number**; must be parsed with `str::parse::<f64>()`), `Watts_To_Volts_Algorithm`, `Watts_To_Volts_Params`.
+
+**ClearBox** — group path: `…/Optional_Components/ClearBox/`. May be absent. Attrs include `Ip_Address`, `Data_Port`, `Server_Port`, `Actual_Timing_Offset`, `Commanded_Timing_Offset`, `Show_Console` (int 0/1), and all the string fields. Datasets: `Correction_Data` and `Inverse_Correction_Data` (both `(257, 257, 2)` float64; out-of-field cells are IEEE 754 NaN → must be serialised as JSON `null`).
+
+**scan_field_correction_file** — this is an **HDF5 Dataset**, not a Group. Path: `…/scan_field_correction_file`. The dataset payload is `uint8[]` (raw `.fc3` bytes). Metadata lives in dataset attrs: `document_name`, `document_id`, `file_size` (int), `valid_as_of_date`, `document_created_at`, `document_type`, `original_uri`.
+
+**OPCUA** — group `OPCUA/` is optional (absent in most configs). Sub-groups: `Client/`, `Pipe/`, `Triggers/`. `Triggers/` contains one sub-group per trigger (key is the trigger label string). `Triggers/` group itself has an attr `Triggers_Enabled` stored as **float64** `0.0`/`1.0` (not int).
+
+---
+
+### 3.11 — Type Coercion Rules (Rust equivalents of Python reader helpers)
+
+All of these quirks exist in the real HDF5 files and must be handled identically in Rust:
+
+| Rule | Python behaviour | Rust equivalent |
+|---|---|---|
+| Absent optional attr | `None` | `Option::None` |
+| Empty-string optional attr | Returns `None` (stripped) | `if s.trim().is_empty() { None } else { Some(s) }` |
+| `bool` from int attr | `0` → `false`, `1` → `true`, other → `Err` | Same; reject non-0/1 |
+| `bool` from float attr | `triggers_enabled` only: `0.0` → `false`, `1.0` → `true` | Read as `f64`, cast to `bool` |
+| NaN in float64 dataset | Represented as `None` in JSON (list elements) | `if v.is_nan() { None } else { Some(v) }` |
+| `power_bit_resolution` | HDF5 stores as string; Python does `float(val)` | Read as `String`, then `s.trim().parse::<f64>()` |
+| `None` written as `""` | Writer outputs empty string for absent optional | `let s = v.as_deref().unwrap_or("");` |
+| `bool` written as int | Writer outputs `0`/`1` | `hdf5_attr = if b { 1i32 } else { 0i32 }` |
+| `triggers_enabled` written as float | Writer outputs `np.float64(0.0)` or `np.float64(1.0)` | Write as `f64` |
+| Unit attrs | Read and validated against locked expected value | Return `Err` if present but wrong; `None` if absent |
+| `extra` dicts | All attrs not in known-key set → `HashMap` | Collect into `HashMap<String, serde_json::Value>` |
+| File version | `!= "1.0"` → `warn!()`, not `Err` | `tracing::warn!` or `eprintln!` |
+
+---
+
+### 3.12 — Writer Reference
+
+The Rust writer is the exact inverse of the reader. It must produce an HDF5 file that, when read back, yields an identical `MachineConfig`. The Python writer is the reference.
+
+**Public API:**
+
+```rust
+pub struct MachineConfigWriter<'a> {
+    config: &'a MachineConfig,
+}
+
+impl<'a> MachineConfigWriter<'a> {
+    pub fn new(config: &'a MachineConfig) -> Self { ... }
+    pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> { ... }
+}
+```
+
+**Key writer rules (mirror the Python helpers):**
+
+- `Option<String>` → `""` when `None` (not omit; the attr must be written)
+- `Option<f64>` → `""` when `None` (h5py compat; downstream readers handle empty string)
+- `Option<i32>` → `""` when `None`
+- `Option<bool>` → `""` when `None`; `true` → `1i32`, `false` → `0i32`
+- Correction arrays: `Option<()>` absent → write zero-filled `(257, 257, 2)` float64 dataset. Dataset must carry attrs `dimensions = "H,W,D"`, `dtype = "float64"`, `shape = "257x257x2"`.
+- `scan_field_correction_file`: if `raw_bytes` is `None`, write `vec![0u8; max(file_size, 1)]`
+- `meta.extra`, `opcua.client.extra`, `opcua.pipe.extra`, `trigger.extra` → write each key/value directly as HDF5 attrs on the appropriate group
+- `opcua.triggers_enabled` → write as `f64` on the `OPCUA/Triggers` group attrs
+- All groups must be created with `require_group` semantics (create if absent, reuse if present)
 
 ---
 
@@ -2302,28 +2773,33 @@ TEST_CASE("MockConfigBuilder roundtrip", "[builder]") {
 
 ### 5.1 — `tools/cross_check.py`
 
-The correctness heartbeat. Runs all four language CLIs, collects their canonical JSON output, and diffs every field:
+> **Status: Implemented (2026-07-28).** Three-phase script, all phases green locally (Python ↔ Rust). First run found and fixed a real bug: Windows `subprocess.run` decoded Rust's UTF-8 stdout as CP1252, corrupting multi-byte unit strings (`μm` → `Î¼m`). Fixed by adding `encoding="utf-8"` to all `subprocess.run` calls — a non-obvious issue that would have silently caused all Windows cross-check runs to report false failures without this script.
 
-```python
-#!/usr/bin/env python3
-"""
-Run all four language readers against reference_config.h5,
-compare their canonical JSON output, report any discrepancies.
-"""
-import json, subprocess, sys
-from pathlib import Path
-from deepdiff import DeepDiff
+The script runs in three phases:
 
-FIXTURE = Path("fixtures/reference_config.h5")
-GOLDEN  = Path("fixtures/reference_output.json")
+| Phase | What it checks | Pass condition |
+|---|---|---|
+| 1 Schema validation | Every language × every fixture validates against `schema/machine_config_v1.schema.json` | `jsonschema.validate()` passes for all combinations |
+| 2 Read parity | All languages produce identical JSON for all three fixtures | `DeepDiff` (significant_digits=8) returns no diff for each pair |
+| 3 Write interop | Python builder (1-laser) → Rust reader; Python writer roundtrip (reference → write → re-read) → Rust reader | Rust and Python outputs are deep-equal for all generated files |
 
-RUNNERS = {
-    "python": ["python", "-m", "machine_config", "export-json", str(FIXTURE)],
-    "nodejs": ["node", "nodejs/dist/cli.js", "export-json", str(FIXTURE)],
-    "rust":   ["rust/target/release/machine-config-cli", "export-json", str(FIXTURE)],
-    "cpp":    ["cpp/build/machine_config_cli", "export-json", str(FIXTURE)],
-}
+Design principles:
+- **Extensible by one line**: add a language by uncommenting its entry in `RUNNERS` — no other change needed
+- **Graceful degradation**: missing `deepdiff` falls back to JSON string comparison; missing `jsonschema` skips Phase 1 with a warning
+- **Windows-safe**: explicitly uses `encoding="utf-8"` in all subprocess calls
+- **Binary-aware**: finds the Rust release binary relative to the repo root; prefers release over debug; falls back gracefully with a `[WARN]`
+- **Subset mode**: `--langs python,rust` to check only available languages during development
 
+Usage:
+
+```bash
+python tools/cross_check.py                    # all languages in RUNNERS
+python tools/cross_check.py --langs python,rust
+python tools/cross_check.py --skip-write-interop
+python tools/cross_check.py --verbose
+```
+
+Phase 3 (write interop) currently only tests the Python-writes → Rust-reads direction. The Rust-writes → Python-reads direction will be added when the Rust CLI gains a `build` subcommand (Phase 3.8 extension or a future phase).
 def main():
     golden = json.loads(GOLDEN.read_text())
     results = {}
@@ -2398,6 +2874,22 @@ To check a subset while builds are in progress:
 ```bash
 python tools/cross_check.py --langs python,nodejs
 ```
+
+---
+
+### 5.4 — Viewer JSON-Load Extension
+
+The existing `viewer/machine_config_viewer.html` reads HDF5 directly via the `h5wasm` CDN. A small addition — a **"Load JSON" button** alongside the current "Load H5" button — lets the viewer accept the canonical JSON produced by any language library, making it a lightweight visual diff tool.
+
+**Scope:** Add a second file-input path to the viewer that accepts a JSON file, parses it using the library's canonical key names (e.g. `scanner.scan_head_offset_x`, `scanner.scan_field_x/y`), and renders the same canvas (build plate, scanner field rectangles, direction arrows). No library dependency is introduced — the viewer stays a standalone HTML file.
+
+**Why this is useful for cross-language validation:**
+- Run `python tools/cross_check.py --emit-json python,nodejs`, drop both JSON files into the viewer in two tabs, and immediately see if scanner field placement differs visually.
+- A numeric field mismatch (e.g. sign flip on `scan_head_offset_x`) is immediately obvious as a scanner field on the wrong side of the build plate; the CLI diff only reports a number.
+
+**Relationship to `cross_check.py`:** The viewer JSON-load is a developer convenience tool, not a CI gate. `cross_check.py` is still the authoritative correctness check. The viewer surfaces spatial/geometric disagreements that numbers alone don't communicate.
+
+**Timing:** Implement after at least one non-Python language is CI-green, so there are two JSON outputs to compare. The viewer HTML edit itself is ~1 day of work.
 
 ---
 

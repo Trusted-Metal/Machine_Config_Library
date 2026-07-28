@@ -1,0 +1,30 @@
+[package]
+name = "machine-config"
+version = "0.1.0"
+edition = "2021"
+description = "Machine configuration library for LPBF machine HDF5 files"
+
+[lib]
+name = "machine_config"
+path = "src/lib.rs"
+
+[[bin]]
+name = "machine-config-cli"
+path = "src/main.rs"
+
+[[bench]]
+name = "reader_bench"
+harness = false
+
+[dependencies]
+hdf5        = { package = "hdf5-metno", version = "0.9", features = ["static"] }
+ndarray     = "0.16"
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+thiserror   = "1"
+indexmap    = { version = "2", features = ["serde"] }
+clap        = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile    = "3"
+criterion   = { version = "0.5", features = ["html_reports"] }

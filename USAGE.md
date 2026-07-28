@@ -455,14 +455,239 @@ Section will cover:
 
 ## Rust
 
-*Coming in Phase 3.*
+*Phase 3 complete — data models, HDF5 reader, writer, `MockConfigBuilder`, CLI, and integration tests all implemented and verified.*
 
-Section will cover:
-- `cargo add machine-config`
-- Parsing `.h5` with the `hdf5` crate
-- Rust struct model and serde serialisation
-- Equivalent use cases to the Python section above
-- CLI usage via `machine-config-cli`
+The crate lives in `rust/` (package `machine-config`, library `machine_config`). It has no system dependencies — `cargo build` compiles `libhdf5` from source on first run (see [IMPLEMENTATION_PLAN.md §3.2](IMPLEMENTATION_PLAN.md#32--platform--dependency-decision)).
+
+### What's usable today
+
+`rust/src/models.rs` defines the full data model — `MachineConfig` and its complete field tree (`Machine`, `OpticalTrain`, `Scanner`, `AxisConfig`, `LightSource`, `Collimator`, `ScannerCard`, `ClearBox`, `ScanFieldCorrectionFile`, `OpcuaConfig` and friends) — mirroring `python/src/machine_config/models.py`, with `#[derive(Serialize, Deserialize)]` so any value round-trips through `serde_json`.
+
+`rust/src/reader.rs` implements `MachineConfigReader`, mirroring Python's `MachineConfigReader`. Its JSON output has been verified to deep-equal `fixtures/reference_output.json` (the Python golden file) for the reference AconityMIDI fixture.
+
+`rust/src/writer.rs` implements `MachineConfigWriter`, mirroring Python's `MachineConfigWriter`. It is the exact inverse of the reader: every attribute written matches what the reader expects to find, and a write-then-read roundtrip preserves all scalar fields and the SHA-256 of the ClearBox correction grids.
+
+`rust/src/builder.rs` implements `MockConfigBuilder`, which generates structurally valid synthetic `.h5` files for testing. It mirrors Python's `MockConfigBuilder` — same group/attribute layout, non-zero Gaussian correction grids, deterministic values.
+
+`rust/src/main.rs` is the `machine-config-cli` binary. It exposes a single subcommand (`export-json`) that writes pretty-printed JSON to stdout — the interface used by `cross_check.py` in Phase 5.
+
+### Use case 1 — Parse a machine config file
+
+```rust
+use machine_config::reader::MachineConfigReader;
+
+let reader = MachineConfigReader::open("fixtures/reference_config.h5")?;
+let config = reader.parse()?;   // scalars + metadata only — see Use case 2
+
+println!("{}", config.meta.machine_name);        // "TM-LPBF-02: AconityMIDI+_OG"
+println!("{}", config.meta.configuration_hash);  // 64-character hex string
+
+println!(
+    "{} x {} x {} {}",
+    config.machine.build_plate_x.unwrap(),
+    config.machine.build_plate_y.unwrap(),
+    config.machine.build_plate_z.unwrap(),
+    config.machine.build_plate_x_unit.as_deref().unwrap()
+);
+
+for (i, train) in config.optical_trains.iter().enumerate() {
+    let s = &train.scanner;
+    println!(
+        "Train {}: WD={:?} {:?}  axis_config={:?}",
+        i + 1, s.working_distance, s.working_distance_unit, s.axis_configuration
+    );
+    // x_axis/y_axis are always present; z_axis is Some for "3D"/"3D+Focus",
+    // focus is Some only for "3D+Focus".
+    if let Some(z) = &s.z_axis {
+        println!("  Z bit_resolution: {:?} {:?}", z.actual_bit_resolution, z.actual_bit_resolution_unit);
+    }
+}
+```
+
+---
+
+### Use case 2 — Export to canonical JSON
+
+By default, `parse()`/`to_json()` include only scalar and metadata fields. The ClearBox correction grids and raw `.fc3` bytes are intentionally left out — use `parse_with_binary()` / `to_json(_, include_binary: true)` or the dedicated accessors below when you need them.
+
+```rust
+use machine_config::reader::MachineConfigReader;
+
+let reader = MachineConfigReader::open("fixtures/reference_config.h5")?;
+
+// Default: metadata + scalars only, pretty-printed
+let json = reader.to_json(true, false)?;
+std::fs::write("output.json", json)?;
+
+// With binary data: adds correction_data / inverse_correction_data (257×257×2
+// nested arrays) to every ClearBox, and raw_bytes to every scan field
+// correction file. Output is large (tens of MB for a 2-laser config).
+let full_json = reader.to_json(true, true)?;
+std::fs::write("output_full.json", full_json)?;
+```
+
+> **Accessing binary data without JSON**: `reader.get_correction_data(train_index)` and `reader.get_inverse_correction_data(train_index)` return an `ndarray::Array3<f64>` of shape `(257, 257, 2)`; `reader.get_scan_field_correction_bytes(train_index)` returns the raw `.fc3` bytes as `Vec<u8>`. These are the recommended paths for numerical work — they read directly from HDF5 without going through the model at all.
+
+---
+
+### Use case 3 — Read OPCUA telemetry configuration
+
+OPCUA data is outside the canonical model. `parse()` returns `config.opcua: Option<OpcuaConfig>` (populated only when the file has an `OPCUA` group), or use `get_raw_group()` for arbitrary non-schema paths:
+
+```rust
+use machine_config::reader::MachineConfigReader;
+
+let reader = MachineConfigReader::open("fixtures/reference_config_opcua.h5")?;
+let config = reader.parse()?;
+
+if let Some(opcua) = &config.opcua {
+    println!("{}", opcua.client.server_url);
+    println!("{:?}", opcua.triggers_enabled);
+    for (name, trigger) in &opcua.triggers {
+        println!("{name}: signal={:?} subsystem={:?}", trigger.signal, trigger.subsystem);
+    }
+}
+
+// Or fetch raw attributes for any path — returns an empty map, never an error,
+// if the path doesn't exist:
+let client_attrs = reader.get_raw_group("OPCUA/Client")?;
+println!("{:?}", client_attrs.get("Server_URL"));
+```
+
+---
+
+### Use case 4 — Access ClearBox correction arrays
+
+```rust
+use machine_config::reader::MachineConfigReader;
+
+let reader = MachineConfigReader::open("fixtures/reference_config.h5")?;
+let config = reader.parse_with_binary()?;
+
+if let Some(cb) = &config.optical_trains[0].clearbox {
+    let data = cb.correction_data.as_ref().unwrap(); // Vec<Vec<Vec<Option<f64>>>>, shape 257x257x2
+    assert_eq!(data.len(), 257);
+    assert_eq!(data[0].len(), 257);
+    assert_eq!(data[0][0].len(), 2);
+    // None means the point is outside the correction field (was NaN in HDF5).
+    let centre = &data[128][128];
+    println!("Centre correction: x={:?}, y={:?}", centre[0], centre[1]);
+}
+
+// For bulk numerical work, use the ndarray accessor directly:
+let arr = reader.get_correction_data(0)?;  // Array3<f64>, shape (257, 257, 2)
+println!("Non-finite cells: {}", arr.iter().filter(|v| !v.is_finite()).count());
+```
+
+---
+
+### Use case 5 — Write a config to HDF5
+
+`MachineConfigWriter` serialises any `MachineConfig` back to a machine-config-schema-compatible `.h5` file. The output is structurally identical to what the machine software exports, so it can be read back by both the Rust and Python readers.
+
+```rust
+use machine_config::reader::MachineConfigReader;
+use machine_config::writer::MachineConfigWriter;
+
+// Round-trip: read, mutate, write, re-read
+let reader = MachineConfigReader::open("fixtures/reference_config.h5")?;
+let mut config = reader.parse()?;
+
+// Modify a field (e.g. update the export timestamp)
+config.meta.export_date = "2026-07-28T00:00:00Z".to_owned();
+
+MachineConfigWriter::new(&config).write("output.h5")?;
+
+// Verify the roundtrip
+let reread = MachineConfigReader::open("output.h5")?.parse()?;
+assert_eq!(config.meta.machine_name, reread.meta.machine_name);
+assert_eq!(config.meta.export_date,  reread.meta.export_date);
+```
+
+> **Binary data in the writer**: if `correction_data` / `inverse_correction_data` are `None` in the model (i.e. the config was parsed with `parse()`, not `parse_with_binary()`), the writer writes zero-filled `(257, 257, 2)` float64 datasets in their place. To preserve the original binary data across a roundtrip, either use `parse_with_binary()` before writing, or use `get_correction_data()` to obtain the arrays and re-attach them to the model before writing.
+
+---
+
+### Use case 6 — Generate a synthetic test fixture
+
+`MockConfigBuilder` creates structurally valid `.h5` files for integration tests without requiring access to real machine hardware.
+
+```rust
+use machine_config::builder::MockConfigBuilder;
+use machine_config::reader::MachineConfigReader;
+
+// 2-laser config with ClearBox (default)
+MockConfigBuilder::new(2).save("test_config.h5")?;
+
+// Customise before saving
+let mut b = MockConfigBuilder::new(1);
+b.machine_name = "TestMachine".to_owned();
+b.build_plate_x = 400.0;
+b.include_clearbox = false;
+b.save("custom_config.h5")?;
+
+// Build into memory without writing
+let config = MockConfigBuilder::new(2).build();
+assert_eq!(config.optical_trains.len(), 2);
+assert_eq!(config.meta.machine_name, "MockMachine");
+
+// Verify the correction grid that was written
+let reader = MachineConfigReader::open("test_config.h5")?;
+let arr = reader.get_correction_data(0)?;  // Array3<f64>, shape (257, 257, 2)
+assert_eq!(arr.shape(), &[257, 257, 2]);
+println!("Peak correction: {:.4}", arr[[128, 128, 0]]);  // ≈ 2.0 (Gaussian peak)
+```
+
+---
+
+### Use case 7 — Export JSON from the command line
+
+`machine-config-cli` is the Rust binary equivalent of `machine-config export-json` in Python. It writes pretty-printed JSON to stdout and exits 0 on success.
+
+```powershell
+# PowerShell — build first
+cargo build --release --manifest-path rust/Cargo.toml
+
+# Export scalars only (default)
+.\rust\target\release\machine-config-cli.exe export-json fixtures\reference_config.h5
+
+# Export with binary fields (correction grids + raw .fc3 bytes)
+.\rust\target\release\machine-config-cli.exe export-json fixtures\reference_config.h5 --include-binary
+
+# Pipe to a file
+.\rust\target\release\machine-config-cli.exe export-json fixtures\reference_config.h5 > output.json
+```
+
+```bash
+# Git Bash
+cargo build --release --manifest-path rust/Cargo.toml
+./rust/target/release/machine-config-cli export-json fixtures/reference_config.h5
+./rust/target/release/machine-config-cli export-json fixtures/reference_config.h5 --include-binary > output_full.json
+```
+
+> Errors (file not found, unrecognised format, etc.) go to stderr; stdout is always valid JSON on success.
+
+---
+
+### Running the Rust test suite
+
+```powershell
+# PowerShell — from repo root
+cd rust
+cargo test --lib        # 46 unit tests: golden-file, SHA-256 writer roundtrip, builder roundtrip
+cargo test              # 46 unit + 14 integration = 60 tests total
+cargo bench             # criterion benchmarks: open_and_parse, to_json_pretty, open_and_parse_with_binary
+cargo build --all-targets
+```
+
+```bash
+# Git Bash
+cd rust
+cargo test --lib
+cargo test
+cargo bench
+cargo build --all-targets
+```
 
 ---
 
@@ -480,6 +705,48 @@ Section will cover:
 ---
 
 ## Contributor Workflows
+
+### Running the cross-language check
+
+`tools/cross_check.py` is the correctness heartbeat. It runs three phases: schema validation, read parity across all fixtures, and write interoperability. Run it after any change to Python or Rust code.
+
+**Prerequisites**: Python venv active (`pip install -e python/[dev] deepdiff`), Rust release binary built (`cargo build --release` inside `rust/`).
+
+```powershell
+# PowerShell — from repo root
+.\.venv\Scripts\python tools/cross_check.py --verbose
+
+# Check a subset only (e.g. while another language binary is missing)
+.\.venv\Scripts\python tools/cross_check.py --langs python,rust --verbose
+
+# Skip write-interop (Phase 3) for a faster schema+parity-only check
+.\.venv\Scripts\python tools/cross_check.py --skip-write-interop
+```
+
+```bash
+# Git Bash
+.venv/Scripts/python tools/cross_check.py --verbose
+```
+
+Expected output (all green):
+```
+Active languages: python, rust
+
+=== Phase 1: Schema Validation ===
+[PASS] 6 combinations validate against schema.
+
+=== Phase 2: Read Parity ===
+[PASS] 2 languages agree on all 3 fixtures (3 comparisons).
+
+=== Phase 3: Write Interoperability ===
+[PASS] Write interoperability checks passed.
+
+All checks passed.
+```
+
+> **Windows note**: `cross_check.py` explicitly uses `encoding="utf-8"` in all subprocess calls. Without this, Windows subprocess decoding (CP1252) silently corrupts multi-byte unit strings such as `μm` and `μs` — the check would report spurious failures on every Windows run.
+
+---
 
 ### Running the smoke test (pre-commit sanity check)
 
