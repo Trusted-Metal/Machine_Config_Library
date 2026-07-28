@@ -1,6 +1,7 @@
 name: Rust
 
 on:
+  workflow_dispatch:
   push:
     branches: ["main"]
     paths:
@@ -33,7 +34,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust build artefacts
+      - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
@@ -55,14 +56,14 @@ jobs:
         run: |
           bin="./target/release/machine-config-cli"
           [[ "$RUNNER_OS" == "Windows" ]] && bin="${bin}.exe"
-          "${bin}" export-json ../fixtures/reference_config.h5 > /tmp/rust_output.json
-          echo "Exported $(wc -c < /tmp/rust_output.json) bytes"
+          "${bin}" export-json ../fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output.json"
+          echo "Exported $(wc -c < "$RUNNER_TEMP/rust_output.json") bytes"
         working-directory: rust
 
-      - name: Upload JSON artefact
+      - name: Upload JSON artifact
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: rust-output
-          path: /tmp/rust_output.json
+          path: ${{ runner.temp }}/rust_output.json
           retention-days: 14

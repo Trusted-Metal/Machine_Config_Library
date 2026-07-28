@@ -9,6 +9,7 @@ name: Cross-Language Check
 # tools/cross_check.py — no changes needed here.
 
 on:
+  workflow_dispatch:
   push:
     branches: ["main"]
     paths:
@@ -53,7 +54,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust build artefacts
+      - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
@@ -75,19 +76,23 @@ jobs:
         run: python tools/cross_check.py --langs python,rust --verbose
 
       # Upload both outputs so developers can diff them manually if a check fails.
-      - name: Export Python JSON artefact
+      - name: Export Python JSON artifact
         if: always()
-        run: machine-config export-json fixtures/reference_config.h5 > /tmp/python_output.json
+        run: machine-config export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/python_output.json"
 
-      - name: Export Rust JSON artefact
+      - name: Export Rust JSON artifact
         if: always()
-        run: rust/target/release/machine-config-cli export-json fixtures/reference_config.h5 > /tmp/rust_output_xcheck.json
+        run: rust/target/release/machine-config-cli export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output_xcheck.json"
 
       - name: Upload language outputs for manual inspection
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cross-check-outputs
+          path: |
+            ${{ runner.temp }}/python_output.json
+            ${{ runner.temp }}/rust_output_xcheck.json
+          retention-days: 14
           path: |
             /tmp/python_output.json
             /tmp/rust_output_xcheck.json

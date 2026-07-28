@@ -147,6 +147,7 @@ class MachineConfigReader:
             self._config_to_dict(config, include_binary=include_binary),
             indent=indent,
             default=str,
+            ensure_ascii=False,
         )
 
     # ------------------------------------------------------------------
