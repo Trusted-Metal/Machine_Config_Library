@@ -93,7 +93,3 @@ jobs:
             ${{ runner.temp }}/python_output.json
             ${{ runner.temp }}/rust_output_xcheck.json
           retention-days: 14
-          path: |
-            /tmp/python_output.json
-            /tmp/rust_output_xcheck.json
-          retention-days: 14
