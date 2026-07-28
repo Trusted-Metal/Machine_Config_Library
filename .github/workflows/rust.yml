@@ -1,0 +1,116 @@
+name: Rust
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "rust/**"
+      - "fixtures/**"
+      - "schema/**"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "rust/**"
+      - "fixtures/**"
+      - "schema/**"
+      - ".github/workflows/rust.yml"
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No apt-get for libhdf5 — hdf5-metno compiles libhdf5 from source
+      # via the `static` feature.  First cold run takes ~2-3 min; subsequent
+      # runs use the Swatinem cache below.
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Run unit and integration tests
+        run: cargo test
+        working-directory: rust
+
+      - name: Build release binary
+        run: cargo build --release
+        working-directory: rust
+
+      # Export the reference fixture to JSON and hash all correction grids.
+      # Both outputs are uploaded as artifacts so the compare job can verify
+      # that Linux and Windows produce byte-identical results.
+      - name: Smoke-test CLI and export reference fixture
+        shell: bash
+        run: |
+          bin="./target/release/machine-config-cli"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="${bin}.exe"
+          "${bin}" export-json ../fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output.json"
+          echo "Exported $(wc -c < "$RUNNER_TEMP/rust_output.json") bytes"
+          # Hash each fixture's correction grids for cross-platform parity check
+          {
+            for f in reference_config reference_config_opcua synthetic_2laser; do
+              printf "%s forward: " "$f"
+              "${bin}" correction-hash ../fixtures/${f}.h5
+              printf "%s inverse: " "$f"
+              "${bin}" correction-hash ../fixtures/${f}.h5 --inverse
+            done
+          } > "$RUNNER_TEMP/correction_hashes.txt"
+          cat "$RUNNER_TEMP/correction_hashes.txt"
+        working-directory: rust
+
+      - name: Upload JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-output-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/rust_output.json
+            ${{ runner.temp }}/correction_hashes.txt
+          retention-days: 14
+
+  # After both matrix legs finish, diff their JSON outputs to catch any
+  # platform-specific rendering differences (number formatting, encoding, etc.).
+  compare:
+    name: Platform parity (Linux vs Windows)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-output-ubuntu-latest
+          path: linux
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-output-windows-latest
+          path: windows
+
+      - name: Diff Linux vs Windows JSON output
+        run: |
+          if diff linux/rust_output.json windows/rust_output.json; then
+            echo "Linux and Windows JSON outputs are identical"
+          else
+            echo "Platform JSON mismatch detected — see diff above"
+            exit 1
+          fi
+
+      - name: Diff Linux vs Windows correction hashes
+        run: |
+          if diff linux/correction_hashes.txt windows/correction_hashes.txt; then
+            echo "Linux and Windows correction hashes are identical"
+          else
+            echo "Platform correction hash mismatch detected — see diff above"
+            exit 1
+          fi

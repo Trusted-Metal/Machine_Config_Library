@@ -1,0 +1,1500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Machine Configuration Viewer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- jsfive loaded dynamically — pure-JS HDF5 reader, no WASM, works via file:// -->
+<style>
+:root {
+  --bg:          #0c0e12;
+  --surface:     #141720;
+  --surface-hi:  #1c2030;
+  --border:      #252b3d;
+  --border-hi:   #303858;
+  --accent:      #3d7ef5;
+  --green:       #2dce89;
+  --red:         #f5365c;
+  --amber:       #f5a623;
+  --text:        #e2e6ef;
+  --text-2:      #8a94a8;
+  --text-3:      #4e5870;
+  --l1:          #00ccff;
+  --l2:          #ff66cc;
+  --gas:         #4fc3f7;
+  --recoat:      #ff9800;
+  --sans: system-ui,-apple-system,'Segoe UI',sans-serif;
+  --sb-w: 286px;
+}
+
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+header {
+  height: 46px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0;
+}
+
+.h-brand {
+  padding: 0 14px;
+  border-right: 1px solid var(--border);
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.h-brand h1 {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.h-machine {
+  flex: 1;
+  padding: 0 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  overflow: hidden;
+}
+
+#machineName {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#machineDetail {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.h-actions {
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-left: 1px solid var(--border);
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.btn {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 11px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-primary:hover { background: #5590ff; }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-2);
+  border-color: var(--border-hi);
+}
+.btn-ghost:hover { background: var(--surface-hi); color: var(--text); }
+
+input[type="file"] { display: none; }
+
+/* ── Layout ── */
+.main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sb-w);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.sb-section {
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sb-section h3 {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 5px 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-2);
+  user-select: none;
+}
+.toggle-row:hover { color: var(--text); }
+.toggle-row input[type="checkbox"] {
+  width: 13px; height: 13px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.swatch {
+  width: 11px; height: 11px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+select {
+  width: 100%;
+  background: var(--surface-hi);
+  border: 1px solid var(--border-hi);
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 7px;
+  border-radius: 3px;
+  margin: 3px 0 6px;
+}
+
+.range-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 5px 0;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.range-row label { min-width: 58px; }
+.range-row input[type="range"] { flex: 1; accent-color: var(--accent); }
+.range-row .val {
+  min-width: 44px;
+  text-align: right;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.colorbar {
+  height: 12px;
+  border-radius: 3px;
+  margin: 6px 0 3px;
+}
+
+.colorbar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  font-size: 11px;
+}
+.info-grid .ilabel { color: var(--text-3); }
+.info-grid .ivalue { color: var(--text-2); }
+
+.laser-card {
+  padding: 6px 8px;
+  background: rgba(255,255,255,0.025);
+  border-radius: 4px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.laser-card .lc-header {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.stat-pill {
+  background: var(--surface-hi);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 10px;
+  color: var(--text-3);
+}
+.stat-pill .sv {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-top: 1px;
+}
+
+/* ── Viewport ── */
+.viewport {
+  flex: 1;
+  position: relative;
+  background: #f0f2f5;
+  overflow: hidden;
+  cursor: grab;
+}
+.viewport.panning { cursor: grabbing; }
+
+#canvas {
+  position: absolute;
+  top: 0; left: 0;
+}
+
+/* ── Tooltip ── */
+.tooltip {
+  position: absolute;
+  background: rgba(14,16,22,0.97);
+  border: 1px solid var(--border-hi);
+  border-radius: 5px;
+  padding: 8px 10px;
+  font-size: 11px;
+  pointer-events: none;
+  display: none;
+  z-index: 200;
+  min-width: 190px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+}
+.tt-title { font-weight: 600; color: var(--text); margin-bottom: 5px; }
+.tt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-2);
+  margin: 2px 0;
+}
+.tt-row .pass { color: var(--green); }
+.tt-row .fail { color: var(--red); }
+.tt-sep { border-top: 1px solid var(--border); margin: 4px 0; }
+
+/* ── Empty state ── */
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: #999;
+}
+.empty-state .ei { font-size: 44px; margin-bottom: 12px; }
+.empty-state p { font-size: 14px; margin-bottom: 4px; }
+.empty-state small { font-size: 11px; color: #aaa; }
+
+/* ── Drop overlay ── */
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(61,126,245,0.07);
+  border: 2px dashed var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+  z-index: 300;
+}
+.drop-overlay.active { opacity: 1; }
+
+/* ── Status ── */
+#fileStatus { font-size: 11px; line-height: 1.7; }
+
+/* Scrollbar */
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-track { background: var(--surface); }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════ HEADER ══════════════════ -->
+<header>
+  <div class="h-brand">
+    <h1>Machine Config Viewer</h1>
+  </div>
+  <div class="h-machine">
+    <span id="machineName" style="color:var(--text-3)">No file loaded</span>
+    <span id="machineDetail"></span>
+  </div>
+  <div class="h-actions">
+    <button class="btn btn-primary" onclick="document.getElementById('h5Input').click()">Load H5</button>
+    <input type="file" id="h5Input" accept=".h5,.hdf5" onchange="handleH5(this.files[0]); this.value=''">
+
+    <button class="btn btn-ghost" onclick="document.getElementById('csvInput').click()">Load CSV</button>
+    <input type="file" id="csvInput" accept=".csv,.txt" onchange="handleCSV(this.files[0]); this.value=''">
+
+    <button class="btn btn-ghost" onclick="document.getElementById('tmfInput').click()">Load 3MF</button>
+    <input type="file" id="tmfInput" accept=".3mf" onchange="handle3MF(this.files[0]); this.value=''">
+
+    <button class="btn btn-ghost" onclick="resetView()">Reset View</button>
+  </div>
+</header>
+
+<!-- ══════════════════ MAIN ══════════════════ -->
+<div class="main">
+
+  <!-- ── Sidebar ── -->
+  <div class="sidebar">
+
+    <div class="sb-section">
+      <h3>Loaded Files</h3>
+      <div id="fileStatus" style="color:var(--text-3)">No files loaded. Drop files anywhere or use the buttons above.</div>
+    </div>
+
+    <div class="sb-section">
+      <h3>Layers</h3>
+      <label class="toggle-row">
+        <input type="checkbox" id="togGrid" checked onchange="render()">
+        <span class="swatch" style="background:#d0d0d0; border:1px solid #bbb;"></span>
+        Reference Grid
+      </label>
+      <label class="toggle-row">
+        <input type="checkbox" id="togPlate" checked onchange="render()">
+        <span class="swatch" style="background:#cccccc;"></span>
+        Build Plate
+      </label>
+      <label class="toggle-row">
+        <input type="checkbox" id="togCMM" checked onchange="render()">
+        <span class="swatch" style="background:linear-gradient(90deg,#00ff00,#ff0000); border-radius:2px;"></span>
+        CMM Measurements
+      </label>
+      <label class="toggle-row">
+        <input type="checkbox" id="togVec" onchange="render()">
+        <span class="swatch" style="background:#555;"></span>
+        Displacement Vectors
+      </label>
+      <label class="toggle-row">
+        <input type="checkbox" id="togScan" checked onchange="render()">
+        <span class="swatch" style="background:linear-gradient(90deg,var(--l1),var(--l2));"></span>
+        Scanner Fields
+      </label>
+      <label class="toggle-row">
+        <input type="checkbox" id="togGas" checked onchange="render()">
+        <span class="swatch" style="background:var(--gas);"></span>
+        Gas Flow Direction
+      </label>
+      <label class="toggle-row">
+        <input type="checkbox" id="togRecoat" checked onchange="render()">
+        <span class="swatch" style="background:var(--recoat);"></span>
+        Recoat Direction
+      </label>
+    </div>
+
+    <div class="sb-section">
+      <h3>CMM Data Assignment</h3>
+      <label style="font-size:11px; color:var(--text-3); display:block; margin-bottom:4px;">CSV applies to laser:</label>
+      <select id="csvLaserSel" onchange="onCSVLaserChange()" style="margin-bottom:4px;">
+        <option value="0">No offset — raw coordinates</option>
+      </select>
+      <div id="csvOffsetInfo" style="font-size:10px; color:var(--text-3); line-height:1.6;">Load H5 to assign CSV to a laser</div>
+    </div>
+
+    <div class="sb-section">
+      <h3>CMM Color Metric</h3>
+      <select id="metricSel" onchange="onMetricChange()">
+        <option value="magnitude">Position Error Magnitude |ΔXY|</option>
+        <option value="devX">X Deviation ΔX (absolute)</option>
+        <option value="devY">Y Deviation ΔY (absolute)</option>
+        <option value="devDia">Diameter Deviation ΔD (absolute)</option>
+        <option value="circ">Circularity</option>
+      </select>
+
+      <div class="colorbar" id="colorBar"
+        style="background:linear-gradient(90deg,#00ff00,#ffff00,#ff8800,#ff0000);">
+      </div>
+      <div class="colorbar-labels">
+        <span id="cbMin">0.000 mm</span>
+        <span id="cbMid">—</span>
+        <span id="cbMax">0.020 mm</span>
+      </div>
+
+      <div class="range-row" style="margin-top:6px;">
+        <label>Max (mm)</label>
+        <input type="range" id="rngMax" min="0.001" max="0.200" step="0.001" value="0.020"
+          oninput="S.colorMax=+this.value; syncColorBar(); render()">
+        <span class="val" id="valMax">0.020</span>
+      </div>
+      <div class="range-row">
+        <label>Dot size</label>
+        <input type="range" id="rngDot" min="2" max="12" step="0.5" value="5"
+          oninput="S.dotR=+this.value; document.getElementById('valDot').textContent=this.value; render()">
+        <span class="val" id="valDot">5</span>
+      </div>
+    </div>
+
+    <div class="sb-section">
+      <h3>Machine</h3>
+      <div class="info-grid">
+        <span class="ilabel">Model</span>      <span class="ivalue" id="iModel">—</span>
+        <span class="ilabel">Serial</span>     <span class="ivalue" id="iSerial">—</span>
+        <span class="ilabel">Plate Ø</span>    <span class="ivalue" id="iPlateDia">—</span>
+        <span class="ilabel">Gas Flow</span>   <span class="ivalue" id="iGas">—</span>
+        <span class="ilabel">Recoat</span>     <span class="ivalue" id="iRecoat">—</span>
+        <span class="ilabel">Exported</span>   <span class="ivalue" id="iDate">—</span>
+      </div>
+    </div>
+
+    <div class="sb-section">
+      <h3>Optical Trains</h3>
+      <div id="laserCards" style="color:var(--text-3); font-size:11px;">
+        Load an H5 file to view laser configuration.
+      </div>
+    </div>
+
+    <div class="sb-section">
+      <h3>CMM Statistics</h3>
+      <div id="statsGrid" class="stat-grid">
+        <div class="stat-pill">Circles<span class="sv">—</span></div>
+        <div class="stat-pill">Mean |ΔXY|<span class="sv">—</span></div>
+        <div class="stat-pill">Max |ΔXY|<span class="sv">—</span></div>
+        <div class="stat-pill">Max ΔX<span class="sv">—</span></div>
+        <div class="stat-pill">Max ΔY<span class="sv">—</span></div>
+        <div class="stat-pill">Pass (tol)<span class="sv">—</span></div>
+      </div>
+    </div>
+
+  </div><!-- /sidebar -->
+
+  <!-- ── Viewport ── -->
+  <div class="viewport" id="vp">
+    <canvas id="canvas"></canvas>
+    <div class="empty-state" id="emptyState">
+      <div class="ei">🔬</div>
+      <p>Load an H5 machine configuration file to begin</p>
+      <small>CSV and 3MF files are optional overlays — drop all files at once</small>
+    </div>
+    <div class="drop-overlay" id="dropOvl">Drop files here</div>
+    <div id="loadMsg" style="
+      position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+      background:rgba(20,23,32,0.9); color:#8a94a8; font-size:11px;
+      padding:5px 14px; border-radius:4px; border:1px solid #303858;
+      pointer-events:none; white-space:nowrap;
+    "></div>
+    <div class="tooltip" id="tt"></div>
+  </div>
+
+</div><!-- /main -->
+
+<script>
+'use strict';
+
+// ─────────────────────────────────────────────────────────────
+//  h5wasm loader — WebAssembly HDF5 (WASM embedded in JS bundle)
+//  Supports dense/fractal-heap attribute storage.
+//  Works from file:// — no separate .wasm fetch needed.
+// ─────────────────────────────────────────────────────────────
+const H5WASM_CDN = 'https://cdn.jsdelivr.net/npm/h5wasm@0.10.3/dist/iife/h5wasm.js';
+
+let _h5wasmReady   = false;
+let _h5wasmFS      = null;
+let _h5wasmDirMade = false;
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const el = document.createElement('script');
+    el.src     = src;
+    el.onload  = resolve;
+    el.onerror = () => reject(new Error('Failed to load ' + src));
+    document.head.appendChild(el);
+  });
+}
+
+async function ensureH5Wasm() {
+  if (_h5wasmReady) return;
+  setLoadMsg('Loading h5wasm…');
+  try {
+    await loadScript(H5WASM_CDN);
+  } catch (e) {
+    setLoadMsg('');
+    throw new Error('Could not load h5wasm from CDN.\n\nCheck your internet connection.\n\nError: ' + e.message);
+  }
+  if (typeof h5wasm === 'undefined') {
+    setLoadMsg('');
+    throw new Error('h5wasm did not initialise after script load.');
+  }
+  const { FS } = await h5wasm.ready;
+  _h5wasmFS = FS;
+  if (!_h5wasmDirMade) {
+    try { FS.mkdir('/work'); } catch {}
+    _h5wasmDirMade = true;
+  }
+  _h5wasmReady = true;
+  setLoadMsg('');
+}
+
+function setLoadMsg(msg) {
+  const el = document.getElementById('loadMsg');
+  if (el) el.textContent = msg;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  State
+// ─────────────────────────────────────────────────────────────
+const S = {
+  config:   null,   // parsed from H5
+  circles:  [],     // from CSV
+  plate3MF: null,   // from 3MF (optional)
+
+  // Viewport transform — origin at canvas centre, Y-up
+  scale: 3.0,  // px / mm
+  panX:  0,
+  panY:  0,
+
+  // Color scale
+  colorMax: 0.020,  // mm
+  dotR:     5,      // px
+
+  // CSV laser assignment (1-indexed; 0 = no offset)
+  csvLaserId: 0,
+
+  // Interaction
+  panning:     false,
+  lastX:       0,
+  lastY:       0,
+  hoverCircle: null,
+};
+
+// ─────────────────────────────────────────────────────────────
+//  Coordinate helpers
+// ─────────────────────────────────────────────────────────────
+const cvs = document.getElementById('canvas');
+const ctx = cvs.getContext('2d');
+
+function toC(wx, wy) {   // world mm → canvas px
+  return {
+    x: cvs.width  / 2 + wx * S.scale + S.panX,
+    y: cvs.height / 2 - wy * S.scale + S.panY,
+  };
+}
+function toW(cx, cy) {   // canvas px → world mm
+  return {
+    x:  (cx - cvs.width  / 2 - S.panX) / S.scale,
+    y: -(cy - cvs.height / 2 - S.panY) / S.scale,
+  };
+}
+function px(mm) { return mm * S.scale; }
+
+// ─────────────────────────────────────────────────────────────
+//  H5 Loading
+// ─────────────────────────────────────────────────────────────
+async function handleH5(file) {
+  if (!file) return;
+
+  setMsg('Loading ' + file.name + '…');
+  try {
+    await ensureH5Wasm();
+  } catch (e) {
+    alert(e.message);
+    setMsg('');
+    return;
+  }
+
+  let h5f = null;
+  try {
+    const buf   = await file.arrayBuffer();
+    const fname = '/work/cfg.h5';
+    try { _h5wasmFS.unlink(fname); } catch {}
+    _h5wasmFS.writeFile(fname, new Uint8Array(buf));
+
+    h5f      = new h5wasm.File(fname, 'r');
+    S.config = readH5(h5f);
+
+    updateMachineUI();
+    document.getElementById('emptyState').style.display = 'none';
+    resetView();
+    updateFileStatus();
+    setMsg('');
+  } catch (e) {
+    console.error(e);
+    alert('Error reading H5 file:\n' + e.message);
+    setMsg('');
+  } finally {
+    if (h5f) { try { h5f.close(); } catch {} }
+  }
+}
+
+function attr(node, key, def = null) {
+  // h5wasm wraps each attribute value in an object with a .value property
+  try {
+    if (!node || !node.attrs) return def;
+    const attrObj = node.attrs[key];
+    if (attrObj === undefined || attrObj === null) return def;
+    let v = (attrObj !== null && typeof attrObj === 'object' && 'value' in attrObj)
+      ? attrObj.value
+      : attrObj;
+    if (v === undefined || v === null) return def;
+    // Unwrap single-element typed / regular arrays to plain scalar
+    if (ArrayBuffer.isView(v) && v.length === 1) v = v[0];
+    if (Array.isArray(v) && v.length === 1) v = v[0];
+    return v;
+  } catch { return def; }
+}
+
+// h5wasm supports full slash-separated paths natively via root.get()
+function h5get(root, path) {
+  if (!root) return null;
+  try {
+    const node = root.get(path);
+    return (node !== null && node !== undefined) ? node : null;
+  } catch { return null; }
+}
+
+function readH5(f) {
+  const cfg = {};
+
+  // Root metadata
+  cfg.machineName  = attr(f, 'machine_name', '');
+  cfg.manufacturer = attr(f, 'manufacturer', '');
+  cfg.model        = attr(f, 'model', '');
+  cfg.serial       = attr(f, 'serial_number', '');
+  cfg.exportDate   = attr(f, 'Export_Date', '');
+
+  // Machine group
+  const mach = h5get(f, 'Machine');
+  if (!mach) return cfg;
+
+  cfg.plateDimX    = attr(mach, 'Build_Plate_X_Dimension', 250);
+  cfg.plateDimY    = attr(mach, 'Build_Plate_Y_Dimension', 250);
+  cfg.plateRadius  = attr(mach, 'Build_Plate_Corner_Radius', 125);
+  cfg.gasFlow      = attr(mach, 'Gas_Flow_Direction', 'Y+');
+  cfg.recoat       = attr(mach, 'Recoat_Direction', 'X+');
+
+  // Optical trains
+  cfg.lasers = [];
+  for (let i = 1; i <= 6; i++) {
+    const tPath = `Machine/Optical_Trains/Optical_Train_0${i}`;
+    const train = h5get(f, tPath);
+    if (!train) break;
+
+    const laser = { index: i };
+    laser.beamMajor  = attr(train, 'Beam_Waist_Major',  null);
+    laser.beamMinor  = attr(train, 'Beam_Waist_Minor',  null);
+    laser.m2Major    = attr(train, 'M2_Major',           null);
+    laser.m2Minor    = attr(train, 'M2_Minor',           null);
+
+    // Light source
+    const ls = h5get(f, tPath + '/Light_Source');
+    if (ls) {
+      laser.lsManufacturer = attr(ls, 'Manufacturer', '');
+      laser.lsModel        = attr(ls, 'Model', '');
+      laser.powerMax       = attr(ls, 'Power_Max_Nominal', null);
+      laser.wavelength     = attr(ls, 'Light_Wavelength', null);
+    }
+
+    // Scanner — head offset lives here
+    const sc = h5get(f, tPath + '/Scanner');
+    if (sc) {
+      laser.scanFieldX   = attr(sc, 'Scan_Field_Size_X', 600);
+      laser.scanFieldY   = attr(sc, 'Scan_Field_Size_Y', 600);
+      laser.headOffsetX  = attr(sc, 'Scan_Head_Offset_X', null);
+      laser.headOffsetY  = attr(sc, 'Scan_Head_Offset_Y', null);
+      laser.headRotation = attr(sc, 'Scan_Head_Rotation', 0);
+      laser.scanModel    = attr(sc, 'Model', '');
+      laser.workDist     = attr(sc, 'Working_Distance', null);
+    }
+
+    cfg.lasers.push(laser);
+  }
+
+  return cfg;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  CSV Loading
+// ─────────────────────────────────────────────────────────────
+async function handleCSV(file) {
+  if (!file) return;
+  setMsg('Parsing CSV…');
+  const text = await file.text();
+  S.circles = parseCSV(text);
+  autoRange();
+  updateStats();
+  render();
+  updateFileStatus();
+  setMsg('');
+}
+
+function parseCSV(text) {
+  const out = [];
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line === ':BEGIN' || line === ':END') continue;
+
+    // Each line = 4 measurement segments separated by ',,'
+    const segs = line.split(',,');
+    if (segs.length < 2) continue;
+
+    const data = {};
+    let num = null;
+
+    for (const seg of segs) {
+      const parts = csvFields(seg);
+      if (parts.length < 2) continue;
+
+      const m = parts[0].match(/^Circle\s+(\d+):\s+(.+)$/);
+      if (!m) continue;
+      if (num === null) num = parseInt(m[1], 10);
+
+      const key = m[2].trim();
+      data[key] = {
+        actual:  parseFloat(parts[1]) || 0,
+        nominal: parseFloat(parts[2]) || 0,
+        dev:     parseFloat(parts[5]) || 0,
+      };
+    }
+
+    if (num === null || !data['Center X'] || !data['Center Y']) continue;
+
+    const cx = data['Center X'];
+    const cy = data['Center Y'];
+    const cd = data['Diameter']     || { actual:0, nominal:0, dev:0 };
+    const cc = data['Circularity']  || { actual:0, nominal:0, dev:0 };
+
+    out.push({
+      id:        num,
+      nomX:      cx.nominal,
+      nomY:      cy.nominal,
+      actX:      cx.actual,
+      actY:      cy.actual,
+      devX:      cx.dev,
+      devY:      cy.dev,
+      magnitude: Math.sqrt(cx.dev * cx.dev + cy.dev * cy.dev),
+      actDia:    cd.actual,
+      nomDia:    cd.nominal,
+      devDia:    cd.dev,
+      circ:      cc.actual,
+    });
+  }
+  return out;
+}
+
+function csvFields(seg) {
+  // Simple CSV parser (handles quoted strings)
+  const result = [];
+  let cur = '';
+  let inQ = false;
+  for (const c of seg) {
+    if (c === '"') { inQ = !inQ; }
+    else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
+    else { cur += c; }
+  }
+  result.push(cur.trim());
+  return result;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  3MF Loading
+// ─────────────────────────────────────────────────────────────
+async function handle3MF(file) {
+  if (!file) return;
+  try {
+    const zip  = await JSZip.loadAsync(file);
+    let modelF = null;
+    zip.forEach((path, f) => {
+      if (!f.dir && path.match(/\.model$/i)) modelF = f;
+    });
+    if (!modelF) { console.warn('No .model found in 3MF'); updateFileStatus(); return; }
+
+    const xml = await modelF.async('text');
+    S.plate3MF = parse3MFTopFace(xml);
+    render();
+    updateFileStatus();
+  } catch (e) {
+    console.error('3MF parse error:', e);
+  }
+}
+
+function parse3MFTopFace(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const vNodes = doc.querySelectorAll('vertex');
+  if (!vNodes.length) return null;
+
+  const verts = Array.from(vNodes).map(v => ({
+    x: parseFloat(v.getAttribute('x')) || 0,
+    y: parseFloat(v.getAttribute('y')) || 0,
+    z: parseFloat(v.getAttribute('z')) || 0,
+  }));
+
+  // Centre the model
+  const xs = verts.map(v=>v.x), ys = verts.map(v=>v.y);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const maxZ = Math.max(...verts.map(v=>v.z));
+
+  // Top face vertices, centred, sorted by angle for polygon
+  const top = verts
+    .filter(v => v.z >= maxZ - 1)
+    .map(v => ({ x: v.x - cx, y: v.y - cy }))
+    .sort((a, b) => Math.atan2(a.y, a.x) - Math.atan2(b.y, b.x));
+
+  return top.length > 2 ? top : null;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Rendering
+// ─────────────────────────────────────────────────────────────
+function render() {
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  // Viewport background
+  ctx.fillStyle = '#eff1f5';
+  ctx.fillRect(0, 0, cvs.width, cvs.height);
+
+  if (!S.config) return;
+
+  const R = S.config.plateRadius;   // plate radius in mm
+
+  if (document.getElementById('togGrid').checked)   drawGrid(R);
+  if (document.getElementById('togPlate').checked)  drawPlate(R);
+  if (document.getElementById('togScan').checked)   drawScanners();
+  if (document.getElementById('togCMM').checked && S.circles.length)  drawDots();
+  if (document.getElementById('togVec').checked && S.circles.length)  drawVectors();
+  if (document.getElementById('togGas').checked)    drawArrow(S.config.gasFlow,   '#2196F3', 'Gas Flow', R, 0);
+  if (document.getElementById('togRecoat').checked) drawArrow(S.config.recoat,    '#E65100', 'Recoat',   R, 1);
+}
+
+// ── Grid ──
+function drawGrid(R) {
+  const step = 10;
+  const ext  = R * 2.2;
+  ctx.save();
+  ctx.lineWidth = 0.5;
+
+  for (let w = -ext; w <= ext; w += step) {
+    const isAxis = w === 0;
+    ctx.strokeStyle = isAxis ? '#b0b0b0' : '#dde0e6';
+    ctx.lineWidth   = isAxis ? 1 : 0.5;
+
+    const a = toC(w, -ext), b = toC(w, ext);
+    if (a.x >= -60 && a.x <= cvs.width + 60) {
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+
+    const c = toC(-ext, w), d = toC(ext, w);
+    if (c.y >= -60 && c.y <= cvs.height + 60) {
+      ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(d.x, d.y); ctx.stroke();
+    }
+  }
+
+  // Axis tick labels
+  ctx.fillStyle = '#aaa';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  for (let w = -ext; w <= ext; w += 50) {
+    if (w === 0) continue;
+    const p = toC(w, 0);
+    if (p.x > 20 && p.x < cvs.width - 20) ctx.fillText(w, p.x, p.y + 11);
+  }
+  ctx.textAlign = 'right';
+  for (let w = -ext; w <= ext; w += 50) {
+    if (w === 0) continue;
+    const p = toC(0, w);
+    if (p.y > 10 && p.y < cvs.height - 10) ctx.fillText(w, p.x - 5, p.y + 3);
+  }
+  ctx.restore();
+}
+
+// ── Build plate ──
+function drawPlate(R) {
+  const c = toC(0, 0);
+  const rp = px(R);
+
+  ctx.save();
+
+  if (S.plate3MF) {
+    // Polygon from 3MF
+    ctx.beginPath();
+    const first = toC(S.plate3MF[0].x, S.plate3MF[0].y);
+    ctx.moveTo(first.x, first.y);
+    for (let i = 1; i < S.plate3MF.length; i++) {
+      const p = toC(S.plate3MF[i].x, S.plate3MF[i].y);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.closePath();
+  } else {
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, rp, 0, Math.PI * 2);
+  }
+
+  ctx.fillStyle   = 'rgba(255,255,255,0.90)';
+  ctx.fill();
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth   = 1.5;
+  ctx.stroke();
+
+  // Centre mark
+  ctx.strokeStyle = '#bbb';
+  ctx.lineWidth   = 1;
+  const cs = 6;
+  ctx.beginPath();
+  ctx.moveTo(c.x - cs, c.y); ctx.lineTo(c.x + cs, c.y);
+  ctx.moveTo(c.x, c.y - cs); ctx.lineTo(c.x, c.y + cs);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ── Scanner fields ──
+function drawScanners() {
+  if (!S.config.lasers) return;
+  const COLORS = ['#00ccff', '#ff66cc', '#44ff88', '#ffaa00'];
+
+  S.config.lasers.forEach((laser, idx) => {
+    if (laser.headOffsetX == null) return;
+    const col = COLORS[idx % COLORS.length];
+    const ox  = laser.headOffsetX;
+    const oy  = laser.headOffsetY;
+    const sfx = laser.scanFieldX || 600;
+    const sfy = laser.scanFieldY || 600;
+
+    ctx.save();
+
+    // Scan field rectangle (dashed)
+    const tl = toC(ox - sfx / 2, oy + sfy / 2);
+    const br = toC(ox + sfx / 2, oy - sfy / 2);
+    ctx.setLineDash([7, 4]);
+    ctx.strokeStyle  = col;
+    ctx.lineWidth    = 1;
+    ctx.globalAlpha  = 0.40;
+    ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+    ctx.globalAlpha  = 0.04;
+    ctx.fillStyle    = col;
+    ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+    ctx.setLineDash([]);
+    ctx.globalAlpha  = 1;
+
+    // Head position crosshair
+    const hp = toC(ox, oy);
+    const sz = 9;
+    ctx.strokeStyle = col;
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(hp.x - sz, hp.y); ctx.lineTo(hp.x + sz, hp.y);
+    ctx.moveTo(hp.x, hp.y - sz); ctx.lineTo(hp.x, hp.y + sz);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(hp.x, hp.y, sz * 0.65, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Label
+    ctx.fillStyle = col;
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`L${idx + 1}  (${ox.toFixed(1)}, ${oy.toFixed(1)}) mm`, hp.x + sz + 5, hp.y + 4);
+
+    ctx.restore();
+  });
+}
+
+// ── CMM dots ──
+function metricVal(c) {
+  switch (document.getElementById('metricSel').value) {
+    case 'magnitude': return c.magnitude;
+    case 'devX':      return Math.abs(c.devX);
+    case 'devY':      return Math.abs(c.devY);
+    case 'devDia':    return Math.abs(c.devDia);
+    case 'circ':      return c.circ;
+    default:          return c.magnitude;
+  }
+}
+
+function valToColor(v) {
+  const t = Math.min(Math.max(v / S.colorMax, 0), 1);
+  let r, g;
+  if (t < 0.5) {
+    r = Math.round(t * 2 * 255);
+    g = 255;
+  } else {
+    r = 255;
+    g = Math.round((1 - (t - 0.5) * 2) * 255);
+  }
+  return `rgb(${r},${g},0)`;
+}
+
+function getCSVOffset() {
+  if (!S.config || !S.config.lasers || S.csvLaserId === 0) return { x: 0, y: 0 };
+  const laser = S.config.lasers[S.csvLaserId - 1];
+  if (!laser) return { x: 0, y: 0 };
+  return { x: laser.headOffsetX || 0, y: laser.headOffsetY || 0 };
+}
+
+function drawDots() {
+  const R   = S.config.plateRadius;
+  const r   = S.dotR;
+  const off = getCSVOffset();
+
+  for (const c of S.circles) {
+    const wx = c.nomX + off.x;
+    const wy = c.nomY + off.y;
+    const p  = toC(wx, wy);
+    if (p.x < -30 || p.x > cvs.width + 30 || p.y < -30 || p.y > cvs.height + 30) continue;
+
+    const outside = (wx * wx + wy * wy) > R * R;
+    const val = metricVal(c);
+    const col = valToColor(val);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+
+    if (outside) {
+      ctx.globalAlpha  = 0.5;
+      ctx.strokeStyle  = col;
+      ctx.lineWidth    = 1.5;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle   = col;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+      ctx.lineWidth   = 0.5;
+      ctx.stroke();
+    }
+
+    // Hover ring
+    if (S.hoverCircle && S.hoverCircle.id === c.id) {
+      ctx.globalAlpha  = 1;
+      ctx.strokeStyle  = '#222';
+      ctx.lineWidth    = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+}
+
+// ── Displacement vectors ──
+function drawVectors() {
+  const AMP = 300;
+  const off = getCSVOffset();
+
+  ctx.save();
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth   = 0.8;
+
+  for (const c of S.circles) {
+    if (c.magnitude < 0.0005) continue;
+    const wx = c.nomX + off.x;
+    const wy = c.nomY + off.y;
+    const s  = toC(wx, wy);
+    const e  = toC(wx + c.devX * AMP, wy + c.devY * AMP);
+    const len = Math.hypot(e.x - s.x, e.y - s.y);
+    if (len < 1.5) continue;
+
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.lineTo(e.x, e.y);
+    ctx.stroke();
+
+    const ang = Math.atan2(e.y - s.y, e.x - s.x);
+    const ah  = 5;
+    ctx.beginPath();
+    ctx.moveTo(e.x, e.y);
+    ctx.lineTo(e.x - ah * Math.cos(ang - 0.45), e.y - ah * Math.sin(ang - 0.45));
+    ctx.lineTo(e.x - ah * Math.cos(ang + 0.45), e.y - ah * Math.sin(ang + 0.45));
+    ctx.closePath();
+    ctx.fillStyle = '#333';
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// ── Direction arrows ──
+// idx=0 gas flow, idx=1 recoat — offset laterally so they don't overlap
+function drawArrow(dir, color, label, R, idx) {
+  if (!dir) return;
+
+  const margin = R + 18;        // mm from centre
+  const len    = 22;            // arrow length in mm
+  const lat    = idx * 15;      // lateral offset mm
+
+  let sx, sy, ex, ey;
+  switch (dir) {
+    case 'X+': sx = -len/2; sy = -(margin + lat); ex = len/2; ey = sy; break;
+    case 'X-': sx =  len/2; sy = -(margin + lat); ex =-len/2; ey = sy; break;
+    case 'Y+': sx = -(margin + lat); sy = -len/2; ex = sx; ey = len/2; break;
+    case 'Y-': sx = -(margin + lat); sy =  len/2; ex = sx; ey =-len/2; break;
+    default: return;
+  }
+
+  const s = toC(sx, sy);
+  const e = toC(ex, ey);
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle   = color;
+  ctx.lineWidth   = 2.5;
+
+  ctx.beginPath();
+  ctx.moveTo(s.x, s.y);
+  ctx.lineTo(e.x, e.y);
+  ctx.stroke();
+
+  const ang = Math.atan2(e.y - s.y, e.x - s.x);
+  const ah  = 10;
+  ctx.beginPath();
+  ctx.moveTo(e.x, e.y);
+  ctx.lineTo(e.x - ah * Math.cos(ang - 0.40), e.y - ah * Math.sin(ang - 0.40));
+  ctx.lineTo(e.x - ah * Math.cos(ang + 0.40), e.y - ah * Math.sin(ang + 0.40));
+  ctx.closePath();
+  ctx.fill();
+
+  // Label centred beside the arrow
+  const mx = (s.x + e.x) / 2;
+  const my = (s.y + e.y) / 2;
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'center';
+
+  // Offset label perpendicular to arrow direction
+  const perpX = -Math.sin(ang) * 14;
+  const perpY =  Math.cos(ang) * 14;
+  ctx.fillText(`${label} (${dir})`, mx + perpX, my + perpY);
+
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Viewport interaction
+// ─────────────────────────────────────────────────────────────
+function resetView() {
+  const R = S.config ? S.config.plateRadius : 125;
+  const side = Math.min(cvs.width, cvs.height);
+  S.scale = side * 0.42 / R;
+  S.panX  = 0;
+  S.panY  = 0;
+  render();
+}
+
+const vp = document.getElementById('vp');
+
+vp.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const rect = cvs.getBoundingClientRect();
+  const mx   = e.clientX - rect.left;
+  const my   = e.clientY - rect.top;
+  const wx   =  (mx - cvs.width  / 2 - S.panX) / S.scale;
+  const wy   = -(my - cvs.height / 2 - S.panY) / S.scale;
+  S.scale   *= factor;
+  S.panX     = mx - cvs.width  / 2 - wx * S.scale;
+  S.panY     = my - cvs.height / 2 + wy * S.scale;
+  render();
+}, { passive: false });
+
+vp.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  S.panning = true;
+  S.lastX   = e.clientX;
+  S.lastY   = e.clientY;
+  vp.classList.add('panning');
+});
+
+window.addEventListener('mousemove', e => {
+  if (S.panning) {
+    S.panX += e.clientX - S.lastX;
+    S.panY += e.clientY - S.lastY;
+    S.lastX = e.clientX;
+    S.lastY = e.clientY;
+    render();
+  }
+
+  if (S.circles.length) {
+    const rect = cvs.getBoundingClientRect();
+    const mx   = e.clientX - rect.left;
+    const my   = e.clientY - rect.top;
+    const HITPX = S.dotR + 4;
+    let best = null, bestD = HITPX;
+    const off = getCSVOffset();
+
+    for (const c of S.circles) {
+      const p = toC(c.nomX + off.x, c.nomY + off.y);
+      const d = Math.hypot(p.x - mx, p.y - my);
+      if (d < bestD) { best = c; bestD = d; }
+    }
+
+    const prev = S.hoverCircle;
+    S.hoverCircle = best;
+    if (best !== prev) render();
+
+    best ? showTT(e, best) : hideTT();
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  S.panning = false;
+  vp.classList.remove('panning');
+});
+
+// ─────────────────────────────────────────────────────────────
+//  Tooltip
+// ─────────────────────────────────────────────────────────────
+function showTT(e, c) {
+  const tt   = document.getElementById('tt');
+  const rect = cvs.getBoundingClientRect();
+  const mx   = e.clientX - rect.left;
+  const my   = e.clientY - rect.top;
+  const tol  = 0.050; // mm positional tolerance (from CSV)
+  const mag  = c.magnitude;
+
+  function row(label, val, pass) {
+    const cls = pass === true ? 'pass' : pass === false ? 'fail' : '';
+    return `<div class="tt-row"><span>${label}</span><span class="${cls}">${val}</span></div>`;
+  }
+
+  const off = getCSVOffset();
+  const plateX = c.nomX + off.x;
+  const plateY = c.nomY + off.y;
+  const offsetActive = (off.x !== 0 || off.y !== 0);
+
+  tt.innerHTML = `
+    <div class="tt-title">Circle ${c.id}</div>
+    ${offsetActive ? row('Scanner coord', `(${c.nomX.toFixed(1)}, ${c.nomY.toFixed(1)}) mm`) : ''}
+    ${row(offsetActive ? 'Plate coord' : 'Nominal', `(${plateX.toFixed(1)}, ${plateY.toFixed(1)}) mm`)}
+    ${row('Actual',  `(${c.actX.toFixed(3)}, ${c.actY.toFixed(3)}) mm`)}
+    <div class="tt-sep"></div>
+    ${row('ΔX', fmm(c.devX, true), Math.abs(c.devX) <= tol)}
+    ${row('ΔY', fmm(c.devY, true), Math.abs(c.devY) <= tol)}
+    ${row('|ΔXY|', fmm(mag), mag <= tol * Math.SQRT2)}
+    <div class="tt-sep"></div>
+    ${row('ΔDiameter', fmm(c.devDia, true))}
+    ${row('Circularity', c.circ.toFixed(4) + ' mm', c.circ <= 0.100)}
+  `;
+
+  let tx = mx + 14, ty = my - 10;
+  if (tx + 205 > cvs.width) tx = mx - 218;
+  if (ty + 210 > cvs.height) ty = my - 220;
+  tt.style.left    = tx + 'px';
+  tt.style.top     = ty + 'px';
+  tt.style.display = 'block';
+}
+
+function hideTT() {
+  document.getElementById('tt').style.display = 'none';
+}
+
+function fmm(v, signed = false) {
+  const s = signed && v >= 0 ? '+' : '';
+  return s + v.toFixed(4) + ' mm';
+}
+
+// ─────────────────────────────────────────────────────────────
+//  UI helpers
+// ─────────────────────────────────────────────────────────────
+function updateMachineUI() {
+  const c = S.config;
+  if (!c) return;
+
+  document.getElementById('machineName').textContent  = c.machineName || 'Unknown Machine';
+  document.getElementById('machineName').style.color  = 'var(--text)';
+  document.getElementById('machineDetail').textContent =
+    [c.manufacturer, c.model, c.serial ? 'S/N ' + c.serial : ''].filter(Boolean).join(' · ');
+
+  document.getElementById('iModel').textContent   = c.model    || '—';
+  document.getElementById('iSerial').textContent  = c.serial   || '—';
+  document.getElementById('iPlateDia').textContent = c.plateRadius ? (c.plateRadius * 2) + ' mm (Ø)' : '—';
+  document.getElementById('iGas').textContent     = c.gasFlow  || '—';
+  document.getElementById('iRecoat').textContent  = c.recoat   || '—';
+  document.getElementById('iDate').textContent    = c.exportDate
+    ? new Date(c.exportDate).toLocaleDateString()
+    : '—';
+
+  // Laser cards
+  const LCOLORS = ['var(--l1)', 'var(--l2)', '#44ff88', '#ffaa00'];
+  const html = (c.lasers || []).map((l, i) => {
+    const col = LCOLORS[i % LCOLORS.length];
+    const rows = [
+      ['Head offset', l.headOffsetX != null ? `(${l.headOffsetX.toFixed(1)}, ${l.headOffsetY.toFixed(1)}) mm` : '—'],
+      ['Scan field',  l.scanFieldX  != null ? `${l.scanFieldX} × ${l.scanFieldY} mm` : '—'],
+      ['Rotation',    l.headRotation != null ? l.headRotation + '°' : '—'],
+      ['Power',       l.powerMax    != null ? l.powerMax + ' W' : '—'],
+      ['Spot major',  l.beamMajor   != null ? l.beamMajor.toFixed(1) + ' μm' : '—'],
+      ['Spot minor',  l.beamMinor   != null ? l.beamMinor.toFixed(1) + ' μm' : '—'],
+      ['M² major',    l.m2Major     != null ? l.m2Major.toFixed(3) : '—'],
+    ].filter(r => r[1] !== '—');
+
+    return `<div class="laser-card" style="border-left:2px solid ${col}">
+      <div class="lc-header" style="color:${col}">Laser ${i + 1}${l.lsModel ? ' — ' + l.lsModel : ''}</div>
+      ${rows.map(r => `<div>${r[0]}: <span style="color:var(--text-2)">${r[1]}</span></div>`).join('')}
+    </div>`;
+  }).join('');
+
+  document.getElementById('laserCards').innerHTML = html || '<span style="color:var(--text-3)">No lasers found in file.</span>';
+
+  populateCSVLaserSelector();
+}
+
+function populateCSVLaserSelector() {
+  const sel = document.getElementById('csvLaserSel');
+  if (!sel) return;
+  const prev = S.csvLaserId;
+  sel.innerHTML = '<option value="0">No offset — raw coordinates</option>';
+  if (S.config && S.config.lasers) {
+    S.config.lasers.forEach((l, i) => {
+      const ox  = l.headOffsetX != null ? l.headOffsetX.toFixed(1) : '?';
+      const oy  = l.headOffsetY != null ? l.headOffsetY.toFixed(1) : '?';
+      const opt = document.createElement('option');
+      opt.value       = i + 1;
+      opt.textContent = `Laser ${i + 1}  —  offset (${ox}, ${oy}) mm`;
+      sel.appendChild(opt);
+    });
+  }
+  sel.value = prev;
+  updateCSVOffsetInfo();
+}
+
+function onCSVLaserChange() {
+  S.csvLaserId = parseInt(document.getElementById('csvLaserSel').value, 10);
+  updateCSVOffsetInfo();
+  autoRange();
+  render();
+}
+
+function updateCSVOffsetInfo() {
+  const el = document.getElementById('csvOffsetInfo');
+  if (!el) return;
+  if (S.csvLaserId === 0) {
+    el.textContent = 'Dots plotted at raw CSV nominal positions';
+    return;
+  }
+  const off = getCSVOffset();
+  const laser = S.config && S.config.lasers && S.config.lasers[S.csvLaserId - 1];
+  const label = laser && laser.lsModel ? laser.lsModel : `Laser ${S.csvLaserId}`;
+  el.textContent = `${label}: shifted by (${off.x.toFixed(2)}, ${off.y.toFixed(2)}) mm`;
+}
+
+function updateStats() {
+  if (!S.circles.length) return;
+  const mags  = S.circles.map(c => c.magnitude);
+  const devXs = S.circles.map(c => Math.abs(c.devX));
+  const devYs = S.circles.map(c => Math.abs(c.devY));
+  const mean  = mags.reduce((a,b) => a+b, 0) / mags.length;
+  const passN = S.circles.filter(c => Math.abs(c.devX) <= 0.05 && Math.abs(c.devY) <= 0.05).length;
+
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat-pill">Circles<span class="sv">${S.circles.length}</span></div>
+    <div class="stat-pill">Mean |ΔXY|<span class="sv">${(mean*1000).toFixed(1)} μm</span></div>
+    <div class="stat-pill">Max |ΔXY|<span class="sv">${(Math.max(...mags)*1000).toFixed(1)} μm</span></div>
+    <div class="stat-pill">Max ΔX<span class="sv">${(Math.max(...devXs)*1000).toFixed(1)} μm</span></div>
+    <div class="stat-pill">Max ΔY<span class="sv">${(Math.max(...devYs)*1000).toFixed(1)} μm</span></div>
+    <div class="stat-pill">Pass (±50μm)<span class="sv">${passN}/${S.circles.length}</span></div>
+  `;
+}
+
+function autoRange() {
+  if (!S.circles.length) return;
+  const vals = S.circles.map(c => metricVal(c));
+  S.colorMax = Math.max(...vals) * 1.05;
+  const el = document.getElementById('rngMax');
+  if (S.colorMax > parseFloat(el.max)) el.max = S.colorMax * 1.5;
+  el.value = S.colorMax.toFixed(4);
+  syncColorBar();
+}
+
+function syncColorBar() {
+  const v = S.colorMax;
+  document.getElementById('valMax').textContent = v.toFixed(4);
+  document.getElementById('cbMax').textContent  = (v * 1000).toFixed(1) + ' μm';
+  document.getElementById('cbMid').textContent  = (v * 500).toFixed(1)  + ' μm';
+  document.getElementById('cbMin').textContent  = '0 μm';
+}
+
+function onMetricChange() {
+  autoRange();
+  render();
+}
+
+function updateFileStatus() {
+  const parts = [];
+  if (S.config)        parts.push(`<span style="color:var(--green)">✓ H5</span> — ${S.config.machineName}`);
+  if (S.circles.length) parts.push(`<span style="color:var(--green)">✓ CSV</span> — ${S.circles.length} circles`);
+  if (S.plate3MF)       parts.push(`<span style="color:var(--green)">✓ 3MF</span> — plate geometry loaded`);
+  document.getElementById('fileStatus').innerHTML =
+    parts.length ? parts.join('<br>') : 'No files loaded.';
+}
+
+function setMsg(m) {
+  if (m) console.log(m);
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Drag-and-drop
+// ─────────────────────────────────────────────────────────────
+const dropOvl = document.getElementById('dropOvl');
+document.body.addEventListener('dragover', e => { e.preventDefault(); dropOvl.classList.add('active'); });
+document.body.addEventListener('dragleave', e => { if (!e.relatedTarget) dropOvl.classList.remove('active'); });
+document.body.addEventListener('drop', e => {
+  e.preventDefault();
+  dropOvl.classList.remove('active');
+  for (const f of e.dataTransfer.files) {
+    const n = f.name.toLowerCase();
+    if (n.endsWith('.h5') || n.endsWith('.hdf5')) handleH5(f);
+    else if (n.endsWith('.csv') || n.endsWith('.txt')) handleCSV(f);
+    else if (n.endsWith('.3mf')) handle3MF(f);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+//  Resize & init
+// ─────────────────────────────────────────────────────────────
+function resizeCvs() {
+  cvs.width  = vp.clientWidth;
+  cvs.height = vp.clientHeight;
+  render();
+}
+
+window.addEventListener('resize', resizeCvs);
+
+// Sync colour bar labels to initial slider value
+syncColorBar();
+resizeCvs();
+</script>
+</body>
+</html>

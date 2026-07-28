@@ -1,0 +1,109 @@
+name: Cross-Language Check
+
+# Runs after any change that could affect correctness across language
+# implementations: Python source, Rust source, shared fixtures, schema, or
+# the cross-check script itself.
+#
+# Languages active now: python, rust
+# To add nodejs/cpp: uncomment the relevant RUNNERS entry in
+# tools/cross_check.py — no changes needed here.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "python/**"
+      - "rust/**"
+      - "fixtures/**"
+      - "schema/**"
+      - "tools/cross_check.py"
+      - ".github/workflows/cross_check.yml"
+  pull_request:
+    paths:
+      - "python/**"
+      - "rust/**"
+      - "fixtures/**"
+      - "schema/**"
+      - "tools/cross_check.py"
+      - ".github/workflows/cross_check.yml"
+
+jobs:
+  cross_check:
+    name: Cross-Language Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONUTF8: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Python
+      # -----------------------------------------------------------------------
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python package and cross-check dependencies
+        # machine_config ships jsonschema as a regular dep; deepdiff is extra
+        run: pip install -e "python/[dev]" deepdiff
+
+      # -----------------------------------------------------------------------
+      # Rust  (no apt-get — hdf5-metno links libhdf5 statically)
+      # -----------------------------------------------------------------------
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build Rust release binary
+        run: cargo build --release
+        working-directory: rust
+
+      # -----------------------------------------------------------------------
+      # Cross-check
+      # -----------------------------------------------------------------------
+      - name: Phase 1 — Schema validation
+        run: python tools/cross_check.py --langs python,rust --skip-read-parity --skip-write-interop --verbose
+
+      - name: Phase 2 — Read parity (all fixtures)
+        run: python tools/cross_check.py --langs python,rust --skip-schema --skip-write-interop --verbose
+
+      - name: Phase 3 — Write interoperability
+        run: python tools/cross_check.py --langs python,rust --skip-schema --skip-read-parity --verbose
+
+      - name: Phase 4 — Correction data hash parity
+        run: python tools/cross_check.py --langs python,rust --skip-schema --skip-read-parity --skip-write-interop --verbose
+
+      # Upload both outputs so developers can diff them manually if a check fails.
+      - name: Export Python JSON artifact
+        if: always()
+        shell: bash
+        run: machine-config export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/python_output.json"
+
+      - name: Export Rust JSON artifact
+        if: always()
+        shell: bash
+        run: |
+          bin="rust/target/release/machine-config-cli"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="${bin}.exe"
+          "${bin}" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output_xcheck.json"
+
+      - name: Upload language outputs for manual inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-check-outputs-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/python_output.json
+            ${{ runner.temp }}/rust_output_xcheck.json
+          retention-days: 14

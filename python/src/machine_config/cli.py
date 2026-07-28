@@ -232,6 +232,37 @@ def build(yaml_path: str | None, mock: bool, lasers: int, output: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# correction-hash
+# ---------------------------------------------------------------------------
+
+@main.command(name="correction-hash")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--train", default=0, show_default=True, help="0-indexed optical train number.")
+@click.option("--inverse", is_flag=True, default=False, help="Hash the inverse correction grid.")
+def correction_hash(path: str, train: int, inverse: bool) -> None:
+    """Print the SHA-256 hash of a ClearBox correction grid.
+
+    Values are hashed as flat little-endian float64 bytes, making the digest
+    directly comparable with the Rust ``correction-hash`` command.
+    """
+    import hashlib
+    import numpy as np  # noqa: PLC0415
+    try:
+        reader = MachineConfigReader(path)
+        arr: np.ndarray = (
+            reader.get_inverse_correction_data(train)
+            if inverse
+            else reader.get_correction_data(train)
+        )
+        # Explicit little-endian float64 for cross-platform determinism.
+        digest = hashlib.sha256(arr.astype("<f8").tobytes()).hexdigest()
+        click.echo(digest)
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # demo
 # ---------------------------------------------------------------------------
 
