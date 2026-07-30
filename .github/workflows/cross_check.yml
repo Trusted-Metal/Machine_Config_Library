@@ -1,12 +1,12 @@
 name: Cross-Language Check
 
 # Runs after any change that could affect correctness across language
-# implementations: Python source, Rust source, shared fixtures, schema, or
-# the cross-check script itself.
+# implementations: Python source, Rust source, Node.js source, shared
+# fixtures, schema, or the cross-check script itself.
 #
-# Languages active now: python, rust
-# To add nodejs/cpp: uncomment the relevant RUNNERS entry in
-# tools/cross_check.py — no changes needed here.
+# Languages active now: python, rust, nodejs
+# All four phases (schema, read parity, write interop, correction hash) run
+# for all three languages.
 
 on:
   workflow_dispatch:
@@ -15,6 +15,7 @@ on:
     paths:
       - "python/**"
       - "rust/**"
+      - "nodejs/**"
       - "fixtures/**"
       - "schema/**"
       - "tools/cross_check.py"
@@ -23,6 +24,7 @@ on:
     paths:
       - "python/**"
       - "rust/**"
+      - "nodejs/**"
       - "fixtures/**"
       - "schema/**"
       - "tools/cross_check.py"
@@ -70,19 +72,37 @@ jobs:
         working-directory: rust
 
       # -----------------------------------------------------------------------
+      # Node.js  (h5wasm bundles libhdf5 as WASM — no system deps)
+      # -----------------------------------------------------------------------
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: nodejs/package-lock.json
+
+      - name: Install Node.js dependencies and build
+        run: npm ci
+        working-directory: nodejs
+
+      - name: Build Node.js TypeScript
+        run: npm run build
+        working-directory: nodejs
+
+      # -----------------------------------------------------------------------
       # Cross-check
       # -----------------------------------------------------------------------
-      - name: Phase 1 — Schema validation
-        run: python tools/cross_check.py --langs python,rust --skip-read-parity --skip-write-interop --verbose
+      - name: Phase 1 — Schema validation (python, rust, nodejs)
+        run: python tools/cross_check.py --langs python,rust,nodejs --skip-read-parity --skip-write-interop --skip-correction-hash --verbose
 
-      - name: Phase 2 — Read parity (all fixtures)
-        run: python tools/cross_check.py --langs python,rust --skip-schema --skip-write-interop --verbose
+      - name: Phase 2 — Read parity (all fixtures, python, rust, nodejs)
+        run: python tools/cross_check.py --langs python,rust,nodejs --skip-schema --skip-write-interop --skip-correction-hash --verbose
 
-      - name: Phase 3 — Write interoperability
-        run: python tools/cross_check.py --langs python,rust --skip-schema --skip-read-parity --verbose
+      - name: Phase 3 — Write interoperability (python, rust, nodejs)
+        run: python tools/cross_check.py --langs python,rust,nodejs --skip-schema --skip-read-parity --skip-correction-hash --verbose
 
-      - name: Phase 4 — Correction data hash parity
-        run: python tools/cross_check.py --langs python,rust --skip-schema --skip-read-parity --skip-write-interop --verbose
+      - name: Phase 4 — Correction data hash parity (python, rust, nodejs)
+        run: python tools/cross_check.py --langs python,rust,nodejs --skip-schema --skip-read-parity --skip-write-interop --verbose
 
       # Upload both outputs so developers can diff them manually if a check fails.
       - name: Export Python JSON artifact
@@ -98,6 +118,13 @@ jobs:
           [[ "$RUNNER_OS" == "Windows" ]] && bin="${bin}.exe"
           "${bin}" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output_xcheck.json"
 
+      - name: Export Node.js JSON artifact
+        if: always()
+        shell: bash
+        run: |
+          node nodejs/dist/cli.js export-json fixtures/reference_config.h5 \
+            > "$RUNNER_TEMP/nodejs_output_xcheck.json"
+
       - name: Upload language outputs for manual inspection
         if: always()
         uses: actions/upload-artifact@v4
@@ -106,4 +133,5 @@ jobs:
           path: |
             ${{ runner.temp }}/python_output.json
             ${{ runner.temp }}/rust_output_xcheck.json
+            ${{ runner.temp }}/nodejs_output_xcheck.json
           retention-days: 14

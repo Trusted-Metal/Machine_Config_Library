@@ -27,28 +27,30 @@ This document covers *how to use it once built*.
   - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays)
   - [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema)
   - [CLI reference](#cli-reference-python)
-- [Node.js](#nodejs) ← *coming in Phase 2*
-  - [Quickstart example](#quickstart-example-coming-in-phase-2)
-  - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file-nodejs)
-  - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json-nodejs)
-  - [Use case 3 — Reconstruct a config from JSON](#use-case-3--reconstruct-a-config-from-json-nodejs)
-  - [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5-nodejs)
-  - [Use case 5 — Edit a field and save to a new file](#use-case-5--edit-a-field-and-save-to-a-new-file-nodejs)
-  - [Use case 6 — Generate a synthetic test config](#use-case-6--generate-a-synthetic-test-config-nodejs)
-  - [Use case 7 — Build a config from a YAML specification](#use-case-7--build-a-config-from-a-yaml-specification-nodejs)
-  - [Use case 8 — Read OPCUA telemetry configuration](#use-case-8--read-opcua-telemetry-configuration-nodejs)
-  - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays-nodejs)
-  - [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema-nodejs)
-  - [CLI reference](#cli-reference-nodejs)
-- [Rust](#rust) ← *Phase 3 complete*
-  - [Quickstart example](#quickstart-example-1)
+- [Node.js](#nodejs) ← *Phase 2 complete*
+  - [Installation](#installation-1)
+  - [What's usable today](#whats-usable-today)
+  - [TypeScript interfaces](#typescript-interfaces)
   - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file-1)
   - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json-1)
-  - [Use case 3 — Read OPCUA telemetry configuration](#use-case-3--read-opcua-telemetry-configuration)
-  - [Use case 4 — Access ClearBox correction arrays](#use-case-4--access-clearbox-correction-arrays)
-  - [Use case 5 — Write a config to HDF5](#use-case-5--write-a-config-to-hdf5)
-  - [Use case 6 — Generate a synthetic test fixture](#use-case-6--generate-a-synthetic-test-fixture)
-  - [Use case 7 — Export JSON from the command line](#use-case-7--export-json-from-the-command-line)
+  - [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5-1)
+  - [Use case 6 — Generate a synthetic test config](#use-case-6--generate-a-synthetic-test-config-1)
+  - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays-1)
+  - [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema-1)
+  - [CLI reference](#cli-reference)
+  - [Quickstart example](#quickstart-example-1)
+  - [Running the Node.js test suite](#running-the-nodejs-test-suite)
+- [Rust](#rust) ← *Phase 3 complete*
+  - [What's usable today](#whats-usable-today-1)
+  - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file-2)
+  - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json-2)
+  - [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5-2)
+  - [Use case 6 — Generate a synthetic test config](#use-case-6--generate-a-synthetic-test-config-2)
+  - [Use case 8 — Read OPCUA telemetry configuration](#use-case-8--read-opcua-telemetry-configuration-1)
+  - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays-2)
+  - [CLI reference](#cli-reference-1)
+  - [Quickstart example](#quickstart-example-2)
+  - [Running the Rust test suite](#running-the-rust-test-suite)
 - [C++](#c) ← *coming in Phase 4*
 - [Contributor Workflows](#contributor-workflows)
 
@@ -80,6 +82,31 @@ cross-check CI pipeline. The format is defined once in the schema and never dupl
 | `fixtures/synthetic_2laser.h5` | MockConfigBuilder output — used by non-Python language test suites |
 | `fixtures/reference_output.json` | Golden file — Python's canonical JSON output; all languages must match |
 | `fixtures/reference_output.sha256` | SHA-256 of the golden file — CI tamper guard |
+
+### Language feature matrix
+
+The table below summarises which features are available in each language. Python is the
+reference implementation; Rust and Node.js cover the core read/write/hash/OPC-UA path and are
+intended as integration-layer libraries. The Python-only items (`YamlConfigBuilder`,
+`ConfigEditor`, `config_from_dict`) are workflow conveniences that have no equivalent in the
+other language SDKs.
+
+| Feature | Python | Rust | Node.js |
+|---|:---:|:---:|:---:|
+| HDF5 reader (`parse`) | ✅ | ✅ | ✅ |
+| HDF5 writer (`write`) | ✅ | ✅ | ✅ |
+| `MockConfigBuilder` | ✅ | ✅ | ✅ |
+| Schema validation | ✅ | ✅ *(serde)* | ✅ *(Ajv)* |
+| CLI: `export-json` | ✅ | ✅ | ✅ |
+| CLI: `write-hdf5` | ✅ | ✅ | ✅ |
+| CLI: `correction-hash` | ✅ | ✅ | ✅ |
+| OPC-UA config in model | ✅ | ✅ | ✅ |
+| `get_raw_group()` | ✅ | ✅ | ✅ |
+| Binary data accessors | ✅ *(numpy)* | ✅ *(ndarray)* | ✅ *(Float64Array)* |
+| `YamlConfigBuilder` | ✅ | ❌ | ❌ |
+| `ConfigEditor` | ✅ | ❌ | ❌ |
+| `config_from_dict` | ✅ | ❌ | ❌ |
+| CLI: `inspect` / `validate` / `demo` | ✅ | ❌ | ❌ |
 
 ---
 
@@ -498,20 +525,300 @@ The script resolves paths relative to the repo root automatically, so it runs co
 
 ## Node.js
 
-*Coming in Phase 2.*
+*Phase 2 complete — `models.ts`, `reader.ts`, `writer.ts`, `builder.ts`, `schema.ts`, all three CLI subcommands (`export-json`/`write-hdf5`/`correction-hash`), `nodejs.yml` CI, and the hello-world quickstart all implemented (Phases 2.1, 2.4/1–2.4/6).*
 
-Section will cover:
-- `npm install machine-config-library`
-- Parsing `.h5` with `node-hdf5` in Node.js
-- TypeScript interfaces
-- Equivalent use cases to the Python section above
-- CLI usage
-- Viewer bundle integration
+The package lives in `nodejs/` and is built with TypeScript (ES2022, NodeNext modules).
+It uses [`h5wasm`](https://github.com/usnistgov/h5wasm) (HDF5 compiled to WebAssembly by NIST)
+so there is no native compilation step on any platform.
 
-### Quickstart example *(coming in Phase 2)*
+### Installation
+
+```bash
+# From the nodejs/ directory
+cd nodejs
+npm install
+npm run build      # compile TypeScript → dist/
+```
+
+### What's usable today
+
+`nodejs/src/models.ts` defines the full TypeScript interface tree — `MachineConfig`, `OpticalTrain`,
+`Scanner`, `AxisConfig`, `LightSource`, `Collimator`, `ScannerCard`, `ClearBox`,
+`ScanFieldCorrectionFile`, `OpcuaConfig` and friends — mirroring Python models with snake_case
+field names throughout.
+
+`nodejs/src/reader.ts` implements `MachineConfigReader`. Its JSON output has been cross-checked
+against `fixtures/reference_output.json` for all three canonical fixtures.
+
+`nodejs/src/schema.ts` exposes `validate(data): string[]` using Ajv (JSON Schema draft 2020-12).
+An empty array means valid.
+
+`nodejs/src/writer.ts` implements `MachineConfigWriter`, the exact inverse of `reader.ts`. A
+write-then-read roundtrip has been verified against all three canonical fixtures (reference,
+OPC-UA, synthetic 2-laser) and cross-checked live against the Python and Rust writers via
+`tools/cross_check.py` Phase 3.
+
+`reader.ts` also exposes `getCorrectionData(trainIndex)` / `getInverseCorrectionData(trainIndex)`,
+returning the raw NaN-preserving correction grid as a flat `Float64Array` + shape — the same
+data the JSON path null-converts for safety, but here left untouched for exact byte hashing.
+These mirror Python's and Rust's identically-named reader methods.
+
+`nodejs/src/cli.ts` implements all three subcommands: `export-json`, `write-hdf5`, and
+`correction-hash <file> --train <n> [--inverse]` (SHA-256 of the flat little-endian float64
+correction grid, via `node:crypto`). All three have been cross-checked live against Python and
+Rust for all fixtures/trains/forward-or-inverse combinations — identical digests in every case.
+
+`nodejs/src/builder.ts` implements `MockConfigBuilder`, mirroring Python's and Rust's builders
+field-for-field: same defaults (2 lasers, 250×250×20 mm build plate), same per-train geometry,
+and the same Gaussian correction-grid formula (peak 2.0 at centre; inverse grid = forward × 0.9).
+See Use case 6 below.
+
+### TypeScript interfaces
+
+All types are fully exported from the package root:
+
+```typescript
+import type { MachineConfig, OpticalTrain, ClearBox } from './dist/index.js';
+```
+
+### Use case 1 — Parse a machine config file
+
+```typescript
+import { MachineConfigReader } from './dist/index.js';
+
+const reader = new MachineConfigReader('fixtures/reference_config.h5');
+const config = await reader.parse();
+
+console.log(config.meta.machine_name);           // "TM-LPBF-02: AconityMIDI+_OG"
+console.log(config.meta.configuration_hash);     // 64-character hex string
+console.log(config.machine.build_plate_x);       // 250
+
+for (const [i, train] of config.optical_trains.entries()) {
+  const s = train.scanner;
+  console.log(
+    `Train ${i + 1}: WD=${s.working_distance} ${s.working_distance_unit}  ` +
+    `offset=(${s.scan_head_offset_x}, ${s.scan_head_offset_y}) mm`
+  );
+}
+
+// OPCUA — populated only when the HDF5 file has an OPCUA group
+if (config.opcua) {
+  console.log(config.opcua.client.server_url);
+  for (const [name, trigger] of Object.entries(config.opcua.triggers)) {
+    console.log(`${name}: signal=${trigger.signal}`);
+  }
+}
+```
+
+### Use case 2 — Export to canonical JSON
+
+By default, `toJson()` produces metadata + scalar fields only. Binary datasets (ClearBox
+correction arrays and raw `.fc3` bytes) are excluded unless `includeBinary: true` is passed.
+
+```typescript
+import { MachineConfigReader } from './dist/index.js';
+import { writeFileSync } from 'node:fs';
+
+const reader = new MachineConfigReader('fixtures/reference_config.h5');
+
+// Default: metadata + scalars only (~13 KB)
+const json = await reader.toJson({ indent: 2 });
+writeFileSync('output.json', json, 'utf-8');
+
+// Compact (no indentation)
+const compact = await reader.toJson({ indent: 0 });
+
+// Include correction grids and raw .fc3 bytes (large output, ~14 MB for a 2-laser config)
+const full = await reader.toJson({ includeBinary: true, indent: 2 });
+writeFileSync('output_full.json', full, 'utf-8');
+```
+
+> **Accessing binary data without JSON**: use `parse({ includeBinary: true })` to get
+> `optional_components.clearbox.correction_data` (a `(number | null)[][][]` array of shape
+> 257×257×2) directly in the model. `null` cells are out-of-field points (were NaN in HDF5).
+
+### Use case 4 — Write a config back to HDF5
+
+```typescript
+import { MachineConfigReader, MachineConfigWriter } from './dist/index.js';
+
+const config = await new MachineConfigReader('original.h5').parse();
+
+// MachineConfig is a plain TS object — mutate a field with a spread, or in place.
+config.meta.export_date = '2026-07-30T00:00:00Z';
+
+await new MachineConfigWriter(config).write('copy.h5');
+
+// Verify the roundtrip
+const reread = await new MachineConfigReader('copy.h5').parse();
+console.log(reread.meta.configuration_hash === config.meta.configuration_hash);
+```
+
+> **Binary data in the writer**: if `optional_components.clearbox.correction_data` /
+> `inverse_correction_data` are absent (i.e. the config was parsed without
+> `includeBinary: true`), the writer writes zero-filled `(257, 257, 2)` float64 datasets in
+> their place — identical behaviour to the Python and Rust writers. Parse with
+> `{ includeBinary: true }` first to preserve the original correction grids across a roundtrip.
+
+---
+
+### Use case 6 — Generate a synthetic test config
+
+`MockConfigBuilder` creates structurally valid `.h5` files for testing without requiring access
+to real machine hardware — mirroring Python's `MockConfigBuilder` and Rust's `MockConfigBuilder`
+(same defaults, same per-train geometry, same Gaussian correction-grid formula).
+
+```typescript
+import { MockConfigBuilder, MachineConfigReader } from './dist/index.js';
+
+// 2-laser config with ClearBox (default)
+await new MockConfigBuilder().save('test_config.h5');
+
+// Customise before saving
+await new MockConfigBuilder({
+  nLasers: 1,
+  machineName: 'TestMachine',
+  buildPlateX: 400.0,
+  includeClearbox: false,
+}).save('custom_config.h5');
+
+// Build into memory without writing
+const config = new MockConfigBuilder().build();
+console.log(config.optical_trains.length);    // 2
+console.log(config.meta.machine_name);        // "MockMachine"
+
+// Verify the correction grid that was written
+const reader = new MachineConfigReader('test_config.h5');
+const cd = await reader.getCorrectionData(0);   // { data: Float64Array, shape: [257, 257, 2] }
+console.log(cd.shape);
+console.log('Peak correction:', cd.data[(128 * 257 + 128) * 2].toFixed(4)); // ≈ 2.0000 (Gaussian peak)
+```
+
+> **Defaults**: `nLasers: 2`, `buildPlateX/Y: 250`, `buildPlateZ: 20`, `includeClearbox: true`
+> (gates both ClearBox *and* ScanFieldCorrectionFile together, per train), `machineName:
+> "MockMachine"`, `manufacturer: "MockCo"`, `model: "MockMIDI+"`, `serialNumber: "MOCK-001"`.
+> `machine.id` and `meta.export_date` are fixed constants rather than randomly generated, so
+> builder output is reproducible run to run.
+
+---
+
+### Use case 8 — Read OPCUA telemetry configuration
+
+OPCUA data lives in a separate `OPCUA` group that is absent in most files and is outside the
+canonical schema. `parse()` returns `config.opcua` (populated when the file has an `OPCUA`
+group, absent otherwise). For ad-hoc inspection of any HDF5 path — whether it is an OPCUA
+sub-group or a scanner sub-axis — use `getRawGroup()`:
+
+```typescript
+import { MachineConfigReader } from './dist/index.js';
+
+// Typed path through the model (best for known OPCUA fields)
+const config = await new MachineConfigReader('fixtures/reference_config_opcua.h5').parse();
+if (config.opcua) {
+  console.log(config.opcua.client.server_url);    // "opc.tcp://..."
+  console.log(config.opcua.triggers_enabled);      // true
+  for (const [name, t] of Object.entries(config.opcua.triggers)) {
+    console.log(name, t.signal, t.subsystem);
+  }
+}
+
+// Raw attribute map for any HDF5 path — returns {} (not an error) if absent
+const reader = new MachineConfigReader('fixtures/reference_config_opcua.h5');
+const clientAttrs = await reader.getRawGroup('OPCUA/Client');
+console.log(clientAttrs['Server_URL']);  // e.g. "opc.tcp://192.168.1.100:4840"
+console.log(clientAttrs['Auth_Mode']);   // e.g. "UsernamePassword"
+
+// Any path works — returns {} rather than throwing when absent:
+const missing = await reader.getRawGroup('does/not/exist'); // {}
+```
+
+> `getRawGroup(path)` mirrors Python's `reader.get_raw_group(path)` and Rust's
+> `reader.get_raw_group(path)` exactly: same empty-map-for-missing contract, same attribute
+> value semantics. Useful for scanner sub-axes
+> (`Machine/Optical_Trains/.../Scanner/X_Axis`) and any other non-schema group.
+
+---
+
+### Use case 9 — Access ClearBox correction arrays
+
+`parse({ includeBinary: true })` gives you the JSON-safe, null-converted nested array (see the
+note under Use case 2). For numerical work — or anything that must match Python/Rust bit-for-bit,
+such as hashing — read the raw grid directly instead:
+
+```typescript
+import { MachineConfigReader } from './dist/index.js';
+
+const reader = new MachineConfigReader('fixtures/reference_config.h5');
+
+// Flat, row-major, NaN preserved (not JSON-safe) — shape [257, 257, 2]
+const cd = await reader.getCorrectionData(0);          // train 0, forward grid
+const icd = await reader.getInverseCorrectionData(0);  // train 0, inverse grid
+
+console.log(cd.data instanceof Float64Array, cd.shape); // true [257, 257, 2]
+
+// Sample the centre cell manually (row-major: offset = (i*257 + j)*2 + k)
+const centreX = cd.data[(128 * 257 + 128) * 2 + 0];
+console.log('Centre correction X:', centreX);
+```
+
+> **Why a separate accessor from `parse()`**: `parse({ includeBinary: true })` maps `NaN → null`
+> so the result is valid JSON — but that conversion is lossy for exact byte comparisons.
+> `getCorrectionData`/`getInverseCorrectionData` skip it entirely, returning exactly what h5wasm
+> read off the dataset. This is what the `correction-hash` CLI subcommand uses internally.
+
+---
+
+### Use case 10 — Validate a config against the schema
+
+```typescript
+import { MachineConfigReader } from './dist/index.js';
+import { validate } from './dist/schema.js';
+
+const config = await new MachineConfigReader('fixtures/reference_config.h5').parse();
+const errors = validate(config);
+if (errors.length === 0) {
+  console.log('Schema valid.');
+} else {
+  console.error('Validation errors:', errors);
+}
+```
+
+### CLI reference
+
+```bash
+# From the repo root — build first if not already done
+cd nodejs && npm run build && cd ..
+
+# Export HDF5 → JSON to stdout (fully implemented)
+node nodejs/dist/cli.js export-json fixtures/reference_config.h5
+
+# Export to a file
+node nodejs/dist/cli.js export-json fixtures/reference_config.h5 > output.json
+
+# Write HDF5 from JSON (fully implemented)
+node nodejs/dist/cli.js write-hdf5 config.json output.h5
+
+# SHA-256 of the forward correction grid, train 0 (fully implemented)
+node nodejs/dist/cli.js correction-hash fixtures/reference_config.h5 --train 0
+
+# SHA-256 of the inverse correction grid, train 1
+node nodejs/dist/cli.js correction-hash fixtures/reference_config.h5 --train 1 --inverse
+```
+
+> `correction-hash` hashes the grid as flat little-endian float64 bytes, so its output is
+> directly comparable with `machine-config correction-hash` (Python) and `machine-config-cli
+> correction-hash` (Rust) for the same file/train/direction — verified byte-identical in CI.
+
+---
+
+### Quickstart example
+
+Build the library first (the quickstart imports `nodejs/dist/index.js`, the same compiled
+output the CLI uses):
 
 ```bash
 # Git Bash / PowerShell — from the repo root
+cd nodejs && npm run build && cd ..
 node examples/quickstart/nodejs/main.mjs
 ```
 
@@ -529,6 +836,33 @@ Written to     : <tmp>.h5
 
 PASS
 ```
+
+The script resolves paths relative to the repo root automatically, so it runs correctly from any working directory.
+
+---
+
+### Running the Node.js test suite
+
+```powershell
+# PowerShell — from the nodejs/ directory
+cd nodejs
+npm test           # 127 tests: 82 reader + 6 schema + 21 writer + 18 builder
+
+# From repo root
+cd nodejs ; npm test
+```
+
+```bash
+# Git Bash
+cd nodejs
+npm test
+```
+
+*Use cases 3, 5, and 7 (reconstruct-from-JSON, edit-and-save via a `ConfigEditor`-equivalent, and
+building from a YAML spec) have no Node.js port — `ConfigEditor` and `YamlConfigBuilder` are
+Python-only conveniences, not part of the six-step §2.4 vertical slice (and Rust doesn't have
+them either — see the Rust section's own note). Everything else, including `MockConfigBuilder`
+(Use case 6) and the quickstart, is implemented and documented above.*
 
 ---
 
@@ -548,7 +882,7 @@ The crate lives in `rust/` (package `machine-config`, library `machine_config`).
 
 `rust/src/builder.rs` implements `MockConfigBuilder`, which generates structurally valid synthetic `.h5` files for testing. It mirrors Python's `MockConfigBuilder` — same group/attribute layout, non-zero Gaussian correction grids, deterministic values.
 
-`rust/src/main.rs` is the `machine-config-cli` binary. It exposes a single subcommand (`export-json`) that writes pretty-printed JSON to stdout — the interface used by `cross_check.py` in Phase 5.
+`rust/src/main.rs` is the `machine-config-cli` binary. It exposes three subcommands — `export-json` (HDF5 → JSON to stdout), `write-hdf5` (JSON file → HDF5 file), and `correction-hash` (SHA-256 of a flat little-endian float64 correction grid) — mirroring the Python and Node.js CLIs. All three subcommands are verified cross-language identical in CI.
 
 ### Use case 1 — Parse a machine config file
 
@@ -609,58 +943,7 @@ std::fs::write("output_full.json", full_json)?;
 
 ---
 
-### Use case 3 — Read OPCUA telemetry configuration
-
-OPCUA data is outside the canonical model. `parse()` returns `config.opcua: Option<OpcuaConfig>` (populated only when the file has an `OPCUA` group), or use `get_raw_group()` for arbitrary non-schema paths:
-
-```rust
-use machine_config::reader::MachineConfigReader;
-
-let reader = MachineConfigReader::open("fixtures/reference_config_opcua.h5")?;
-let config = reader.parse()?;
-
-if let Some(opcua) = &config.opcua {
-    println!("{}", opcua.client.server_url);
-    println!("{:?}", opcua.triggers_enabled);
-    for (name, trigger) in &opcua.triggers {
-        println!("{name}: signal={:?} subsystem={:?}", trigger.signal, trigger.subsystem);
-    }
-}
-
-// Or fetch raw attributes for any path — returns an empty map, never an error,
-// if the path doesn't exist:
-let client_attrs = reader.get_raw_group("OPCUA/Client")?;
-println!("{:?}", client_attrs.get("Server_URL"));
-```
-
----
-
-### Use case 4 — Access ClearBox correction arrays
-
-```rust
-use machine_config::reader::MachineConfigReader;
-
-let reader = MachineConfigReader::open("fixtures/reference_config.h5")?;
-let config = reader.parse_with_binary()?;
-
-if let Some(cb) = &config.optical_trains[0].clearbox {
-    let data = cb.correction_data.as_ref().unwrap(); // Vec<Vec<Vec<Option<f64>>>>, shape 257x257x2
-    assert_eq!(data.len(), 257);
-    assert_eq!(data[0].len(), 257);
-    assert_eq!(data[0][0].len(), 2);
-    // None means the point is outside the correction field (was NaN in HDF5).
-    let centre = &data[128][128];
-    println!("Centre correction: x={:?}, y={:?}", centre[0], centre[1]);
-}
-
-// For bulk numerical work, use the ndarray accessor directly:
-let arr = reader.get_correction_data(0)?;  // Array3<f64>, shape (257, 257, 2)
-println!("Non-finite cells: {}", arr.iter().filter(|v| !v.is_finite()).count());
-```
-
----
-
-### Use case 5 — Write a config to HDF5
+### Use case 4 — Write a config back to HDF5
 
 `MachineConfigWriter` serialises any `MachineConfig` back to a machine-config-schema-compatible `.h5` file. The output is structurally identical to what the machine software exports, so it can be read back by both the Rust and Python readers.
 
@@ -687,7 +970,7 @@ assert_eq!(config.meta.export_date,  reread.meta.export_date);
 
 ---
 
-### Use case 6 — Generate a synthetic test fixture
+### Use case 6 — Generate a synthetic test config
 
 `MockConfigBuilder` creates structurally valid `.h5` files for integration tests without requiring access to real machine hardware.
 
@@ -719,22 +1002,79 @@ println!("Peak correction: {:.4}", arr[[128, 128, 0]]);  // ≈ 2.0 (Gaussian pe
 
 ---
 
-### Use case 7 — Export JSON from the command line
+### Use case 8 — Read OPCUA telemetry configuration
 
-`machine-config-cli` is the Rust binary equivalent of `machine-config export-json` in Python. It writes pretty-printed JSON to stdout and exits 0 on success.
+OPCUA data is outside the canonical model. `parse()` returns `config.opcua: Option<OpcuaConfig>` (populated only when the file has an `OPCUA` group), or use `get_raw_group()` for arbitrary non-schema paths:
+
+```rust
+use machine_config::reader::MachineConfigReader;
+
+let reader = MachineConfigReader::open("fixtures/reference_config_opcua.h5")?;
+let config = reader.parse()?;
+
+if let Some(opcua) = &config.opcua {
+    println!("{}", opcua.client.server_url);
+    println!("{:?}", opcua.triggers_enabled);
+    for (name, trigger) in &opcua.triggers {
+        println!("{name}: signal={:?} subsystem={:?}", trigger.signal, trigger.subsystem);
+    }
+}
+
+// Or fetch raw attributes for any path — returns an empty map, never an error,
+// if the path doesn't exist:
+let client_attrs = reader.get_raw_group("OPCUA/Client")?;
+println!("{:?}", client_attrs.get("Server_URL"));
+```
+
+---
+
+### Use case 9 — Access ClearBox correction arrays
+
+```rust
+use machine_config::reader::MachineConfigReader;
+
+let reader = MachineConfigReader::open("fixtures/reference_config.h5")?;
+let config = reader.parse_with_binary()?;
+
+if let Some(cb) = &config.optical_trains[0].clearbox {
+    let data = cb.correction_data.as_ref().unwrap(); // Vec<Vec<Vec<Option<f64>>>>, shape 257x257x2
+    assert_eq!(data.len(), 257);
+    assert_eq!(data[0].len(), 257);
+    assert_eq!(data[0][0].len(), 2);
+    // None means the point is outside the correction field (was NaN in HDF5).
+    let centre = &data[128][128];
+    println!("Centre correction: x={:?}, y={:?}", centre[0], centre[1]);
+}
+
+// For bulk numerical work, use the ndarray accessor directly:
+let arr = reader.get_correction_data(0)?;  // Array3<f64>, shape (257, 257, 2)
+println!("Non-finite cells: {}", arr.iter().filter(|v| !v.is_finite()).count());
+```
+
+---
+
+### CLI reference
+
+`machine-config-cli` exposes the same three subcommands as the Python and Node.js CLIs:
 
 ```powershell
 # PowerShell — build first
 cargo build --release --manifest-path rust/Cargo.toml
 
-# Export scalars only (default)
+# Export HDF5 → JSON to stdout
 .\rust\target\release\machine-config-cli.exe export-json fixtures\reference_config.h5
 
-# Export with binary fields (correction grids + raw .fc3 bytes)
+# With binary fields (correction grids + raw .fc3 bytes)
 .\rust\target\release\machine-config-cli.exe export-json fixtures\reference_config.h5 --include-binary
 
-# Pipe to a file
-.\rust\target\release\machine-config-cli.exe export-json fixtures\reference_config.h5 > output.json
+# Write HDF5 from JSON
+.\rust\target\release\machine-config-cli.exe write-hdf5 config.json output.h5
+
+# SHA-256 of the forward correction grid, train 0
+.\rust\target\release\machine-config-cli.exe correction-hash fixtures\reference_config.h5 --train 0
+
+# SHA-256 of the inverse correction grid, train 1
+.\rust\target\release\machine-config-cli.exe correction-hash fixtures\reference_config.h5 --train 1 --inverse
 ```
 
 ```bash
@@ -742,9 +1082,18 @@ cargo build --release --manifest-path rust/Cargo.toml
 cargo build --release --manifest-path rust/Cargo.toml
 ./rust/target/release/machine-config-cli export-json fixtures/reference_config.h5
 ./rust/target/release/machine-config-cli export-json fixtures/reference_config.h5 --include-binary > output_full.json
+./rust/target/release/machine-config-cli write-hdf5 config.json output.h5
+./rust/target/release/machine-config-cli correction-hash fixtures/reference_config.h5 --train 0
+./rust/target/release/machine-config-cli correction-hash fixtures/reference_config.h5 --train 1 --inverse
 ```
 
-> Errors (file not found, unrecognised format, etc.) go to stderr; stdout is always valid JSON on success.
+> Errors go to stderr; stdout is always valid JSON (for `export-json`) or empty (for
+> `write-hdf5` / `correction-hash`) on success. `correction-hash` output is byte-identical to
+> Python's and Node.js's for the same file/train/direction — verified in CI.
+>
+> Use cases 3, 5, 7, and 10 (reconstruct-from-JSON, `ConfigEditor`, YAML-spec builder, schema
+> validation) have no Rust port; `ConfigEditor` and `YamlConfigBuilder` are Python-only
+> conveniences, not part of the crate.
 
 ---
 
@@ -820,27 +1169,45 @@ Section will cover:
 
 ### Running the cross-language check
 
-`tools/cross_check.py` is the correctness heartbeat. It runs three phases: schema validation, read parity across all fixtures, and write interoperability. Run it after any change to Python or Rust code.
+`tools/cross_check.py` is the correctness heartbeat. It runs four phases: schema validation, read parity across all fixtures, write interoperability, and correction-data hash parity. Run it after any change to Python, Rust, or Node.js code.
 
-**Prerequisites**: Python venv active (`pip install -e python/[dev] deepdiff`), Rust release binary built (`cargo build --release` inside `rust/`).
+**Prerequisites**: Python venv active (`pip install -e python/[dev] deepdiff`), Rust release binary built (`cargo build --release` inside `rust/`), Node.js built (`npm ci && npm run build` inside `nodejs/`).
 
 ```powershell
 # PowerShell — from repo root
-.\.venv\Scripts\python tools/cross_check.py --verbose
 
-# Check a subset only (e.g. while another language binary is missing)
+# All three languages (Phases 1–3 — Phase 4 requires the Node.js correction-hash CLI)
+.\.venv\Scripts\python tools/cross_check.py --langs python,rust,nodejs --skip-correction-hash --verbose
+
+# Python+Rust only (all 4 phases)
 .\.venv\Scripts\python tools/cross_check.py --langs python,rust --verbose
 
-# Skip write-interop (Phase 3) for a faster schema+parity-only check
-.\.venv\Scripts\python tools/cross_check.py --skip-write-interop
+# Skip write-interop for a faster schema+parity check
+.\.venv\Scripts\python tools/cross_check.py --skip-write-interop --skip-correction-hash
 ```
 
 ```bash
 # Git Bash
-.venv/Scripts/python tools/cross_check.py --verbose
+.venv/Scripts/python tools/cross_check.py --langs python,rust,nodejs --skip-correction-hash --verbose
 ```
 
-Expected output (all green):
+Expected output (all three languages, Phases 1–3):
+```
+Active languages: python, rust, nodejs
+
+=== Phase 1: Schema Validation ===
+[PASS] 9 combinations validate against schema.
+
+=== Phase 2: Read Parity ===
+[PASS] 3 languages agree on all 3 fixtures (9 comparisons).
+
+=== Phase 3: Write Interoperability ===
+[PASS] Write interoperability: 3 writer(s) × 3 reader(s) — 6 parity + 3 fidelity checks passed.
+
+All checks passed.
+```
+
+Expected output (Python + Rust, all 4 phases):
 ```
 Active languages: python, rust
 
@@ -852,6 +1219,9 @@ Active languages: python, rust
 
 === Phase 3: Write Interoperability ===
 [PASS] Write interoperability checks passed.
+
+=== Phase 4: Correction Data Hashes ===
+[PASS] 2 languages produce identical correction hashes.
 
 All checks passed.
 ```

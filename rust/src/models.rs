@@ -34,17 +34,24 @@ use serde::{Deserialize, Serialize};
 /// type instead, this library stays version-agnostic: consumers may use any
 /// `ndarray` release they like and reconstruct the array with a single call:
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use machine_config::models::CorrectionData;
+/// # let cd = CorrectionData { data: vec![0.0_f64; 257 * 257 * 2], shape: [257, 257, 2] };
 /// let arr = ndarray::Array3::from_shape_vec(cd.shape, cd.data)
 ///     .expect("shape is always consistent");
+/// assert_eq!(arr.shape(), &[257, 257, 2]);
 /// ```
 ///
 /// # Accessing elements without ndarray
 ///
-/// ```rust,ignore
+/// ```rust
+/// # use machine_config::models::CorrectionData;
+/// # let cd = CorrectionData { data: vec![1.0_f64; 257 * 257 * 2], shape: [257, 257, 2] };
+/// # let (i, j, k) = (10_usize, 20_usize, 1_usize);
 /// // value at (i, j, k)
 /// let [_, d1, d2] = cd.shape;
 /// let val = cd.data[i * d1 * d2 + j * d2 + k];
+/// # assert_eq!(val, 1.0);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct CorrectionData {
