@@ -553,7 +553,7 @@ impl MachineConfigReader {
             light_source,
             collimator,
             scanner_card,
-            clearbox,
+            optional_components: crate::models::OptionalComponents { clearbox },
             scan_field_correction_file: sfcf,
         })
     }
@@ -826,7 +826,7 @@ mod tests {
         let config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
         let t1 = &config.optical_trains[0];
 
-        let cb = t1.clearbox.as_ref().expect("clearbox present on reference fixture");
+        let cb = t1.optional_components.clearbox.as_ref().expect("clearbox present on reference fixture");
         assert!(!cb.ip_address.is_empty());
         assert!(cb.correction_data.is_none(), "parse() must not read binary correction grids");
         assert!(cb.inverse_correction_data.is_none());
@@ -844,7 +844,7 @@ mod tests {
         let config = MachineConfigReader::open(REFERENCE).unwrap().parse_with_binary().unwrap();
         let t1 = &config.optical_trains[0];
 
-        let cb = t1.clearbox.as_ref().unwrap();
+        let cb = t1.optional_components.clearbox.as_ref().unwrap();
         let data = cb.correction_data.as_ref().expect("correction_data populated");
         assert_eq!(data.len(), 257);
         assert_eq!(data[0].len(), 257);

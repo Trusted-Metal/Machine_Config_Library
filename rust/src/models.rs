@@ -195,6 +195,14 @@ pub struct LightSource {
     pub watts_to_volts_params: Option<String>,
 }
 
+/// Optional add-on hardware that may or may not be installed on an optical train.
+/// Maps to the `Optional_Components` HDF5 group under each `Optical_Train_NN`.
+/// Always present on `OpticalTrain` (the group always exists); contents vary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OptionalComponents {
+    pub clearbox: Option<ClearBox>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpticalTrain {
     pub train_id: String,
@@ -236,7 +244,7 @@ pub struct OpticalTrain {
     pub collimator: Collimator,
     /// Required; see Rule 7 (§0.5) — a train missing a scanner card is invalid.
     pub scanner_card: ScannerCard,
-    pub clearbox: Option<ClearBox>,
+    pub optional_components: OptionalComponents,
     pub scan_field_correction_file: Option<ScanFieldCorrectionFile>,
 }
 
@@ -449,7 +457,7 @@ mod tests {
                 sample_period: None,
                 sample_period_unit: None,
             },
-            clearbox: None,
+            optional_components: OptionalComponents { clearbox: None },
             scan_field_correction_file: None,
         }
     }
@@ -558,7 +566,7 @@ mod tests {
     #[test]
     fn binary_fields_omitted_by_default_and_present_when_set() {
         let mut train = sample_train();
-        train.clearbox = Some(ClearBox {
+        train.optional_components.clearbox = Some(ClearBox {
             ip_address: "192.168.1.50".into(),
             serial_number: None,
             data_port: None,
@@ -590,7 +598,7 @@ mod tests {
         // correction grids are conditionally omitted.
         assert!(json_without_binary.contains("\"clearbox\""));
 
-        config.optical_trains[0].clearbox.as_mut().unwrap().correction_data =
+        config.optical_trains[0].optional_components.clearbox.as_mut().unwrap().correction_data =
             Some(vec![vec![vec![Some(1.0), None]]]);
         let json_with_binary = serde_json::to_string(&config).unwrap();
         assert!(json_with_binary.contains("\"correction_data\""));

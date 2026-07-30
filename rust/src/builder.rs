@@ -201,7 +201,9 @@ impl MockConfigBuilder {
             light_source,
             collimator,
             scanner_card,
-            clearbox: if self.include_clearbox { Some(mock_clearbox(index)) } else { None },
+            optional_components: OptionalComponents {
+                clearbox: if self.include_clearbox { Some(mock_clearbox(index)) } else { None },
+            },
             scan_field_correction_file: if self.include_clearbox { Some(mock_sfcf(index)) } else { None },
         }
     }
@@ -363,7 +365,7 @@ mod tests {
         b.include_clearbox = false;
         b.save(&tmp).unwrap();
         let config = MachineConfigReader::open(&tmp).unwrap().parse().unwrap();
-        assert!(config.optical_trains[0].clearbox.is_none());
+        assert!(config.optical_trains[0].optional_components.clearbox.is_none());
     }
 
     // Minimal temp-file helper for inline tests — avoids a `tempfile` crate

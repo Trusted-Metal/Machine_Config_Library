@@ -160,7 +160,13 @@ cargo test --lib
 cargo build --all-targets
 ```
 
-**Current status**: Phase 3 complete — all phases §3.1–§3.9 done. **60 tests passing** (46 lib + 14 integration), `cargo build --all-targets` clean, zero warnings. CI added: `.github/workflows/rust.yml` (matrix: `windows-latest` + `ubuntu-latest`). Cross-check added: `.github/workflows/cross_check.yml` + `tools/cross_check.py` (schema validation, read parity for all 3 fixtures, write interoperability). All cross-check phases green locally (Python ↔ Rust).
+**Current status**: Phase 3 complete — all phases §3.1–§3.9 done. **60 tests passing** (46 lib + 14 integration), `cargo build --all-targets` clean, zero warnings. CI added: `.github/workflows/rust.yml` (matrix: `windows-latest` + `ubuntu-latest`; uploads JSON + correction hash artifacts; compare job diffs Linux vs Windows). Cross-check added: `.github/workflows/cross_check.yml` + `tools/cross_check.py` (4 phases: schema validation, read parity, write interop, correction hash parity; runs on both `ubuntu-latest` and `windows-latest`). All cross-check phases green locally and in CI (Python ↔ Rust).
+
+**Public API additions (Phase 3.9+)**:
+- `CorrectionData { data: Vec<f64>, shape: [usize; 3] }` — ndarray removed from public API; correction grids exposed as plain `Vec<f64>`
+- `get_correction_data(train) -> Result<CorrectionData>` / `get_inverse_correction_data(train) -> Result<CorrectionData>`
+- CLI: `write-hdf5 <json> <output.h5>` — writes HDF5 from canonical JSON input
+- CLI: `correction-hash <path> [--train N] [--inverse]` — prints SHA-256 of correction grid as flat little-endian f64 bytes
 
 **Reading a config today**:
 
@@ -213,20 +219,23 @@ let json = reader.to_json(true, false)?;          // pretty JSON, binary fields 
 | `.github/workflows/python.yml` | 1.7 | CI: pytest on Python 3.11+3.12, golden file checksum verification, CLI validate/export-json, golden file diff check, artifact upload |
 | `python/tests/test_writer_roundtrip.py` | 1.8d | Bidirectional write roundtrip suite: 110 tests across 6 classes; every scalar field; all 18 ClearBox scalar attrs; NaN↔None; axis_configuration "2D"/"3D"/"3D+Focus"; no-ClearBox path; schema validity |
 | `python/tests/test_opcua_roundtrip.py` | 1.8e | OPCUA roundtrip suite: OpcuaClientConfig/OpcuaPipeConfig/OpcuaTrigger models; write-with-OPCUA → read-back field assertion; `extra` passthrough; without-OPCUA path; schema validity |
-| `rust/Cargo.toml` | 3.1 | Rust package manifest: `hdf5-metno` (aliased as `hdf5`, static; no system install), `serde`/`serde_json`, `thiserror`, `indexmap`, `clap`, `ndarray`; CI matrix: `windows-latest` + `ubuntu-latest` |
+| `rust/Cargo.toml` | 3.1 | Rust package manifest: `hdf5-metno 0.12` (aliased as `hdf5`, static; no system install), `hdf5-metno-sys 0.11`, `serde`/`serde_json`, `thiserror`, `indexmap`, `clap`, `ndarray 0.16`, `sha2 0.10`; CI matrix: `windows-latest` + `ubuntu-latest` |
 | `rust/src/lib.rs` | 3.1 | Crate root — `pub mod` declarations for all six modules |
 | `rust/src/error.rs` | 3.3 | `MachineConfigError` enum (Hdf5, Json, Parse, UnitMismatch, UnsupportedVersion, MissingGroup); `pub type Result<T>`; 6 inline unit tests |
-| `rust/src/models.rs` | 3.4 | All 15 data model structs (`MachineConfig` and its full field tree) mirroring `python/src/machine_config/models.py`; `ExtraAttrs` = `IndexMap<String, serde_json::Value>` type alias; 7 inline unit tests |
-| `rust/src/reader.rs` | 3.5 | `MachineConfigReader` — `open`/`parse`/`parse_with_binary`/`get_correction_data`/`get_inverse_correction_data`/`get_scan_field_correction_bytes`/`get_raw_group`/`to_json`; type-dispatching attribute helpers (Rules 1–8, §3.11); 15 inline unit tests incl. a deep-equality check against `fixtures/reference_output.json` |
+| `rust/src/models.rs` | 3.4 | All 15 data model structs (`MachineConfig` and its full field tree) mirroring `python/src/machine_config/models.py`; `ExtraAttrs` = `IndexMap<String, serde_json::Value>` type alias; `CorrectionData { data: Vec<f64>, shape: [usize; 3] }` public type (ndarray removed from public API); 7 inline unit tests |
+| `rust/src/reader.rs` | 3.5 | `MachineConfigReader` — `open`/`parse`/`parse_with_binary`/`get_correction_data(usize) → Result<CorrectionData>`/`get_inverse_correction_data(usize) → Result<CorrectionData>`/`get_scan_field_correction_bytes`/`get_raw_group`/`to_json`; ndarray internal-only; type-dispatching attribute helpers (Rules 1–8, §3.11); 15 inline unit tests incl. a deep-equality check against `fixtures/reference_output.json` |
 | `rust/src/writer.rs` | 3.6 | `MachineConfigWriter<'a>` — HDF5 writer (inverse of reader); `ws`/`wf`/`wi`/`wb` helpers; correction-grid write with NaN; OPCUA; `extra` passthrough; 11 inline unit tests incl. SHA-256 correction roundtrip |
 | `rust/src/builder.rs` | 3.7 | `MockConfigBuilder` — synthetic config generator with Gaussian correction grids; `build()`/`save()`; 6 inline unit tests incl. shape, nonzero-peak, no-clearbox path |
-| `rust/src/main.rs` | 3.8 | `machine-config-cli` binary — `export-json <path> [--include-binary]`; JSON to stdout, exit 1 on error; Phase 5 `cross_check.py` entry point |
+| `rust/src/main.rs` | 3.8 | `machine-config-cli` binary — three subcommands: `export-json <path> [--include-binary]` (JSON to stdout); `write-hdf5 <json> <output.h5>` (writes HDF5 from canonical JSON); `correction-hash <path> [--train N] [--inverse]` (SHA-256 of flat little-endian f64 correction bytes) |
 | `rust/src/adapters/mod.rs` | 3.1 | Adapter layer scaffold — empty until first schema bump |
 | `rust/src/adapters/registry.rs` | 3.1 | Adapter registry scaffold — empty until first schema bump |
 | `rust/tests/integration_test.rs` | 3.9 | 14 integration tests across 3 fixtures: structural, correction-data, OPCUA, builder roundtrip, writer roundtrip |
-| `.github/workflows/rust.yml` | 3.CI | Rust CI: `cargo test` + `cargo build --release` on matrix `ubuntu-latest`/`windows-latest`; no `apt-get` (hdf5-metno static); CLI smoke-test uploads JSON artifact |
-| `.github/workflows/cross_check.yml` | 5.CI | Cross-language CI: installs Python package + deepdiff, builds Rust release, runs `tools/cross_check.py --verbose`; uploads both language outputs as artifact on any result |
-| `tools/cross_check.py` | 5.1 | Three-phase correctness checker: schema validation × 3 fixtures × N languages; read parity (all fixtures, deep-equal); write interop (Python builder/writer → Rust reader). `--langs`, `--skip-write-interop`, `--verbose`. Extends to nodejs/cpp by uncommenting one RUNNERS entry each. Fixed Windows UTF-8 encoding bug (subprocess default CP1252 corrupted μm → Î¼m) |
+| `.github/workflows/rust.yml` | 3.CI | Rust CI: `cargo test` + `cargo build --release` on matrix `ubuntu-latest`/`windows-latest`; CLI smoke-test exports JSON + correction hashes for all 3 fixtures (forward + inverse); both artifacts uploaded; `compare` job diffs Linux vs Windows JSON and correction hashes |
+| `.github/workflows/cross_check.yml` | 3.CI | Cross-language CI: matrix `ubuntu-latest`/`windows-latest`; `PYTHONUTF8=1` job-level env; installs Python + deepdiff, builds Rust; 4 phase steps with per-phase `--skip-*` flags; uploads per-OS inspection artifacts |
+| `tools/cross_check.py` | 3.CI | Four-phase correctness checker: (1) schema validation × 3 fixtures × N langs; (2) read parity deep-diff; (3) write interop (Python builder/writer/Rust writer roundtrips); (4) correction hash parity — SHA-256 of flat little-endian f64 bytes, Python vs Rust, all 3 fixtures × {forward, inverse}. `RUNNERS` + `BINARIES` dicts; `PYTHONUTF8=1` in all subprocess envs; per-phase `--skip-*` flags. Adding a language = register in `RUNNERS`/`BINARIES` + add build steps to `cross_check.yml`. |
+| `examples/quickstart/python/main.py` | 1.9 | Python quickstart — 6-step read+write roundtrip demo; resolves repo root via `__file__`; prints PASS/FAIL with field-level diagnostics |
+| `rust/examples/quickstart.rs` | 3.QS | Rust quickstart — mirrors Python quickstart; run with `cargo run --example quickstart --manifest-path rust/Cargo.toml`; uses `CARGO_MANIFEST_DIR` to resolve repo root |
+| `examples/quickstart/rust/main.rs` | 3.QS | Reference copy of Rust quickstart source for multi-language directory convention |
 
 ---
 
@@ -1897,65 +1906,137 @@ opcua: Optional[OpcuaConfig] = None
 
 ---
 
+## Phase 1.9 — Python Hello World
+
+> **Status: Complete (2026-07-30).** `examples/quickstart/python/main.py` implemented and passing. 310 Python tests green.
+
+**Goal**: Produce `examples/quickstart/python/main.py` — a standalone runnable program that demonstrates both the read and write paths of the Python library. This becomes the template all other language hello worlds follow.
+
+**What it does** (same structure for every language):
+1. Open `fixtures/reference_config.h5` via `MachineConfigReader`
+2. Print: machine name, optical train count, working distance (train 0), correction data shape (train 0)
+3. Write a copy to a temp file via `MachineConfigWriter`
+4. Read the copy back via `MachineConfigReader`
+5. Assert machine name, train count, and working distance match the original
+6. Print `PASS` or `FAIL` with details
+
+This is a self-contained read+write roundtrip. If it passes, the library's reader and writer are both functional from a consumer perspective.
+
+**No new tests or CI changes** — the Python library is fully tested; this is documentation for consumers, not a test harness.
+
+---
+
+## Phase 3.10 — Rust Integration (clearbox-tauri)
+
+**Goal**: Replace clearbox-tauri's existing machine config reader with `MachineConfigReader` from this library. Writer replacement is deferred to the Lossless Build Log phase.
+
+**Branch**: new branch off clearbox-tauri `main` (work lives in the clearbox-tauri repo, not here).
+
+**Dependency**:
+```toml
+# clearbox-tauri/src-tauri/Cargo.toml
+machine-config = { path = "../../Machine_Config_Library/rust" }
+```
+Promote to a git-pinned dep once stable.
+
+**ndarray coexistence**: clearbox-tauri uses ndarray 0.17; this library uses ndarray 0.16 internally. `CorrectionData` carries no ndarray type across the boundary — both versions compile independently in the same build. No action needed.
+
+**Completion criteria (branch merge conditions)**:
+- Existing clearbox-tauri tests pass with the new reader
+- `MachineConfigReader::open()` + `reader.parse()` replaces the existing reader at all call sites
+- `CorrectionData` used wherever correction grids are accessed
+- Writer not touched (existing clearbox-tauri writer remains)
+- `cargo build --release` clean on Windows (the primary deployment target)
+
+**No changes to this repo's CI** — this work lives entirely in clearbox-tauri.
+
+---
+
 ## Phase 2 — Node.js
 
-> **Implementation order note**: Rust (Phase 3) will be implemented before Node.js. Phase numbering is preserved as-is; Phase 3 is the active next phase.
+> **Implementation order**: Python (Phase 1) → Rust (Phase 3) → Python hello world (Phase 1.9) → clearbox-tauri integration (Phase 3.10) → Node.js scaffold (Phase 2.0) → Node.js implementation (Phase 2) → C++ (Phase 4) → Go (Phase 5). Phase numbering reflects original plan order; new phases inserted with decimal suffixes to avoid renumbering.
 
-**Libraries**: `h5wasm` (same as viewer), `vitest` (test runner), `ajv` (JSON Schema), `typescript`
+**Libraries**: `node-hdf5` (native N-API bindings to libhdf5; no WASM), `vitest` (test runner), `ajv` (JSON Schema validation), `typescript`
+
+> **Why `node-hdf5` not `h5wasm`**: Each language implementation must be an independent native implementation for cross_check parity to be meaningful. A WASM build of the Rust library would share the same HDF5 parsing logic and defeat the cross-check. `node-hdf5` links the HDF5 C library natively via N-API.
 
 **Install**: `npm install machine-config-library`
 
-**Start condition**: Phase 1.8a and 1.8d complete; `fixtures/reference_output.json` regenerated with full ClearBox model and SHA-256 committed; Python bidirectional write roundtrip verified in CI; `python.yml` green. Can run in parallel with Rust once the golden file exists.
+**Start condition**: Phase 1.9 (Python hello world) and Phase 3.10 (clearbox-tauri integration) complete; `cross_check.py` Phase 3 write interop refactored to data-driven (required before adding a third language). `python.yml` and `rust.yml` CI green.
 
-> **CI added at end of Phase 2**: `.github/workflows/nodejs.yml` and `.github/workflows/cross_check.yml` (with `needs: [python, nodejs]`). This is the earliest the cross-check can run and the point at which end-to-end drift detection begins — two languages is enough.
+> **CI added at end of Phase 2**: `.github/workflows/nodejs.yml` (Ubuntu first; Windows added when node-hdf5 Windows CI is proven); `cross_check.yml` `--langs` extended to `python,rust,nodejs`; Node.js build steps added to `cross_check.yml`.
 
 ---
+
+### 2.0 — Node.js Scaffold (do before implementation)
+
+Create the package structure and interface contract so the active Node.js consumer has a defined surface to build against. No HDF5 implementation yet — stubs only.
+
+**Deliverables**:
+- `nodejs/package.json` with `node-hdf5`, `typescript`, `vitest`, `ajv`, `commander` dependencies declared
+- `nodejs/tsconfig.json`
+- `nodejs/src/models.ts` — TypeScript interfaces for all schema types (fully typed, not stubs)
+- `nodejs/src/reader.ts` — `MachineConfigReader` class shell with method signatures
+- `nodejs/src/writer.ts` — `MachineConfigWriter` class shell
+- `nodejs/src/cli.ts` — `export-json`, `write-hdf5`, `correction-hash` subcommand stubs (same surface as Python/Rust CLIs)
+- `RUNNERS["nodejs"]` and `BINARIES["nodejs"]` entries in `cross_check.py` — commented out, pointing to the built CLI
+
+The consumer sees the full TypeScript interface immediately; the implementation fills in later.
 
 ### 2.1 — Package Structure
 
 ```
 nodejs/
 ├── src/
-│   ├── index.ts             ← exports MachineConfigReader, MockConfigBuilder
+│   ├── index.ts             ← exports MachineConfigReader, MachineConfigWriter, MockConfigBuilder
 │   ├── models.ts            ← TypeScript interfaces matching the schema
-│   ├── reader.ts            ← h5wasm-based reader
-│   ├── writer.ts            ← h5wasm-based writer (inverse of reader; MachineConfig → HDF5)
-│   ├── builder.ts           ← generates .h5 using h5wasm write mode
+│   ├── reader.ts            ← node-hdf5-based reader
+│   ├── writer.ts            ← node-hdf5-based writer (inverse of reader; MachineConfig → HDF5)
+│   ├── builder.ts           ← MockConfigBuilder using node-hdf5 write mode
 │   ├── schema.ts            ← loads and validates via ajv
+│   ├── cli.ts               ← export-json, write-hdf5, correction-hash subcommands
 │   └── adapters/
 │       ├── index.ts         ← exports getChain(); adapter registry
 │       └── base.ts          ← Adapter interface: adapt(config: MachineConfig): MachineConfig
 ├── tests/
-│   ├── reader.test.ts       ← vitest tests against synthetic_2laser.h5
+│   ├── reader.test.ts       ← vitest tests against synthetic_2laser.h5 + reference fixtures
+│   ├── writer.test.ts       ← write roundtrip tests
 │   ├── schema.test.ts       ← validates canonical JSON output
 │   └── adapters.test.ts     ← adapter fixture tests (added when first adapter is written)
-├── examples/
-│   └── quickstart.mjs
 ├── package.json
 └── tsconfig.json
 ```
 
-TypeScript interfaces mirror the Python dataclasses exactly, with the same field names. This ensures canonical JSON output is structurally identical across both implementations.
+TypeScript interfaces mirror the Python dataclasses exactly, with the same field names. This ensures canonical JSON output is structurally identical across all implementations.
 
 ---
 
-### 2.2 — Why Node.js Runs Against Synthetic Fixture
+### 2.2 — Why Node.js Runs Against the Real Fixtures
 
-The reference `.h5` is 6.5 MB with scan correction file blobs. In CI with `h5wasm`, loading it is functional but slow. The `synthetic_2laser.h5` is ~200 KB and exercises all the same code paths. The cross-check (`tools/cross_check.py`) separately runs against the full reference file using Python as the oracle.
-
----
-
-### 2.3 — Viewer Integration (Critical Seam)
-
-The Node.js reader becomes the core of the viewer's **Build** and **Demo** modes:
-
-- Bundle the Node.js reader with `esbuild` into a single `machine_config_reader.bundle.js`
-- The viewer replaces its inline `readH5()` function with `import { MachineConfigReader } from './machine_config_reader.bundle.js'`
-- The viewer is then always running the same tested, validated reader code — not a parallel copy
+`node-hdf5` is a native module with the same performance characteristics as any other C extension. Unlike `h5wasm`, there is no WASM load overhead. The test suite runs against all three fixtures (`reference_config.h5`, `reference_config_opcua.h5`, `synthetic_2laser.h5`) matching the Rust integration test scope.
 
 ---
 
-### 2.4 — Tests
+### 2.3 — cross_check Phase 3 Refactor (prerequisite)
+
+Before Node.js is added as the third language, `phase_write_interop()` in `cross_check.py` must be refactored from hardcoded Python↔Rust blocks to a data-driven loop over all language pairs. At two languages the hardcoding is manageable; at three it creates maintenance debt and at four it becomes a combinatorial problem.
+
+This refactor happens at the **start** of Phase 2, before the Node.js writer is implemented, so cross_check validates the Node.js write path incrementally as it is built.
+
+---
+
+### 2.4 — Implementation Order (vertical slice)
+
+1. Models (`models.ts`) — TypeScript types matching the schema
+2. Reader (`reader.ts`) — node-hdf5 → models; add to cross_check Phase 1+2 immediately
+3. `nodejs.yml` CI — add when first test passes
+4. Writer (`writer.ts`) — models → node-hdf5; add to cross_check Phase 3
+5. `correction-hash` CLI subcommand — add to cross_check Phase 4
+6. Hello world (`examples/quickstart/nodejs/main.ts`) — capstone after all above complete
+
+---
+
+### 2.5 — Tests
 
 The Node.js test suite runs against `fixtures/synthetic_2laser.h5`. Tests cover the same logical assertions as the Python suite so any structural gap between implementations surfaces immediately.
 
@@ -2070,7 +2151,7 @@ describe('JSON Schema constraints', () => {
 
 ## Phase 3 — Rust
 
-> **Active next phase.** Rust is implemented before Node.js (Phase 2); see implementation order note in Phase 2.
+> **Status: Complete (2026-07-28).** All phases §3.1–§3.9 done + quickstart (Phase 3.QS, 2026-07-30). 60 tests passing (46 lib + 14 integration). See Developer Quick Reference for current CLI surface and public API.
 
 **Libraries**: `hdf5-metno` (static; no system HDF5 required), `serde` / `serde_json`, `thiserror`, `indexmap`, `clap`, `ndarray`
 
@@ -2119,11 +2200,17 @@ rust/
 | Ubuntu/Debian | None — `cargo build` handles everything |
 | macOS | None — `cargo build` handles everything |
 
-The `Cargo.toml` entry:
+The `Cargo.toml` entries:
 
 ```toml
-hdf5-metno = { version = "0.9", features = ["static"] }
+[dependencies]
+hdf5     = { package = "hdf5-metno",     version = "0.12" }
+hdf5-sys = { package = "hdf5-metno-sys", version = "0.11", features = ["static", "zlib"] }
+ndarray  = "0.16"   # must match hdf5-metno 0.12's internal ndarray; 0.17 causes type mismatch
+sha2     = "0.10"   # for correction-hash CLI subcommand
 ```
+
+> **ndarray version constraint**: `hdf5-metno 0.12` uses ndarray 0.16 internally. Using ndarray 0.17 in `Cargo.toml` causes a type mismatch at the `dataset.read::<f64, Ix3>()` boundary because two incompatible `Array3` types exist in the build. ndarray 0.16 is the correct version and must not be bumped until hdf5-metno is updated.
 
 **Tradeoff**: first `cargo build` is slower (~2–3 min on a cold cache while libhdf5 compiles from source). Subsequent builds use the cached compiled artifact.
 
@@ -2611,13 +2698,26 @@ impl<'a> MachineConfigWriter<'a> {
 
 ## Phase 4 — C++
 
-**Libraries**: HighFive 2.x (header-only HDF5 C++ wrapper), nlohmann/json, Catch2, CMake 3.16+
+> **Detail deferred.** This section will be fully fleshed out after Node.js (Phase 2) is complete and the Phase 3 write interop refactor is proven. The patterns established in Node.js CI (libhdf5 on Windows, data-driven Phase 3) directly inform the C++ implementation.
 
-**Distribution**: CMake `FetchContent` + vcpkg port
+**Library choices** (decided now, not subject to change):
+- **HDF5 wrapper**: HighFive (header-only C++ wrapper over the HDF5 C library; CMake `FetchContent`)
+- **JSON**: nlohmann/json (header-only; `FetchContent`)
+- **Build**: CMake 3.20+
+- **Argument parsing**: CLI11 (header-only)
+- **Tests**: Catch2 (header-only via `FetchContent`)
 
-**Start condition**: Cross-check is green for at least two languages (Python + one other). C++ is built last because it has the most environment friction — doing it after Rust means the `libhdf5` system dependency issues are already understood and the HDF5 group/attribute paths have been validated by three prior implementations.
+**Implementation order** (same vertical slice as all other languages):
+1. Models (`models.hpp`) — POD structs matching the schema
+2. Reader — add to cross_check Phase 1+2 immediately
+3. `cpp.yml` CI — add when first test passes (matrix: Ubuntu + Windows via vcpkg)
+4. Writer — add to cross_check Phase 3
+5. `correction-hash` CLI — add to cross_check Phase 4
+6. Hello world (`examples/quickstart/cpp/main.cpp`) — capstone
 
-> **CI added at end of Phase 4**: `.github/workflows/cpp.yml` added; `cross_check.yml` `needs:` extended to include `cpp` — all four languages now in the cross-check.
+**Windows CI approach**: vcpkg with `hdf5` port. The experience from Node.js CI will clarify whether this is sufficient or whether a pre-built static HDF5 is needed.
+
+> Full directory structure, test patterns, and cross_check integration details to be added when Phase 2 is complete.
 
 ---
 
@@ -2693,160 +2793,50 @@ C++ has the most environment friction (system HDF5, CMake, vcpkg setup). Buildin
 
 ---
 
-### 4.4 — Tests
-
-C++ tests use Catch2 v3. `FIXTURES_DIR` is injected as a compiler definition from CMake (`target_compile_definitions(test_runner PRIVATE FIXTURES_DIR="${CMAKE_SOURCE_DIR}/../fixtures")`).
-
-```cpp
-// tests/test_reader.cpp
-#include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_floating_point.hpp>
-#include <nlohmann/json.hpp>
-#include "machine_config/reader.hpp"
-#include "machine_config/builder.hpp"
-
-static const std::string FIXTURE =
-    std::string(FIXTURES_DIR) + "/synthetic_2laser.h5";
-
-TEST_CASE("Machine name is non-empty", "[reader][meta]") {
-    auto config = MachineConfig::Reader(FIXTURE).parse();
-    REQUIRE_FALSE(config.meta.machine_name.empty());
-}
-
-TEST_CASE("Configuration hash is exactly 64 characters", "[reader][meta]") {
-    auto config = MachineConfig::Reader(FIXTURE).parse();
-    REQUIRE(config.meta.configuration_hash.size() == 64);
-}
-
-TEST_CASE("Build plate X dimension", "[reader][machine]") {
-    auto config = MachineConfig::Reader(FIXTURE).parse();
-    REQUIRE_THAT(config.machine.build_plate_x,
-                 Catch::Matchers::WithinAbs(250.0, 1e-5));
-}
-
-TEST_CASE("Optical train count for 2-laser fixture", "[reader][optical]") {
-    auto config = MachineConfig::Reader(FIXTURE).parse();
-    REQUIRE(config.optical_trains.size() == 2);
-}
-
-TEST_CASE("Working distance Laser 1", "[reader][optical]") {
-    auto config = MachineConfig::Reader(FIXTURE).parse();
-    REQUIRE_THAT(config.optical_trains[0].scanner.working_distance.value(),
-                 Catch::Matchers::WithinAbs(670.0, 1e-5));
-}
-
-TEST_CASE("train_id is non-empty for every train", "[reader][optical]") {
-    auto config = MachineConfig::Reader(FIXTURE).parse();
-    for (const auto& train : config.optical_trains) {
-        REQUIRE_FALSE(train.train_id.empty());
-    }
-}
-
-TEST_CASE("JSON output satisfies canonical schema", "[reader][schema]") {
-    auto config = MachineConfig::Reader(FIXTURE).parse();
-    nlohmann::json j = config;
-    // Uses nlohmann/json-schema-validator (add to CMakeLists.txt as FetchContent)
-    REQUIRE(MachineConfig::validate_schema(j) == true);
-}
-
-TEST_CASE("Correction data shape is 257x257x2", "[reader][correction]") {
-    auto reader = MachineConfig::Reader(FIXTURE);
-    auto data = reader.get_correction_data(0);
-    REQUIRE(data.shape[0] == 257);
-    REQUIRE(data.shape[1] == 257);
-    REQUIRE(data.shape[2] == 2);
-}
-
-TEST_CASE("MockConfigBuilder roundtrip", "[builder]") {
-    auto tmp = std::filesystem::temp_directory_path() / "mc_test_builder.h5";
-    MachineConfig::MockConfigBuilder(2).save(tmp);
-    auto config = MachineConfig::Reader(tmp).parse();
-    REQUIRE(config.optical_trains.size() == 2);
-    REQUIRE_FALSE(config.meta.machine_name.empty());
-    std::filesystem::remove(tmp);
-}
-```
+> **§4.1–§4.4 (directory structure, CMakeLists.txt, test patterns, cross_check integration) — deferred until Phase 2 (Node.js) is complete.** See Phase 4 intro above for library choices and implementation order.
 
 ---
 
-## Phase 5 — Cross-Check Tooling
+## Phase 5 — Go
 
-### 5.1 — `tools/cross_check.py`
+> **Detail deferred.** This section will be fully fleshed out after C++ (Phase 4) is complete. Go is last because CGO + Windows CI is the most complex dependency setup of any language in this project.
 
-> **Status: Implemented (2026-07-28).** Three-phase script, all phases green locally (Python ↔ Rust). First run found and fixed a real bug: Windows `subprocess.run` decoded Rust's UTF-8 stdout as CP1252, corrupting multi-byte unit strings (`μm` → `Î¼m`). Fixed by adding `encoding="utf-8"` to all `subprocess.run` calls — a non-obvious issue that would have silently caused all Windows cross-check runs to report false failures without this script.
+**Library choices** (decided):
+- **HDF5 wrapper**: `gonum/hdf5` (CGO wrapper around the HDF5 C library)
+- **CLI**: `cobra`
+- **Tests**: standard `go test`
+- **JSON Schema**: `github.com/santhosh-tekuri/jsonschema/v6`
 
-The script runs in three phases:
+**Implementation order**: same vertical slice as all other languages (models → reader → CI → writer → correction hash → hello world).
+
+**Windows CI**: deferred. CGO on Windows requires MinGW-w64 + libhdf5, which is non-trivial. Ubuntu CI is added first; Windows CI added after the pattern is validated.
+
+**Prerequisite**: Phase 4 (C++) complete and cross-check CI green for all implemented languages.
+
+> Full directory structure, test patterns, and cross_check integration details to be added when Phase 4 (C++) is complete.
+
+---
+
+## Phase 6 — Cross-Check Tooling
+
+### 6.1 — `tools/cross_check.py`
+
+> **Status: Implemented (2026-07-28).** Four-phase script, all phases green locally and in CI (Python ↔ Rust on Ubuntu and Windows). See Developer Quick Reference for current phase descriptions and CLI flags.
+
+The script runs in four phases:
 
 | Phase | What it checks | Pass condition |
 |---|---|---|
 | 1 Schema validation | Every language × every fixture validates against `schema/machine_config_v1.schema.json` | `jsonschema.validate()` passes for all combinations |
 | 2 Read parity | All languages produce identical JSON for all three fixtures | `DeepDiff` (significant_digits=8) returns no diff for each pair |
-| 3 Write interop | Python builder (1-laser) → Rust reader; Python writer roundtrip (reference → write → re-read) → Rust reader | Rust and Python outputs are deep-equal for all generated files |
+| 3 Write interop | Python builder/writer → Rust reader; Rust writer → Python + Rust readers (parity + fidelity) | All readers agree on all written files |
+| 4 Correction hash | SHA-256 of flat little-endian f64 correction bytes matches across all language pairs, all fixtures, forward + inverse | All language pairs produce identical hex digests |
 
 Design principles:
-- **Extensible by one line**: add a language by uncommenting its entry in `RUNNERS` — no other change needed
-- **Graceful degradation**: missing `deepdiff` falls back to JSON string comparison; missing `jsonschema` skips Phase 1 with a warning
-- **Windows-safe**: explicitly uses `encoding="utf-8"` in all subprocess calls
-- **Binary-aware**: finds the Rust release binary relative to the repo root; prefers release over debug; falls back gracefully with a `[WARN]`
+- **Extensible**: add a language by adding entries to `RUNNERS` and `BINARIES` — no other changes needed to phase logic
+- **Windows-safe**: `PYTHONUTF8=1` in all subprocess envs; `shell: bash` on steps using bash syntax in CI
+- **Per-phase skip flags**: `--skip-schema`, `--skip-read-parity`, `--skip-write-interop`, `--skip-correction-hash`
 - **Subset mode**: `--langs python,rust` to check only available languages during development
-
-Usage:
-
-```bash
-python tools/cross_check.py                    # all languages in RUNNERS
-python tools/cross_check.py --langs python,rust
-python tools/cross_check.py --skip-write-interop
-python tools/cross_check.py --verbose
-```
-
-Phase 3 (write interop) currently only tests the Python-writes → Rust-reads direction. The Rust-writes → Python-reads direction will be added when the Rust CLI gains a `build` subcommand (Phase 3.8 extension or a future phase).
-def main():
-    golden = json.loads(GOLDEN.read_text())
-    results = {}
-
-    for lang, cmd in RUNNERS.items():
-        out = subprocess.run(cmd, capture_output=True, text=True)
-        if out.returncode != 0:
-            print(f"[FAIL] {lang}: process exited {out.returncode}")
-            print(out.stderr)
-            sys.exit(1)
-        results[lang] = json.loads(out.stdout)
-
-    all_passed = True
-    for lang, result in results.items():
-        diff = DeepDiff(
-            golden,
-            result,
-            significant_digits=8,   # tolerate float repr differences across languages
-            ignore_order=False
-        )
-        if diff:
-            print(f"[FAIL] {lang} differs from golden:")
-            print(diff.pretty())
-            all_passed = False
-        else:
-            print(f"[PASS] {lang}")
-
-    sys.exit(0 if all_passed else 1)
-
-if __name__ == "__main__":
-    main()
-```
-
----
-
-### 5.2 — Float Precision Policy
-
-- All languages serialize floats with at least 8 significant digits
-- The cross-check uses `significant_digits=8` tolerance
-- Correction grid arrays are **excluded** from cross-check JSON — checked separately via shape and a checksum of the first/last row
-- The `configuration_hash` field is compared as an exact string with no tolerance
-
----
-
-### 5.3 — Cross-Check as Integration Test
-
-The cross-check is a system-level integration test: it asserts that every language reader produces byte-for-byte identical canonical output from the same input file, to within the float tolerance defined in 5.2. It is the final correctness gate before any release.
 
 **The cross-check starts with two languages, not four.** As soon as Python and one other language (Node.js or Rust, whichever completes first) are both CI-green, the cross-check runs against those two. Each additional language is added to the check as it lands. Waiting for all four before running any cross-check is not the plan — two languages catching drift is the point.
 
@@ -2893,7 +2883,7 @@ The existing `viewer/machine_config_viewer.html` reads HDF5 directly via the `h5
 
 ---
 
-## Phase 6 — Examples
+## Phase 7 — Examples
 
 Two tiers per language, living under `examples/`. These are the primary onboarding path for new users.
 
@@ -2946,20 +2936,21 @@ def _run(cmd: list[str]) -> str:
     assert result.returncode == 0, f"{cmd!r} exited {result.returncode}:\n{result.stderr}"
     return result.stdout
 
-EXPECTED_LINES = ["Machine:", "Build plate:", "Optical trains:", "Working distance:", "Correction grid:"]
+EXPECTED_LINES = ["Machine name", "Optical trains", "Working dist", "Correction grid"]
 
 def _assert_quickstart_output(out: str) -> None:
     for line in EXPECTED_LINES:
         assert line in out, f"Expected {line!r} in output:\n{out}"
 
 def test_python_quickstart():
-    _assert_quickstart_output(_run(["python", "examples/quickstart/python/quickstart.py"]))
+    _assert_quickstart_output(_run(["python", "examples/quickstart/python/main.py"]))
 
 def test_nodejs_quickstart():
-    _assert_quickstart_output(_run(["node", "examples/quickstart/nodejs/quickstart.mjs"]))
+    _assert_quickstart_output(_run(["node", "examples/quickstart/nodejs/main.mjs"]))
 
 def test_rust_quickstart():
-    _assert_quickstart_output(_run(["examples/quickstart/rust/target/release/quickstart"]))
+    # Rust quickstart is a Cargo example; assumes release binary has been pre-built
+    _assert_quickstart_output(_run(["rust/target/release/examples/quickstart"]))
 
 def test_cpp_quickstart():
     _assert_quickstart_output(_run(["examples/quickstart/cpp/build/quickstart"]))
@@ -2969,7 +2960,7 @@ The smoke tests do not validate exact field values — that is the responsibilit
 
 ---
 
-## Phase 7 — Viewer Enhancement
+## Phase 8 — Viewer Enhancement
 
 The existing viewer (`Reference Materials/machine_config_viewer.html`) already has: h5wasm HDF5 loading, canvas rendering of scanner fields, CMM dot overlay, 3MF build plate, pan/zoom. All enhancements layer on top without breaking existing functionality.
 
@@ -3159,7 +3150,7 @@ test.describe('Export Canonical JSON', () => {
 
 ---
 
-## Phase 8 — Distribution & Packaging
+## Phase 9 — Distribution & Packaging
 
 | Language | Registry | Package Name | Notes |
 |---|---|---|---|
@@ -3228,7 +3219,7 @@ target_link_libraries(smoke PRIVATE machine_config)
 
 ---
 
-## Phase 9 — CI/CD Hardening (`.github/workflows/`)
+## Phase 10 — CI/CD Hardening (`.github/workflows/`)
 
 The individual language workflows (`python.yml`, `nodejs.yml`, `rust.yml`, `cpp.yml`) and the cross-check are added incrementally as each language lands — **not** all at once here. By the time Phase 9 is reached, all five workflow files already exist and the cross-check is running all four languages.
 
@@ -3370,148 +3361,6 @@ jobs:
 
 ---
 
-## Phase 10 — Go (Deferred — begin only after Phase 9 is stable)
-
-**Prerequisite**: Phases 1–9 complete, cross-check CI green for at least one full release cycle, and Decision 5 revisited with a confirmed use case. No Go code is written until this gate is cleared.
-
-**Libraries**: `gonum/hdf5` (CGO binding to `libhdf5`) for HDF5 access, `encoding/json` (stdlib), `github.com/santhosh-tekuri/jsonschema/v6` for JSON Schema validation, `github.com/spf13/cobra` for CLI
-
-**Install**: `go get github.com/<org>/machine-config`
-
----
-
-### 10.1 — Package Structure
-
-```
-go/
-├── machineconfig/
-│   ├── models.go            ← structs with json tags matching the schema
-│   ├── reader.go            ← HDF5 → MachineConfig
-│   ├── writer.go            ← MachineConfig → HDF5 (inverse of reader)
-│   ├── builder.go           ← MockConfigBuilder, YamlConfigBuilder
-│   ├── schema.go            ← embeds machine_config_v1.schema.json; validates
-│   └── adapters/
-│       ├── adapters.go      ← Adapter interface; GetChain()
-│       └── registry.go      ← adapter registry (auto-generated by Jinja)
-├── cmd/machine-config/
-│   └── main.go              ← CLI: inspect, validate, export-json, write, build
-├── go.mod
-└── go.sum
-```
-
----
-
-### 10.2 — HDF5 Binding
-
-The `gonum/hdf5` CGO binding links against system `libhdf5` — same install commands as Rust (`apt-get install libhdf5-dev`, `brew install hdf5`, HDF Group pre-built on Windows). Evaluate whether a static-linking option exists before committing, following the same decision process as Rust’s `hdf5-metno` alternative.
-
----
-
-### 10.3 — Adapter Generator Extension
-
-Add `adapter_go.go.j2` to `tools/templates/` and one entry to `OUTPUTS` in `tools/generate_adapters.py`:
-
-```python
-"go": ("adapter_go.go.j2", "go/machineconfig/adapters/{name}.go"),
-```
-
-Running `python tools/generate_adapters.py` then generates the Go adapter alongside the other four automatically. No other changes to the generator are required.
-
----
-
-### 10.4 — Tests
-
-```go
-// machineconfig/reader_test.go
-package machineconfig_test
-
-import (
-    "path/filepath"
-    "runtime"
-    "testing"
-    mc "github.com/<org>/machine-config/machineconfig"
-)
-
-var fixture = func() string {
-    _, f, _, _ := runtime.Caller(0)
-    return filepath.Join(filepath.Dir(f), "../../fixtures/synthetic_2laser.h5")
-}()
-
-func TestMachineName(t *testing.T) {
-    config, err := mc.Open(fixture).Parse()
-    if err != nil { t.Fatal(err) }
-    if config.Meta.MachineName == "" {
-        t.Error("machine_name must be non-empty")
-    }
-}
-
-func TestOpticalTrainCount(t *testing.T) {
-    config, _ := mc.Open(fixture).Parse()
-    if len(config.OpticalTrains) != 2 {
-        t.Errorf("expected 2 optical trains, got %d", len(config.OpticalTrains))
-    }
-}
-
-func TestWorkingDistance(t *testing.T) {
-    config, _ := mc.Open(fixture).Parse()
-    wd := config.OpticalTrains[0].Scanner.WorkingDistance
-    if wd == nil || *wd < 669.9 || *wd > 670.1 {
-        t.Errorf("expected working_distance ≈ 670.0, got %v", wd)
-    }
-}
-
-func TestWriterRoundtrip(t *testing.T) {
-    config, _ := mc.Open(fixture).Parse()
-    tmp := t.TempDir() + "/roundtrip.h5"
-    if err := mc.NewWriter(config).Write(tmp); err != nil { t.Fatal(err) }
-    config2, _ := mc.Open(tmp).Parse()
-    if config2.Meta.MachineName != config.Meta.MachineName {
-        t.Error("roundtrip machine_name mismatch")
-    }
-    if config2.Meta.ConfigurationHash != config.Meta.ConfigurationHash {
-        t.Error("roundtrip configuration_hash mismatch")
-    }
-}
-
-func TestSchemaValidation(t *testing.T) {
-    config, _ := mc.Open(fixture).Parse()
-    if err := mc.ValidateSchema(config); err != nil {
-        t.Errorf("schema validation failed: %v", err)
-    }
-}
-```
-
----
-
-### 10.5 — CI
-
-Add `go.yml` and extend `cross_check.yml` `needs:` to include the Go job:
-
-```yaml
-# .github/workflows/go.yml
-name: Go
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get install -y libhdf5-dev
-      - uses: actions/setup-go@v5
-        with: { go-version: "1.22" }
-      - run: go test ./...
-        working-directory: go
-      - run: go build -o /tmp/mc-go-cli ./cmd/machine-config
-        working-directory: go
-      - run: /tmp/mc-go-cli export-json fixtures/reference_config.h5 > /tmp/go_output.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: go-output
-          path: /tmp/go_output.json
-```
-
----
-
 ## Execution Model — Vertical Slices, Not Horizontal Layers
 
 **The principle**: each language is built as a complete shippable milestone — reader, writer, builder, CLI, tests, CI pipeline, package registry — before the next language begins. Do not build all readers first and then all writers. Get one language working end-to-end, ship it, learn from it, then add the next. The schema stabilizes during Python; by the time C++ starts, three prior implementations have validated the HDF5 path and attribute mappings.
@@ -3541,21 +3390,22 @@ Phase 1 — Python (complete vertical slice, ~1–2 weeks)
     ├──► Phase 3 — Rust (complete vertical slice, ~3–4 days)
     │       reader → writer → builder → tests → rust.yml; extend cross_check to 3 languages → crates.io v0.1.0
     │
-    └──► Phase 5 — Cross-check active from Phase 2 onward
-                 2 languages after Phase 2; 3 after Phase 3; 4 after Phase 4.
+    └──► Phase 6 — Cross-check active from Phase 2 onward
+                 2 languages after Phase 2; 3 after Phase 3; 4 after Phase 4; 5 after Phase 5.
                  Each new language is one `needs:` addition to cross_check.yml.
                       │
                       └─ Gate: cross-check green for 3+ languages
                       ▼
              Phase 4 — C++ (complete vertical slice, ~3–5 days)
                  reader → writer → builder → tests → cpp.yml; extend cross_check to 4 languages → vcpkg v0.1.0
+                      ▼
+             Phase 5 — Go (complete vertical slice, ~3–4 days)
+                 reader → writer → builder → tests → go.yml; extend cross_check to 5 languages
 
-Phase 6 — Examples      ← parallel with Phases 2–4              (~1–2 days)
-Phase 8 — Distribution  ← after each language is CI-green        (~1–2 days/language)
-Phase 9 — CI Hardening  ← smoke tests, publish automation, tags  (~1 day)
-
-Phase 10 — Go           ← DEFERRED: after Phase 9 stable
-                             + Decision 5 gate cleared             (~3–4 days)
+Phase 7 — Examples      ← parallel with Phases 2–5              (~1–2 days)
+Phase 8 — Viewer        ← after Phase 2 (Node.js) complete      (~2–3 days)
+Phase 9 — Distribution  ← after each language is CI-green        (~1–2 days/language)
+Phase 10 — CI Hardening ← smoke tests, publish automation, tags  (~1 day)
 ```
 
 **Milestone release gates** — each language is independently shippable and the next language does not start until the prior gate passes:

@@ -31,6 +31,7 @@ from machine_config.models import (
     MachineConfig,
     MachineConfigMeta,
     OpticalTrain,
+    OptionalComponents,
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
@@ -214,7 +215,7 @@ def _train(axis_cfg: str = "3D", include_clearbox: bool = True) -> OpticalTrain:
         light_source=_light_source(),
         collimator=_collimator(),
         scanner_card=_scanner_card(),
-        clearbox=_clearbox() if include_clearbox else None,
+        optional_components=OptionalComponents(clearbox=_clearbox() if include_clearbox else None),
         scan_field_correction_file=_sfcf() if include_clearbox else None,
     )
 
@@ -271,7 +272,7 @@ def clearbox_cb(tmp_path_factory: pytest.TempPathFactory) -> ClearBox:
     """ClearBox from a written config; used by TestClearBoxAttributeRoundtrip."""
     out = tmp_path_factory.mktemp("cb_attrs") / "cb.h5"
     MachineConfigWriter(_config()).write(out)
-    return MachineConfigReader(out).parse().optical_trains[0].clearbox  # type: ignore[return-value]
+    return MachineConfigReader(out).parse().optical_trains[0].optional_components.clearbox  # type: ignore[return-value]
 
 
 @pytest.fixture(scope="module")
@@ -315,11 +316,11 @@ def nan_cb(tmp_path_factory: pytest.TempPathFactory) -> ClearBox:
         inverse_grid_domain_shape=None,
     )
     base = _config(include_clearbox=False)
-    patched = dc_replace(base.optical_trains[0], clearbox=cb_obj)
+    patched = dc_replace(base.optical_trains[0], optional_components=OptionalComponents(clearbox=cb_obj))
     cfg = dc_replace(base, optical_trains=[patched])
     out = tmp_path_factory.mktemp("nan_test") / "nan.h5"
     MachineConfigWriter(cfg).write(out)
-    return MachineConfigReader(out).parse().optical_trains[0].clearbox  # type: ignore[return-value]
+    return MachineConfigReader(out).parse().optical_trains[0].optional_components.clearbox  # type: ignore[return-value]
 
 
 @pytest.fixture(scope="module")
@@ -741,7 +742,7 @@ class TestWithoutClearBox:
     """Machine-agnostic path: a config with no ClearBox round-trips correctly."""
 
     def test_clearbox_is_none(self, nocb_rt: MachineConfig) -> None:
-        assert nocb_rt.optical_trains[0].clearbox is None
+        assert nocb_rt.optical_trains[0].optional_components.clearbox is None
 
     def test_scan_field_correction_file_is_none(self, nocb_rt: MachineConfig) -> None:
         assert nocb_rt.optical_trains[0].scan_field_correction_file is None

@@ -40,6 +40,17 @@ class ClearBox:
 
 
 @dataclass
+class OptionalComponents:
+    """Optional add-on hardware that may or may not be installed on an optical train.
+
+    Maps to the ``Optional_Components`` HDF5 group under each ``Optical_Train_NN``.
+    Fields are ``None`` when the corresponding hardware is not present.
+    New optional components are added here as the schema grows.
+    """
+    clearbox: Optional[ClearBox] = None
+
+
+@dataclass
 class Collimator:
     manufacturer: str
     model: str
@@ -180,7 +191,7 @@ class OpticalTrain:
     light_source: LightSource
     collimator: Collimator                                        # required; see Rule 7
     scanner_card: ScannerCard                                     # required; see Rule 7
-    clearbox: Optional[ClearBox]
+    optional_components: OptionalComponents                       # always present; contents vary
     scan_field_correction_file: Optional[ScanFieldCorrectionFile]
 
 

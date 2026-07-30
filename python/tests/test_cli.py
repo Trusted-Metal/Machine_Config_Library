@@ -68,7 +68,7 @@ class TestInspect:
 
     def test_verbose_shows_clearbox(self, runner):
         result = runner.invoke(main, ["inspect", REFERENCE_H5, "--verbose"])
-        assert "clearbox:" in result.output
+        assert "optional_components:" in result.output
 
     def test_verbose_shows_correction_file(self, runner):
         result = runner.invoke(main, ["inspect", REFERENCE_H5, "--verbose"])
@@ -169,14 +169,14 @@ class TestExportJson:
     def test_default_excludes_correction_data(self, runner):
         result = runner.invoke(main, ["export-json", REFERENCE_H5])
         parsed = json.loads(result.output)
-        cb = parsed["optical_trains"][0]["clearbox"]
+        cb = parsed["optical_trains"][0]["optional_components"]["clearbox"]
         assert "correction_data" not in cb
 
     def test_include_binary_flag_adds_correction_data(self, runner):
         result = runner.invoke(main, ["export-json", REFERENCE_H5, "--include-binary"])
         assert result.exit_code == 0
         parsed = json.loads(result.output)
-        cb = parsed["optical_trains"][0]["clearbox"]
+        cb = parsed["optical_trains"][0]["optional_components"]["clearbox"]
         assert "correction_data" in cb
         assert len(cb["correction_data"]) > 0
 

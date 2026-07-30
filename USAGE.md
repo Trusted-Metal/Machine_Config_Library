@@ -15,6 +15,7 @@ This document covers *how to use it once built*.
 
 - [Shared Concepts](#shared-concepts)
 - [Python](#python)
+  - [Quickstart example](#quickstart-example)
   - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file)
   - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json)
   - [Use case 3 — Reconstruct a config from JSON](#use-case-3--reconstruct-a-config-from-json)
@@ -25,8 +26,29 @@ This document covers *how to use it once built*.
   - [Use case 8 — Read OPCUA telemetry configuration](#use-case-8--read-opcua-telemetry-configuration)
   - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays)
   - [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema)
+  - [CLI reference](#cli-reference-python)
 - [Node.js](#nodejs) ← *coming in Phase 2*
-- [Rust](#rust) ← *coming in Phase 3*
+  - [Quickstart example](#quickstart-example-coming-in-phase-2)
+  - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file-nodejs)
+  - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json-nodejs)
+  - [Use case 3 — Reconstruct a config from JSON](#use-case-3--reconstruct-a-config-from-json-nodejs)
+  - [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5-nodejs)
+  - [Use case 5 — Edit a field and save to a new file](#use-case-5--edit-a-field-and-save-to-a-new-file-nodejs)
+  - [Use case 6 — Generate a synthetic test config](#use-case-6--generate-a-synthetic-test-config-nodejs)
+  - [Use case 7 — Build a config from a YAML specification](#use-case-7--build-a-config-from-a-yaml-specification-nodejs)
+  - [Use case 8 — Read OPCUA telemetry configuration](#use-case-8--read-opcua-telemetry-configuration-nodejs)
+  - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays-nodejs)
+  - [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema-nodejs)
+  - [CLI reference](#cli-reference-nodejs)
+- [Rust](#rust) ← *Phase 3 complete*
+  - [Quickstart example](#quickstart-example-1)
+  - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file-1)
+  - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json-1)
+  - [Use case 3 — Read OPCUA telemetry configuration](#use-case-3--read-opcua-telemetry-configuration)
+  - [Use case 4 — Access ClearBox correction arrays](#use-case-4--access-clearbox-correction-arrays)
+  - [Use case 5 — Write a config to HDF5](#use-case-5--write-a-config-to-hdf5)
+  - [Use case 6 — Generate a synthetic test fixture](#use-case-6--generate-a-synthetic-test-fixture)
+  - [Use case 7 — Export JSON from the command line](#use-case-7--export-json-from-the-command-line)
 - [C++](#c) ← *coming in Phase 4*
 - [Contributor Workflows](#contributor-workflows)
 
@@ -409,22 +431,57 @@ print("Schema valid.")
 
 ---
 
+### Quickstart example
+
+Run the end-to-end quickstart from the repo root:
+
+```powershell
+# PowerShell
+.\.venv\Scripts\python.exe examples/quickstart/python/main.py
+```
+
+```bash
+# Git Bash
+.venv/Scripts/python.exe examples/quickstart/python/main.py
+```
+
+Expected output:
+
+```
+=== Machine Config Quickstart ===
+
+Machine name   : TM-LPBF-02: AconityMIDI+_OG
+Optical trains : 2
+Working dist   : 670.0 mm   (train 0)
+Correction grid: (257, 257, 2)   (train 0)
+
+Written to     : <tmp>.h5
+
+PASS
+```
+
+The script resolves paths relative to the repo root automatically, so it runs correctly from any working directory.
+
+---
+
 ### Running the Python test suite
 
 ```powershell
-# PowerShell — full suite (301 tests)
+# PowerShell — full suite (310 tests)
 .\.venv\Scripts\python.exe -m pytest python/tests/ -v
 
 # Individual suites
 .\.venv\Scripts\python.exe -m pytest python/tests/test_reader.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_writer.py -v
-.\.venv\Scripts\python.exe -m pytest python/tests/test_writer_roundtrip.py -v.\.\.venv\Scripts\python.exe -m pytest python/tests/test_opcua_roundtrip.py -v.\.venv\Scripts\python.exe -m pytest python/tests/test_builder.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_writer_roundtrip.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_opcua_roundtrip.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_builder.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_cli.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_schema.py -v
 ```
 
 ```bash
-# Git Bash — full suite (301 tests)
+# Git Bash — full suite (310 tests)
 .venv/Scripts/python.exe -m pytest python/tests/ -v
 
 # Individual suites
@@ -445,11 +502,33 @@ print("Schema valid.")
 
 Section will cover:
 - `npm install machine-config-library`
-- Parsing `.h5` with `h5wasm` in Node.js and browser environments
+- Parsing `.h5` with `node-hdf5` in Node.js
 - TypeScript interfaces
 - Equivalent use cases to the Python section above
-- CLI usage via `node dist/cli.js`
+- CLI usage
 - Viewer bundle integration
+
+### Quickstart example *(coming in Phase 2)*
+
+```bash
+# Git Bash / PowerShell — from the repo root
+node examples/quickstart/nodejs/main.mjs
+```
+
+Expected output (same shape as Python and Rust):
+
+```
+=== Machine Config Quickstart ===
+
+Machine name   : TM-LPBF-02: AconityMIDI+_OG
+Optical trains : 2
+Working dist   : 670 mm   (train 0)
+Correction grid: [257, 257, 2]   (train 0)
+
+Written to     : <tmp>.h5
+
+PASS
+```
 
 ---
 
@@ -666,6 +745,39 @@ cargo build --release --manifest-path rust/Cargo.toml
 ```
 
 > Errors (file not found, unrecognised format, etc.) go to stderr; stdout is always valid JSON on success.
+
+---
+
+### Quickstart example
+
+Run the end-to-end quickstart from the **repo root**:
+
+```powershell
+# PowerShell — from repo root
+cargo run --example quickstart --manifest-path rust/Cargo.toml
+```
+
+```bash
+# Git Bash — from repo root
+cargo run --example quickstart --manifest-path rust/Cargo.toml
+```
+
+Expected output:
+
+```
+=== Machine Config Quickstart ===
+
+Machine name   : TM-LPBF-02: AconityMIDI+_OG
+Optical trains : 2
+Working dist   : 670 mm   (train 0)
+Correction grid: [257, 257, 2]   (train 0)
+
+Written to     : <tmp>.h5
+
+PASS
+```
+
+The source lives at [rust/examples/quickstart.rs](rust/examples/quickstart.rs) (a standard Cargo example) with a reference copy at [examples/quickstart/rust/main.rs](examples/quickstart/rust/main.rs).
 
 ---
 
