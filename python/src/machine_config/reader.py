@@ -29,6 +29,7 @@ from .models import (
     OpcuaPipeConfig,
     OpcuaTrigger,
     OpticalTrain,
+    OptionalComponents,
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
@@ -367,7 +368,7 @@ class MachineConfigReader:
             light_source=light_source,
             collimator=collimator,
             scanner_card=scanner_card,
-            clearbox=clearbox,
+            optional_components=OptionalComponents(clearbox=clearbox),
             scan_field_correction_file=sfcf,
         )
 
@@ -667,7 +668,11 @@ class MachineConfigReader:
             "light_source": self._light_source_to_dict(train.light_source),
             "collimator": self._collimator_to_dict(train.collimator),
             "scanner_card": self._scanner_card_to_dict(train.scanner_card),
-            "clearbox": self._clearbox_to_dict(train.clearbox, include_binary=include_binary),
+            "optional_components": {
+                "clearbox": self._clearbox_to_dict(
+                    train.optional_components.clearbox, include_binary=include_binary
+                ),
+            },
             "scan_field_correction_file": self._sfcf_to_dict(
                 train.scan_field_correction_file, include_binary=include_binary
             ),
@@ -906,7 +911,7 @@ def _train_from_dict(t: dict) -> OpticalTrain:
     ls = t["light_source"]
     col = t["collimator"]
     sc = t["scanner_card"]
-    cb_d = t.get("clearbox")
+    cb_d = (t.get("optional_components") or {}).get("clearbox")
     sfcf_d = t.get("scan_field_correction_file")
 
     def _axis_from_dict(d: Optional[dict]) -> Optional[AxisConfig]:
@@ -1071,7 +1076,7 @@ def _train_from_dict(t: dict) -> OpticalTrain:
         light_source=light_source,
         collimator=collimator,
         scanner_card=scanner_card,
-        clearbox=clearbox,
+        optional_components=OptionalComponents(clearbox=clearbox),
         scan_field_correction_file=sfcf,
     )
 

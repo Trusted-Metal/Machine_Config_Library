@@ -174,7 +174,7 @@ impl<'a> MachineConfigWriter<'a> {
             let sc_grp = train_grp.create_group("Scanner_Card")?;
             self.write_scanner_card(&sc_grp, &train.scanner_card)?;
 
-            if let Some(cb) = &train.clearbox {
+            if let Some(cb) = &train.optional_components.clearbox {
                 let opt_grp = train_grp.create_group("Optional_Components")?;
                 let cb_grp = opt_grp.create_group("ClearBox")?;
                 self.write_clearbox(&cb_grp, cb)?;
@@ -582,8 +582,8 @@ mod tests {
     fn roundtrip_clearbox_scalar_fields() {
         let orig = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
         let rt = roundtrip(REFERENCE);
-        let cb_orig = orig.optical_trains[0].clearbox.as_ref().unwrap();
-        let cb_rt = rt.optical_trains[0].clearbox.as_ref().unwrap();
+        let cb_orig = orig.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
         assert_eq!(cb_orig.ip_address, cb_rt.ip_address);
         assert_eq!(cb_orig.data_port, cb_rt.data_port);
         assert_eq!(cb_orig.show_console, cb_rt.show_console);

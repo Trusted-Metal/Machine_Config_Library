@@ -102,7 +102,7 @@ fn test_nan_to_null_in_correction_data() {
         .unwrap()
         .parse_with_binary()
         .unwrap();
-    let cb = config.optical_trains[0].clearbox.as_ref().unwrap();
+    let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
     let data = cb.correction_data.as_ref().unwrap();
     assert!(
         data.iter().flatten().flatten().any(|v| v.is_none()),

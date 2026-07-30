@@ -236,48 +236,54 @@
               "sample_period_unit":     { "type": ["string", "null"] }
             }
           },
-          "clearbox": {
-            "type": ["object", "null"],
+          "optional_components": {
+            "type": "object",
             "additionalProperties": false,
             "properties": {
-              "ip_address":                    { "type": "string" },
-              "serial_number":                 { "type": ["string", "null"] },
-              "data_port":                     { "type": ["integer", "null"] },
-              "server_port":                   { "type": ["integer", "null"] },
-              "actual_timing_offset":          { "type": ["integer", "null"] },
-              "commanded_timing_offset":       { "type": ["integer", "null"] },
-              "correction_data": {
-                "type": ["array", "null"],
-                "items": {
-                  "type": "array",
-                  "items": {
-                    "type": "array",
-                    "items": { "type": ["number", "null"] }
-                  }
+              "clearbox": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                  "ip_address":                    { "type": "string" },
+                  "serial_number":                 { "type": ["string", "null"] },
+                  "data_port":                     { "type": ["integer", "null"] },
+                  "server_port":                   { "type": ["integer", "null"] },
+                  "actual_timing_offset":          { "type": ["integer", "null"] },
+                  "commanded_timing_offset":       { "type": ["integer", "null"] },
+                  "correction_data": {
+                    "type": ["array", "null"],
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": { "type": ["number", "null"] }
+                      }
+                    }
+                  },
+                  "inverse_correction_data": {
+                    "type": ["array", "null"],
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": { "type": ["number", "null"] }
+                      }
+                    }
+                  },
+                  "manufacturer":                  { "type": ["string", "null"] },
+                  "model":                         { "type": ["string", "null"] },
+                  "output_path":                   { "type": ["string", "null"] },
+                  "selected_camera":               { "type": ["string", "null"] },
+                  "custom_video_format":           { "type": ["string", "null"] },
+                  "video_output":                  { "type": ["string", "null"] },
+                  "show_console":                  { "type": ["boolean", "null"] },
+                  "software_trigger_delay":        { "type": ["integer", "null"] },
+                  "volts_to_watts_algorithm":      { "type": ["string", "null"] },
+                  "volts_to_watts_params":         { "type": ["string", "null"] },
+                  "correction_grid_domain_shape":  { "type": ["string", "null"] },
+                  "inverse_grid_domain_shape":     { "type": ["string", "null"] }
                 }
-              },
-              "inverse_correction_data": {
-                "type": ["array", "null"],
-                "items": {
-                  "type": "array",
-                  "items": {
-                    "type": "array",
-                    "items": { "type": ["number", "null"] }
-                  }
-                }
-              },
-              "manufacturer":                  { "type": ["string", "null"] },
-              "model":                         { "type": ["string", "null"] },
-              "output_path":                   { "type": ["string", "null"] },
-              "selected_camera":               { "type": ["string", "null"] },
-              "custom_video_format":           { "type": ["string", "null"] },
-              "video_output":                  { "type": ["string", "null"] },
-              "show_console":                  { "type": ["boolean", "null"] },
-              "software_trigger_delay":        { "type": ["integer", "null"] },
-              "volts_to_watts_algorithm":      { "type": ["string", "null"] },
-              "volts_to_watts_params":         { "type": ["string", "null"] },
-              "correction_grid_domain_shape":  { "type": ["string", "null"] },
-              "inverse_grid_domain_shape":     { "type": ["string", "null"] }
+              }
             }
           },
           "scan_field_correction_file": {

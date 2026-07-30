@@ -21,6 +21,7 @@ from .models import (
     MachineConfig,
     MachineConfigMeta,
     OpticalTrain,
+    OptionalComponents,
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
@@ -224,7 +225,7 @@ def _mock_train(
         light_source=light_source,
         collimator=collimator,
         scanner_card=scanner_card,
-        clearbox=clearbox,
+        optional_components=OptionalComponents(clearbox=clearbox),
         scan_field_correction_file=sfcf,
     )
 
@@ -491,7 +492,7 @@ class YamlConfigBuilder:
             light_source=light_source,
             collimator=collimator,
             scanner_card=scanner_card,
-            clearbox=None,
+            optional_components=OptionalComponents(clearbox=None),
             scan_field_correction_file=None,
         )
 

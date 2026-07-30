@@ -179,24 +179,24 @@ class TestScannerCard:
 class TestClearBox:
     def test_clearbox_present(self, reference_config):
         for train in reference_config.optical_trains:
-            assert train.clearbox is not None
+            assert train.optional_components.clearbox is not None
 
     def test_correction_data_shape(self, reference_config):
-        data = reference_config.optical_trains[0].clearbox.correction_data
+        data = reference_config.optical_trains[0].optional_components.clearbox.correction_data
         assert data is not None
         assert len(data) == 257
         assert len(data[0]) == 257
         assert len(data[0][0]) == 2
 
     def test_inverse_correction_data_shape(self, reference_config):
-        data = reference_config.optical_trains[0].clearbox.inverse_correction_data
+        data = reference_config.optical_trains[0].optional_components.clearbox.inverse_correction_data
         assert data is not None
         assert len(data) == 257
         assert len(data[0]) == 257
         assert len(data[0][0]) == 2
 
     def test_correction_data_values_are_float_or_none(self, reference_config):
-        data = reference_config.optical_trains[0].clearbox.correction_data
+        data = reference_config.optical_trains[0].optional_components.clearbox.correction_data
         # Sample a few cells to verify type contract
         for i in range(0, 257, 64):
             for j in range(0, 257, 64):
@@ -218,10 +218,10 @@ class TestClearBox:
         assert data.dtype == np.float64
 
     def test_clearbox_ip_address(self, reference_config):
-        assert reference_config.optical_trains[0].clearbox.ip_address != ""
+        assert reference_config.optical_trains[0].optional_components.clearbox.ip_address != ""
 
     def test_clearbox_data_port_is_int(self, reference_config):
-        dp = reference_config.optical_trains[0].clearbox.data_port
+        dp = reference_config.optical_trains[0].optional_components.clearbox.data_port
         assert dp is None or isinstance(dp, int)
 
 
@@ -474,7 +474,7 @@ def test_absent_clearbox_is_none(tmp_path):
     out = tmp_path / "no_clearbox.h5"
     builder.save(out)
     config = MachineConfigReader(out).parse()
-    assert config.optical_trains[0].clearbox is None
+    assert config.optical_trains[0].optional_components.clearbox is None
 
 
 def test_file_version_warning(tmp_path):
@@ -497,12 +497,12 @@ class TestIncludeBinaryFlag:
 
     def test_default_excludes_correction_data(self, reference_reader):
         output = json.loads(reference_reader.to_json())
-        cb = output["optical_trains"][0]["clearbox"]
+        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
         assert "correction_data" not in cb
 
     def test_default_excludes_inverse_correction_data(self, reference_reader):
         output = json.loads(reference_reader.to_json())
-        cb = output["optical_trains"][0]["clearbox"]
+        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
         assert "inverse_correction_data" not in cb
 
     def test_default_excludes_raw_bytes(self, reference_reader):
@@ -512,13 +512,13 @@ class TestIncludeBinaryFlag:
 
     def test_include_binary_adds_correction_data(self, reference_reader):
         output = json.loads(reference_reader.to_json(include_binary=True))
-        cb = output["optical_trains"][0]["clearbox"]
+        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
         assert "correction_data" in cb
         assert len(cb["correction_data"]) > 0
 
     def test_include_binary_adds_inverse_correction_data(self, reference_reader):
         output = json.loads(reference_reader.to_json(include_binary=True))
-        cb = output["optical_trains"][0]["clearbox"]
+        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
         assert "inverse_correction_data" in cb
         assert len(cb["inverse_correction_data"]) > 0
 
@@ -532,7 +532,7 @@ class TestIncludeBinaryFlag:
         """Scalar clearbox fields appear in both modes."""
         for flag in (False, True):
             output = json.loads(reference_reader.to_json(include_binary=flag))
-            cb = output["optical_trains"][0]["clearbox"]
+            cb = output["optical_trains"][0]["optional_components"]["clearbox"]
             assert "ip_address" in cb
             assert "data_port" in cb
             assert "correction_grid_domain_shape" in cb

@@ -132,9 +132,9 @@ class MachineConfigWriter:
             self._write_light_source(f.require_group(f"{base}/Light_Source"), train.light_source)
             self._write_collimator(f.require_group(f"{base}/Collimator"), train.collimator)
             self._write_scanner_card(f.require_group(f"{base}/Scanner_Card"), train.scanner_card)
-            if train.clearbox is not None:
+            if train.optional_components.clearbox is not None:
                 opt = f.require_group(f"{base}/Optional_Components")
-                self._write_clearbox(opt.require_group("ClearBox"), train.clearbox)
+                self._write_clearbox(opt.require_group("ClearBox"), train.optional_components.clearbox)
             if train.scan_field_correction_file is not None:
                 self._write_sfcf(f, base, train.scan_field_correction_file)
 
