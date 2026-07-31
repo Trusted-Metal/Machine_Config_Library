@@ -3,18 +3,8 @@ name: Rust
 on:
   workflow_dispatch:
   push:
-    branches: ["main"]
-    paths:
-      - "rust/**"
-      - "fixtures/**"
-      - "schema/**"
-      - ".github/workflows/rust.yml"
+    branches: ["main", "release"]
   pull_request:
-    paths:
-      - "rust/**"
-      - "fixtures/**"
-      - "schema/**"
-      - ".github/workflows/rust.yml"
 
 jobs:
   test:
