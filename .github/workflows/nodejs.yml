@@ -3,18 +3,8 @@ name: Node.js
 on:
   workflow_dispatch:
   push:
-    branches: ["main"]
-    paths:
-      - "nodejs/**"
-      - "fixtures/**"
-      - "schema/**"
-      - ".github/workflows/nodejs.yml"
+    branches: ["main", "release"]
   pull_request:
-    paths:
-      - "nodejs/**"
-      - "fixtures/**"
-      - "schema/**"
-      - ".github/workflows/nodejs.yml"
 
 jobs:
   test:

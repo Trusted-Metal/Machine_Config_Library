@@ -11,24 +11,8 @@ name: Cross-Language Check
 on:
   workflow_dispatch:
   push:
-    branches: ["main"]
-    paths:
-      - "python/**"
-      - "rust/**"
-      - "nodejs/**"
-      - "fixtures/**"
-      - "schema/**"
-      - "tools/cross_check.py"
-      - ".github/workflows/cross_check.yml"
+    branches: ["main", "release"]
   pull_request:
-    paths:
-      - "python/**"
-      - "rust/**"
-      - "nodejs/**"
-      - "fixtures/**"
-      - "schema/**"
-      - "tools/cross_check.py"
-      - ".github/workflows/cross_check.yml"
 
 jobs:
   cross_check:
