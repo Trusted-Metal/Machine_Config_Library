@@ -2006,14 +2006,39 @@ This is a self-contained read+write roundtrip. If it passes, the library's reade
 
 **Branch**: new branch off clearbox-tauri `main` (work lives in the clearbox-tauri repo, not here).
 
-**Dependency**:
+**Root workspace** (required for git dep support):
+
+A `Cargo.toml` at the repo root registers `rust/` as a Cargo workspace member so Cargo can locate the `machine-config` package when this repo is referenced as a git dependency. Without it, `cargo` cannot find the crate by name.
+
 ```toml
-# clearbox-tauri/src-tauri/Cargo.toml
+# Machine_Config_Library/Cargo.toml
+[workspace]
+resolver = "2"
+members = ["rust"]
+```
+
+**Dependency** — three modes:
+
+```toml
+# 1. Local path dep (active co-development, no push required)
+machine-config = { path = "../../Machine_Config_Library/rust" }
+
+# 2. Git RC dep (integration-test a candidate before production)
+machine-config = { git = "https://github.com/your-org/Machine_Config_Library", tag = "v0.2.0-rc.1" }
+
+# 3. Git production dep (stable, pinned to a release tag)
+machine-config = { git = "https://github.com/your-org/Machine_Config_Library", tag = "v0.2.0" }
+```
+
+When developing both projects simultaneously with a git tag in the dep declaration, add a `[patch]` override so local changes take effect without modifying the pinned version:
+
+```toml
+# clearbox-tauri/Cargo.toml — local development override (remove before merging)
+[patch."https://github.com/your-org/Machine_Config_Library"]
 machine-config = { path = "../../Machine_Config_Library/rust" }
 ```
-Promote to a git-pinned dep once stable.
 
-**ndarray coexistence**: clearbox-tauri uses ndarray 0.17; this library uses ndarray 0.16 internally. `CorrectionData` carries no ndarray type across the boundary — both versions compile independently in the same build. No action needed.
+**ndarray**: Resolved. This library was bumped to ndarray 0.17 to match `hdf5-metno 0.12`'s resolution in clearbox-tauri's workspace. Both projects now compile against a single ndarray 0.17.2 — no duplicate in the dependency tree. The public API (`CorrectionData`) carries only `Vec<f64>` and `[usize; 3]` across the crate boundary — no ndarray type is ever exposed — so future ndarray bumps in either project are independent.
 
 **Completion criteria (branch merge conditions)**:
 - Existing clearbox-tauri tests pass with the new reader
@@ -3252,7 +3277,71 @@ test.describe('Export Canonical JSON', () => {
 
 ### Versioning Policy
 
-All four packages share the same semver version. When the schema changes in a way that alters the canonical JSON output, all four packages bump their major version together. This is enforced by the cross-check CI job: if `$schema` version in `machine_config_v1.schema.json` changes, the CI pipeline requires all four packages to have updated their version numbers before merging.
+All four packages share the **same semver version number** at all times. A `v0.3.0` tag means the Python, Rust, Node.js, and C++ libraries all implement the same schema revision at that point.
+
+#### Tooling
+
+| Tool | Role |
+|---|---|
+| `semantic-release` | Analyses commits, determines next version, creates git tag, generates release notes, triggers version-file updates |
+| `@semantic-release/exec` | Calls `scripts/bump-versions.mjs` to update all language manifests atomically |
+| `@semantic-release/git` | Commits the updated manifests back to the branch with a `chore(release):` message |
+| `@semantic-release/github` | Creates the GitHub Release with auto-generated notes |
+| `commitlint` | Validates every commit message against the Conventional Commits spec |
+| `husky` | Runs `commitlint` as a `commit-msg` git hook so invalid messages are rejected before push |
+
+All tooling lives in a root `package.json` (tooling-only, never published). The `scripts/bump-versions.mjs` script updates `rust/Cargo.toml`, `python/pyproject.toml`, and `nodejs/package.json` (and eventually `cpp/CMakeLists.txt`) to the new version in a single atomic step.
+
+#### Branch strategy
+
+| Branch | Channel | Tag format | Example |
+|---|---|---|---|
+| `main` | Pre-release (RC) | `vX.Y.Z-rc.N` | `v0.3.0-rc.1` |
+| `release` | Production | `vX.Y.Z` | `v0.3.0` |
+
+- Every merge to `main` that contains a version-bumping commit type triggers a new RC automatically.
+- Merging `main` into `release` promotes the current RC to a production release. No new commits are added; semantic-release strips the `-rc.N` suffix and creates the final tag.
+- `release` is a promotion-only branch — nothing is ever developed directly on it.
+
+#### Commit type → version bump rules
+
+| Commit type | Bump | Example |
+|---|---|---|
+| `feat` | minor | `feat(nodejs): add getRawGroup` |
+| `fix`, `perf`, `refactor` | patch | `fix(python): reader handles empty attrs` |
+| `feat!` or `BREAKING CHANGE:` footer | major | `feat!: remove legacy parse_v0 API` |
+| `docs`, `style`, `test`, `build`, `ci`, `chore` | none | `docs: update USAGE.md feature matrix` |
+
+semantic-release analyses **all commits since the last production tag** and applies the highest-priority bump found. If a `feat:` and three `fix:` commits land between two production releases, the result is a minor bump.
+
+#### Scope convention
+
+Scopes are informational — they appear in the CHANGELOG and help readers understand which language or subsystem changed. They do not gate which packages get bumped (all bump together).
+
+Standard scopes: `rust`, `python`, `nodejs`, `cpp`, `schema`, `ci`, `docs`.
+
+#### Setup order (one-time, from a clean `main` baseline)
+
+1. Merge all pending feature branches to `main`
+2. Manually tag the current tip of `main` as `v0.1.0` — gives semantic-release its anchor point
+3. Create the `release` branch from `main` at that same commit
+4. On a new branch (`chore/release-pipeline`), add in order:
+   - Root `Cargo.toml` workspace file (two lines)
+   - Root `package.json` + install semantic-release + commitlint
+   - `.releaserc.json`
+   - `scripts/bump-versions.mjs`
+   - `commitlint.config.js`
+   - `.husky/commit-msg` hook
+   - `.github/workflows/release.yml`
+5. Dry-run: `npx semantic-release --dry-run` — verify config without pushing
+6. PR `chore/release-pipeline` → `main` (all `chore:` commits → no RC triggered)
+7. Set branch protection rules on GitHub for both `main` and `release`
+8. The next `feat:` or `fix:` PR merged to `main` creates the first live RC (`v0.2.0-rc.1`)
+9. Validate RC, then PR `main` → `release` → first production release (`v0.2.0`)
+
+#### Extending to C++
+
+When the C++ implementation lands, add one line to `scripts/bump-versions.mjs` that patches the version in `cpp/CMakeLists.txt`. No other part of the pipeline changes.
 
 ---
 
@@ -3320,6 +3409,8 @@ Phase 9 adds what cannot be done incrementally: **release automation, smoke test
 | `smoke.yml` — clean-install smoke tests per language | Needs published packages to install |
 | Version-bump enforcement in `cross_check.yml` | Needs all four languages to have agreed on semver policy |
 | Automated release notes generation | Needs a stable commit history across all languages |
+
+The versioning mechanics (semantic-release, conventional commits, branch strategy, bump-versions script) are specified in full in [§ Phase 9 — Versioning Policy](#versioning-policy). Phase 10 adds only the publish steps on top of that foundation.
 
 The workflow files below are the **final state** after all incremental additions. The per-language files are shown for completeness; `cross_check.yml` shows the full four-language form.
 
