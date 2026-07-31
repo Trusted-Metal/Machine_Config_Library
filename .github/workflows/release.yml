@@ -26,8 +26,13 @@ jobs:
       - name: Install release tooling
         run: npm ci
 
+      - name: Configure deploy key for git push
+        env:
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: bash .github/scripts/configure-deploy-key-git.sh
+
       - name: Run semantic-release
-        run: npx semantic-release
+        run: npx semantic-release --repository-url "${SEMANTIC_RELEASE_REPOSITORY_URL}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HUSKY: "0"
