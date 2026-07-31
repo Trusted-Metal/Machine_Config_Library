@@ -16,6 +16,7 @@ __pycache__/
 scratch/
 
 # Node / Rust / C++ build outputs
+node_modules/
 nodejs/node_modules/
 nodejs/dist/
 rust/target/
