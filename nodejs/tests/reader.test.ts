@@ -340,45 +340,52 @@ describe('MachineConfigReader — getCorrectionData / getInverseCorrectionData',
   /** Byte view of a Float64Array's own data (respects byteOffset/byteLength). */
   const bytesOf = (a: Float64Array) => Buffer.from(a.buffer, a.byteOffset, a.byteLength);
 
-  it('getCorrectionData returns a flat Float64Array of shape [257, 257, 2]', async () => {
-    const cd = await reader.getCorrectionData(0);
-    expect(cd.data).toBeInstanceOf(Float64Array);
-    expect(cd.shape).toEqual([257, 257, 2]);
-    expect(cd.data.length).toBe(257 * 257 * 2);
+  // Read all three large datasets once in parallel so individual tests are
+  // synchronous and don't accumulate per-test h5wasm open/read/close overhead.
+  let cd0: Awaited<ReturnType<typeof reader.getCorrectionData>>;
+  let icd0: Awaited<ReturnType<typeof reader.getCorrectionData>>;
+  let cd1: Awaited<ReturnType<typeof reader.getCorrectionData>>;
+
+  beforeAll(async () => {
+    [cd0, icd0, cd1] = await Promise.all([
+      reader.getCorrectionData(0),
+      reader.getInverseCorrectionData(0),
+      reader.getCorrectionData(1),
+    ]);
+  }, 15_000);
+
+  it('getCorrectionData returns a flat Float64Array of shape [257, 257, 2]', () => {
+    expect(cd0.data).toBeInstanceOf(Float64Array);
+    expect(cd0.shape).toEqual([257, 257, 2]);
+    expect(cd0.data.length).toBe(257 * 257 * 2);
   });
 
-  it('getCorrectionData preserves NaN (border cells are not converted to null/0)', async () => {
-    const cd = await reader.getCorrectionData(0);
+  it('getCorrectionData preserves NaN (border cells are not converted to null/0)', () => {
     let sawNaN = false;
-    for (let i = 0; i < cd.data.length; i++) {
-      if (Number.isNaN(cd.data[i])) { sawNaN = true; break; }
+    for (let i = 0; i < cd0.data.length; i++) {
+      if (Number.isNaN(cd0.data[i])) { sawNaN = true; break; }
     }
     expect(sawNaN).toBe(true);
   });
 
-  it('getInverseCorrectionData returns a flat Float64Array of shape [257, 257, 2]', async () => {
-    const icd = await reader.getInverseCorrectionData(0);
-    expect(icd.data).toBeInstanceOf(Float64Array);
-    expect(icd.shape).toEqual([257, 257, 2]);
+  it('getInverseCorrectionData returns a flat Float64Array of shape [257, 257, 2]', () => {
+    expect(icd0.data).toBeInstanceOf(Float64Array);
+    expect(icd0.shape).toEqual([257, 257, 2]);
   });
 
-  it('forward and inverse correction grids are not identical', async () => {
-    const cd = await reader.getCorrectionData(0);
-    const icd = await reader.getInverseCorrectionData(0);
-    expect(bytesOf(cd.data)).not.toEqual(bytesOf(icd.data));
+  it('forward and inverse correction grids are not identical', () => {
+    expect(bytesOf(cd0.data)).not.toEqual(bytesOf(icd0.data));
   });
 
-  it('train 1 correction grid differs from train 0', async () => {
-    const cd0 = await reader.getCorrectionData(0);
-    const cd1 = await reader.getCorrectionData(1);
+  it('train 1 correction grid differs from train 0', () => {
     expect(bytesOf(cd0.data)).not.toEqual(bytesOf(cd1.data));
   });
 
   it('reading the same train twice is deterministic (byte-identical)', async () => {
-    const a = await reader.getCorrectionData(0);
-    const b = await reader.getCorrectionData(0);
-    expect(bytesOf(a.data)).toEqual(bytesOf(b.data));
-  });
+    // One additional independent read — verifies the cached result is reproducible.
+    const again = await reader.getCorrectionData(0);
+    expect(bytesOf(again.data)).toEqual(bytesOf(cd0.data));
+  }, 10_000);
 });
 
 // ===========================================================================
