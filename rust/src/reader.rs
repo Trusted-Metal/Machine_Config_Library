@@ -348,7 +348,7 @@ impl MachineConfigReader {
         let path = format!("{}/Correction_Data", Self::clearbox_path(train_index));
         let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
         let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
-        Ok(CorrectionData { data: arr.into_raw_vec(), shape })
+        Ok(CorrectionData { data: arr.into_raw_vec_and_offset().0, shape })
     }
 
     /// Returns the `(257, 257, 2)` float64 *inverse* correction grid for
@@ -362,7 +362,7 @@ impl MachineConfigReader {
         let path = format!("{}/Inverse_Correction_Data", Self::clearbox_path(train_index));
         let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
         let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
-        Ok(CorrectionData { data: arr.into_raw_vec(), shape })
+        Ok(CorrectionData { data: arr.into_raw_vec_and_offset().0, shape })
     }
 
     /// Returns the raw `.fc3` bytes embedded as a `uint8` dataset for optical

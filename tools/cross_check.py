@@ -9,11 +9,12 @@ Runs in three phases, each reporting failures independently:
   Phase 2  Read parity        — all active languages produce identical JSON for
                                 every fixture (reference, reference_opcua,
                                 synthetic_2laser)
-  Phase 3  Write interop      — Python builder output is read identically by
-                                Python and Rust; Python writer roundtrip
-                                (reference → write → re-read) is verified the
-                                same way.  Rust-writes → Python-reads will be
-                                added when the Rust CLI gains a build command.
+  Phase 3  Write interop      — Every active writer language serialises the
+                                reference fixture from canonical JSON to HDF5.
+                                All active readers must agree (parity) and the
+                                Python reader must reproduce the canonical JSON
+                                (fidelity).  Add a language to WRITERS when its
+                                write-hdf5 CLI subcommand is implemented.
 
 Usage:
   python tools/cross_check.py                       # all available languages
@@ -37,7 +38,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 # Optional heavy deps — both available in CI but degrade gracefully locally.
 try:
@@ -100,14 +101,28 @@ def _python_cli() -> str:
 RUNNERS: dict[str, Callable[[Path], list[str]]] = {
     "python": lambda fix: [_python_cli(), "export-json", str(fix)],
     "rust":   lambda fix: [str(_rust_bin()), "export-json", str(fix)],
-    # "nodejs": lambda fix: ["node", str(REPO / "nodejs/dist/cli.js"), "export-json", str(fix)],
+    "nodejs": lambda fix: ["node", str(REPO / "nodejs/dist/cli.js"), "export-json", str(fix)],
     # "cpp":    lambda fix: [str(REPO / f"cpp/build/machine_config_cli{_EXT}"), "export-json", str(fix)],
 }
 
-# Binary paths for subcommands other than export-json (e.g. correction-hash).
-BINARIES: dict[str, Callable[[], str]] = {
-    "python": _python_cli,
-    "rust":   lambda: str(_rust_bin()),
+# Argv *prefix* for subcommands other than export-json (e.g. correction-hash).
+# A prefix, not a single binary path, because Node.js needs ["node", "<cli.js>"].
+BINARIES: dict[str, Callable[[], list[str]]] = {
+    "python": lambda: [_python_cli()],
+    "rust":   lambda: [str(_rust_bin())],
+    "nodejs": lambda: ["node", str(REPO / "nodejs/dist/cli.js")],
+}
+
+# Each entry is a callable(json_path: Path, h5_path: Path) -> list[str] that
+# returns the argv for the language's write-from-JSON CLI command.
+# Input:  canonical JSON file (output of `export-json` on the reference fixture)
+# Output: .h5 file verified by all reader languages in phase_write_interop().
+# Add nodejs/cpp here when their writers land.
+WRITERS: dict[str, Callable[[Path, Path], list[str]]] = {
+    "python": lambda j, h: [_python_cli(), "write", str(j), "--output", str(h)],
+    "rust":   lambda j, h: [str(_rust_bin()), "write-hdf5", str(j), str(h)],
+    "nodejs": lambda j, h: ["node", str(REPO / "nodejs/dist/cli.js"), "write-hdf5", str(j), str(h)],
+    # "cpp": lambda j, h: [str(REPO / f"cpp/build/machine_config_cli{_EXT}"), "write-hdf5", str(j), str(h)],
 }
 
 # ---------------------------------------------------------------------------
@@ -144,13 +159,44 @@ def _run_text(cmd: list[str]) -> str:
     return r.stdout.strip()
 
 
+def _normalize_numbers(obj: Any) -> Any:
+    """Recursively convert whole-number floats to int.
+
+    JSON has no int/float distinction.  Python's json.loads maps ``670`` to
+    ``int`` and ``670.0`` to ``float``; JavaScript's JSON.stringify always
+    emits ``670`` for a whole-number float.  Normalising before comparison
+    prevents spurious mismatches without hiding real differences (value
+    changes, string-vs-number, null-vs-number, missing fields).
+    """
+    if isinstance(obj, float) and obj.is_integer():
+        return int(obj)
+    if isinstance(obj, dict):
+        return {k: _normalize_numbers(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_normalize_numbers(v) for v in obj]
+    return obj
+
+
 def _diff(a: dict, b: dict) -> list[str]:
-    """Return human-readable differences; empty list means equal."""
+    """Return human-readable differences; empty list means equal.
+
+    ``ignore_numeric_type_changes=True`` is passed to DeepDiff so that
+    ``670`` (int, from JavaScript) and ``670.0`` (float, from Python/Rust)
+    compare equal.  JSON has no int/float distinction; real type errors
+    (e.g. a string where a number is expected) are still caught by Phase 1
+    schema validation before _diff is ever called.
+    """
     if _DEEPDIFF:
-        d = DeepDiff(a, b, significant_digits=8, ignore_order=False)
+        d = DeepDiff(
+            a, b,
+            significant_digits=8,
+            ignore_order=False,
+            ignore_numeric_type_changes=True,
+        )
         return [d.pretty()] if d else []
-    sa = json.dumps(a, sort_keys=True)
-    sb = json.dumps(b, sort_keys=True)
+    # Fallback: normalise whole-number floats so 670.0 and 670 compare equal.
+    sa = json.dumps(_normalize_numbers(a), sort_keys=True)
+    sb = json.dumps(_normalize_numbers(b), sort_keys=True)
     if sa != sb:
         return ["outputs differ (install deepdiff for field-level detail: pip install deepdiff)"]
     return []
@@ -250,116 +296,114 @@ def phase_read_parity(langs: list[str], verbose: bool) -> bool:
 # ---------------------------------------------------------------------------
 
 def phase_write_interop(langs: list[str], verbose: bool) -> bool:
-    """Python-written HDF5 must be read identically by Python and Rust."""
-    print("\n=== Phase 3: Write Interoperability ===")
-    if "python" not in langs or "rust" not in langs:
-        print(f"{SKIP} Requires both python and rust.")
-        return True
+    """Every active writer produces HDF5 that all active readers parse identically
+    (parity) and that matches the canonical JSON from the reference fixture (fidelity).
 
-    try:
-        from machine_config.builder import MockConfigBuilder  # type: ignore
-        from machine_config.reader import MachineConfigReader  # type: ignore
-        from machine_config.writer import MachineConfigWriter  # type: ignore
-    except ImportError as exc:
-        print(f"{SKIP} machine_config not importable: {exc}")
+    For each writer language in WRITERS ∩ langs:
+      1. Write an HDF5 from the canonical reference JSON via that language's CLI.
+      2. Read it back with every active reader language — all outputs must agree.
+      3. Python's output must match the canonical JSON (fidelity).
+
+    Phase 3a (MockConfigBuilder 1-laser synthetic) was removed: its read-parity
+    coverage is fully superseded by Phase 2, which validates all active languages
+    against fixtures/synthetic_2laser.h5 (a committed builder output).
+    All writes now go through the CLI so every language is tested uniformly.
+    """
+    print("\n=== Phase 3: Write Interoperability ===")
+
+    writer_langs = [l for l in langs if l in WRITERS]
+    if not writer_langs:
+        print(f"{SKIP} No writer-capable language in active set "
+              f"(supported: {', '.join(WRITERS)}).")
+        return True
+    if "python" not in langs:
+        print(f"{SKIP} Python required as the fidelity reference reader.")
         return True
 
     failures: list[str] = []
 
-    # 3a — Python builder (1-laser synthetic) → compare Python vs Rust readers
-    with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
-        mock_path = Path(f.name)
+    # Canonical JSON — produced once by the Python reference implementation.
     try:
-        MockConfigBuilder(n_lasers=1).save(str(mock_path))
-        tag = "python-builder (1-laser) → rust reader"
-        py_out   = _run(RUNNERS["python"](mock_path))
-        rust_out = _run(RUNNERS["rust"](mock_path))
-        diffs = _diff(py_out, rust_out)
-        if diffs:
-            print(f"{FAIL} {tag}:")
-            for line in diffs:
-                print(f"  {line}")
-            failures.append(tag)
-        elif verbose:
-            print(f"{PASS} {tag}")
+        canonical = _run(RUNNERS["python"](FIXTURES["reference"]))
     except Exception as exc:
-        print(f"{FAIL} python-builder: {exc}")
-        failures.append("python-builder")
-    finally:
-        mock_path.unlink(missing_ok=True)
+        print(f"{FAIL} Could not read reference fixture with Python: {exc}")
+        return False
 
-    # 3b — Python writer roundtrip (reference → write → re-read)
-    with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
-        rt_path = Path(f.name)
-    try:
-        reader = MachineConfigReader(str(FIXTURES["reference"]))
-        config = reader.parse()
-        MachineConfigWriter(config).write(str(rt_path))
-        tag = "python-writer roundtrip → rust reader"
-        py_out   = _run(RUNNERS["python"](rt_path))
-        rust_out = _run(RUNNERS["rust"](rt_path))
-        diffs = _diff(py_out, rust_out)
-        if diffs:
-            print(f"{FAIL} {tag}:")
-            for line in diffs:
-                print(f"  {line}")
-            failures.append(tag)
-        elif verbose:
-            print(f"{PASS} {tag}")
-    except Exception as exc:
-        print(f"{FAIL} python-writer roundtrip: {exc}")
-        failures.append("python-writer roundtrip")
-    finally:
-        rt_path.unlink(missing_ok=True)
-
-    # 3c — Rust writer roundtrip: reference → JSON → Rust write-hdf5 → Python + Rust read
-    # Validates that Rust-written HDF5 is readable by both languages (parity)
-    # and that the scalar fields survive the JSON → HDF5 → JSON roundtrip (fidelity).
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as jf:
         json_tmp = Path(jf.name)
-    with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as hf:
-        rust_rt_path = Path(hf.name)
+    json_tmp.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+
     try:
-        ref_json = _run(RUNNERS["python"](FIXTURES["reference"]))
-        json_tmp.write_text(json.dumps(ref_json, ensure_ascii=False), encoding="utf-8")
-        r = subprocess.run(
-            [str(_rust_bin()), "write-hdf5", str(json_tmp), str(rust_rt_path)],
-            capture_output=True, text=True, encoding="utf-8",
-        )
-        if r.returncode != 0:
-            raise RuntimeError(
-                f"write-hdf5 exited {r.returncode}\nstderr: {r.stderr.strip()}"
-            )
-        py_out   = _run(RUNNERS["python"](rust_rt_path))
-        rust_out = _run(RUNNERS["rust"](rust_rt_path))
-        # Check 1: Python and Rust agree on what the Rust-written file contains.
-        lang_diffs = _diff(py_out, rust_out)
-        if lang_diffs:
-            tag = "rust-writer roundtrip → python vs rust reading"
-            print(f"{FAIL} {tag}:")
-            for line in lang_diffs:
-                print(f"  {line}")
-            failures.append(tag)
-        else:
-            # Check 2: Scalar fields survive the roundtrip unchanged.
-            rt_diffs = _diff(ref_json, py_out)
-            if rt_diffs:
-                tag = "rust-writer roundtrip → fidelity"
-                print(f"{FAIL} {tag}:")
-                for line in rt_diffs:
-                    print(f"  {line}")
+        for writer_lang in writer_langs:
+            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as hf:
+                h5_tmp = Path(hf.name)
+            try:
+                # Step 1: write HDF5 via this language's CLI.
+                env = {**os.environ, "PYTHONUTF8": "1"}
+                r = subprocess.run(
+                    WRITERS[writer_lang](json_tmp, h5_tmp),
+                    capture_output=True, text=True, encoding="utf-8", env=env,
+                )
+                if r.returncode != 0:
+                    raise RuntimeError(
+                        f"{writer_lang} writer exited {r.returncode}\n"
+                        f"stderr: {r.stderr.strip()}"
+                    )
+
+                # Step 2: read back with all active reader languages.
+                reader_outputs: dict[str, dict] = {}
+                for reader_lang in langs:
+                    try:
+                        reader_outputs[reader_lang] = _run(RUNNERS[reader_lang](h5_tmp))
+                    except Exception as exc:
+                        tag = f"{writer_lang}-writes → {reader_lang}-reads"
+                        print(f"{FAIL} {tag}: {exc}")
+                        failures.append(tag)
+
+                # Parity: every reader must agree with the first.
+                ref_reader = langs[0]
+                if ref_reader in reader_outputs:
+                    for reader_lang, data in reader_outputs.items():
+                        if reader_lang == ref_reader:
+                            continue
+                        tag = f"{writer_lang}-writes → {ref_reader} vs {reader_lang} parity"
+                        diffs = _diff(reader_outputs[ref_reader], data)
+                        if diffs:
+                            print(f"{FAIL} {tag}:")
+                            for line in diffs:
+                                print(f"  {line}")
+                            failures.append(tag)
+                        elif verbose:
+                            print(f"{PASS} {tag}")
+
+                # Fidelity: Python's reading must match the canonical JSON.
+                if "python" in reader_outputs:
+                    tag = f"{writer_lang}-writes → fidelity"
+                    fid_diffs = _diff(canonical, reader_outputs["python"])
+                    if fid_diffs:
+                        print(f"{FAIL} {tag}:")
+                        for line in fid_diffs:
+                            print(f"  {line}")
+                        failures.append(tag)
+                    elif verbose:
+                        print(f"{PASS} {tag}")
+
+            except Exception as exc:
+                tag = f"{writer_lang}-writer"
+                print(f"{FAIL} {tag}: {exc}")
                 failures.append(tag)
-            elif verbose:
-                print(f"{PASS} rust-writer roundtrip (parity + fidelity)")
-    except Exception as exc:
-        print(f"{FAIL} rust-writer roundtrip: {exc}")
-        failures.append("rust-writer roundtrip")
+            finally:
+                h5_tmp.unlink(missing_ok=True)
     finally:
         json_tmp.unlink(missing_ok=True)
-        rust_rt_path.unlink(missing_ok=True)
 
     if not failures:
-        print(f"{PASS} Write interoperability checks passed.")
+        n_parity = len(writer_langs) * max(0, len(langs) - 1)
+        n_fidelity = len(writer_langs)
+        print(
+            f"{PASS} Write interoperability: {len(writer_langs)} writer(s) × "
+            f"{len(langs)} reader(s) — {n_parity} parity + {n_fidelity} fidelity checks passed."
+        )
     return not failures
 
 
@@ -371,7 +415,7 @@ def _correction_hash_cmd(
     lang: str, path: Path, train: int = 0, inverse: bool = False
 ) -> list[str]:
     """Build the correction-hash CLI invocation for the given language."""
-    cmd = [BINARIES[lang](), "correction-hash", str(path), "--train", str(train)]
+    cmd = [*BINARIES[lang](), "correction-hash", str(path), "--train", str(train)]
     if inverse:
         cmd.append("--inverse")
     return cmd

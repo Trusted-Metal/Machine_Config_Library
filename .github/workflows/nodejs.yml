@@ -1,0 +1,120 @@
+name: Node.js
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "nodejs/**"
+      - "fixtures/**"
+      - "schema/**"
+      - ".github/workflows/nodejs.yml"
+  pull_request:
+    paths:
+      - "nodejs/**"
+      - "fixtures/**"
+      - "schema/**"
+      - ".github/workflows/nodejs.yml"
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # h5wasm bundles libhdf5 compiled to WebAssembly — no system HDF5 install
+      # required on either platform.  Node.js is all that is needed.
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: nodejs/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: nodejs
+
+      - name: Build TypeScript
+        run: npm run build
+        working-directory: nodejs
+
+      # 105 tests: 78 reader (all 3 fixtures, incl. getCorrectionData/
+      # getInverseCorrectionData) + 6 schema + 21 writer.
+      # The h5wasm WASM module initialises once per suite run; individual tests
+      # are fast after that.
+      - name: Run test suite (vitest)
+        run: npm test
+        working-directory: nodejs
+
+      # Export the reference fixture to JSON and upload as an artifact so the
+      # compare job can verify that Linux and Windows produce identical output.
+      - name: Smoke-test CLI — export reference fixture to JSON
+        shell: bash
+        run: |
+          node nodejs/dist/cli.js export-json fixtures/reference_config.h5 \
+            > "$RUNNER_TEMP/nodejs_output.json"
+          echo "Exported $(wc -c < "$RUNNER_TEMP/nodejs_output.json") bytes"
+
+      # SHA-256 of the flat little-endian float64 correction grid — must be
+      # platform-independent (the compare job below diffs Linux vs Windows).
+      - name: Smoke-test CLI — correction-hash
+        shell: bash
+        run: |
+          node nodejs/dist/cli.js correction-hash fixtures/reference_config.h5 --train 0 \
+            > "$RUNNER_TEMP/nodejs_correction_hash.txt"
+          node nodejs/dist/cli.js correction-hash fixtures/reference_config.h5 --train 0 --inverse \
+            >> "$RUNNER_TEMP/nodejs_correction_hash.txt"
+          cat "$RUNNER_TEMP/nodejs_correction_hash.txt"
+
+      - name: Upload CLI output artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-output-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/nodejs_output.json
+            ${{ runner.temp }}/nodejs_correction_hash.txt
+          retention-days: 14
+
+  # After both matrix legs finish, diff their JSON outputs to catch any
+  # platform-specific rendering differences (number formatting, encoding, etc.).
+  compare:
+    name: Platform parity (Linux vs Windows)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nodejs-output-ubuntu-latest
+          path: linux
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nodejs-output-windows-latest
+          path: windows
+
+      - name: Diff Linux vs Windows JSON output
+        run: |
+          if diff -u linux/nodejs_output.json windows/nodejs_output.json; then
+            echo "Platform outputs are identical."
+          else
+            echo "Platform outputs differ — see diff above."
+            exit 1
+          fi
+
+      - name: Diff Linux vs Windows correction-hash output
+        run: |
+          if diff -u linux/nodejs_correction_hash.txt windows/nodejs_correction_hash.txt; then
+            echo "Correction hashes are identical."
+          else
+            echo "Correction hashes differ — see diff above."
+            exit 1
+          fi

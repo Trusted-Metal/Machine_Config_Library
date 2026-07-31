@@ -69,6 +69,10 @@ python -m pytest python/tests/ -v
 | Builder tests | `python/tests/test_builder.py` | 1.6 | `.\.venv\Scripts\python.exe -m pytest python/tests/test_builder.py -v` | `MockConfigBuilder` (1 and 2 lasers, plate dims, correction grid shape/non-zero); `YamlConfigBuilder` roundtrip; `ConfigEditor` offset mutation |
 | Writer roundtrip tests | `python/tests/test_writer_roundtrip.py` | 1.8d | `.\.venv\Scripts\python.exe -m pytest python/tests/test_writer_roundtrip.py -v` | Explicit field-level roundtrip: every scalar field; all 18 ClearBox scalar attributes; NaN↔None convention; axis_configuration "2D"/"3D"/"3D+Focus"; no-ClearBox path; schema validity |
 | OPCUA roundtrip tests | `python/tests/test_opcua_roundtrip.py` | 1.8e | `.\.venv\Scripts\python.exe -m pytest python/tests/test_opcua_roundtrip.py -v` | OPCUA model construction and bidirectional roundtrip: OpcuaClientConfig, OpcuaPipeConfig, OpcuaTrigger (known fields + extra); write with OPCUA → read back → assert all fields; without-OPCUA path; schema validity with and without OPCUA |
+| Schema tests (Node.js) | `nodejs/tests/schema.test.ts` | 2.1 | `cd nodejs && npx vitest run tests/schema.test.ts` | Schema loads; `validate()` rejects empty object, missing `meta`, empty `optical_trains`, 7-train array; accepts a minimal valid document |
+| Writer tests (Node.js) | `nodejs/tests/writer.test.ts` | 2.4/4 | `cd nodejs && npx vitest run tests/writer.test.ts` | 21 tests: class smoke tests; reference-fixture roundtrip (machine name, hash, train count, build plate X, working distance, thermal lensing, SFCF document name/file size, ClearBox ip_address); OPC-UA fixture roundtrip (client, session timeout, triggers_enabled, trigger names/signal); synthetic 2-laser roundtrip (train count, scan_head_rotation) |
+| Reader tests (Node.js) | `nodejs/tests/reader.test.ts` | 2.4/2.5/5 | `cd nodejs && npm test` | 78 fixture-based tests across all 3 canonical fixtures: meta (`schema_version`, `machine_name`, `configuration_hash` 64 hex chars), machine geometry (`build_plate_x/y` ≈ 250 mm), optical trains (counts, `train_id`, `optional_components`), scanner (`working_distance`, `scan_head_offset_x/y` both trains, `scan_head_rotation` 0°/180°, units), collimator (`focal_length` 120 mm), light_source (`wavelength_unit` nm), scanner_card (`SP-ICE-3`, `sample_period_unit` μs), thermal lensing (`false` train 0, `true` train 1), ClearBox presence + `data_port` type, ScanFieldCorrectionFile `file_size` (1138799/1142763), correction data arrays `includeBinary:true` (shape [257][257][2], `null` for NaN), `getCorrectionData`/`getInverseCorrectionData` (shape, NaN preserved, forward ≠ inverse, train 0 ≠ train 1, deterministic re-read — feeds `correction-hash` CLI), OPCUA 13 tests (`bfs_max_depth=16`, `session_timeout=60000`, `"Laser Emission Interlock"`, trigger fields, pipe buffer 65536), JSON serialization, AJV schema validation all 3 fixtures |
+| Builder tests (Node.js) | `nodejs/tests/builder.test.ts` | 2.4 | `cd nodejs && npx vitest run tests/builder.test.ts` | 18 tests, new: `build()` in-memory (default 2 lasers, `nLasers` override, default/custom build-plate dims, `machine_name`, `configuration_hash` length, alternating scan-head offset sign/rotation per train, ClearBox+SFCF present/absent via `includeClearbox`, correction grid shape + ~2.0 centre peak); `save()` + read-back roundtrip (train count, `machine_name`, correction grid shape/peak/non-zero via `getCorrectionData`, inverse grid = forward × 0.9 via `getInverseCorrectionData`, no-clearbox path, schema validity) |
 
 > **Run all Python tests at once** (as the suite grows):
 > ```powershell
@@ -183,12 +187,66 @@ let json = reader.to_json(true, false)?;          // pretty JSON, binary fields 
 
 ---
 
-### Files Produced So Far
+### Node.js Library (Phase 2 — complete: reader, writer, builder, CLI, quickstart, CI)
 
-| File | Phase | Description |
-|---|---|---|
-| `schema/machine_config_v1.schema.json` | 0.2 | Canonical JSON Schema — cross-language contract |
-| `fixtures/reference_config.h5` | 0.1 | Real AconityMIDI machine config (2-laser, no OPCUA) |
+The package lives in `nodejs/`. No native compilation — `h5wasm` is the HDF5 C library compiled to WebAssembly by NIST; `npm install` is the only setup step.
+
+```powershell
+# PowerShell — from repo root
+cd nodejs
+npm install
+npm run build      # compile TypeScript → dist/
+npm test           # 123 tests: 78 reader + 6 schema + 21 writer + 18 builder
+```
+
+```bash
+# Git Bash
+cd nodejs
+npm install
+npm run build
+npm test
+```
+
+**Current status**: Phase 2.3 (write interop refactor) + all six Phase 2.4 vertical-slice steps + Phase 2.5 (reader tests) complete — `models.ts`, `reader.ts`, `schema.ts`, `writer.ts`, `builder.ts`, all three CLI subcommands (`export-json`/`write-hdf5`/`correction-hash`), `.github/workflows/nodejs.yml`, `examples/quickstart/nodejs/main.mjs`, and data-driven `cross_check.py` Phases 1–4 all implemented. **123 tests passing** (78 reader, incl. `getCorrectionData`/`getInverseCorrectionData` + 6 schema + 21 writer roundtrip + 18 builder). `nodejs.yml` runs on `ubuntu-latest` + `windows-latest`; `compare` job diffs both JSON output and correction-hash output between platforms. `cross_check.yml` updated: **all four phases now run for `python,rust,nodejs`** — schema, read parity, write interop, and correction-hash all verified live across all three languages (byte-for-byte identical SHA-256 digests). `MockConfigBuilder` mirrors Python's/Rust's builder (same defaults, same Gaussian correction-grid formula); the quickstart runs the same six-step read/write/round-trip demo as Python and Rust. Phase 2 has no remaining gaps.
+
+**Reading a config today**:
+
+```typescript
+import { MachineConfigReader } from './dist/index.js';
+
+const reader = new MachineConfigReader('fixtures/reference_config.h5');
+const config = await reader.parse();
+console.log(config.meta.machine_name);           // "TM-LPBF-02: AconityMIDI+_OG"
+console.log(config.meta.configuration_hash);     // 64-character hex string
+console.log(config.machine.build_plate_x);       // 250
+
+for (const train of config.optical_trains) {
+  const s = train.scanner;
+  console.log(`WD=${s.working_distance} ${s.working_distance_unit}`);
+}
+
+if (config.opcua) {
+  console.log(config.opcua.client.session_timeout);  // 60000
+}
+
+const json = await reader.toJson({ indent: 2 });     // metadata + scalars only (~13 KB)
+```
+
+**CLI (export-json implemented)**:
+
+```powershell
+# PowerShell — from repo root
+node nodejs/dist/cli.js export-json fixtures/reference_config.h5
+node nodejs/dist/cli.js export-json fixtures/reference_config.h5 > output.json
+```
+
+```bash
+# Git Bash
+node nodejs/dist/cli.js export-json fixtures/reference_config.h5
+```
+
+---
+
 | `fixtures/reference_config_opcua.h5` | 0.3 | Real AconityMIDI machine config (2-laser, with OPCUA group populated) |
 | `python/tests/test_schema.py` | 0.4 | Schema self-test suite (15 tests + 1 deferred) |
 | `tools/generate_adapters.py` | 0.7 | Jinja2 adapter boilerplate generator — run after any schema version bump |
@@ -219,6 +277,21 @@ let json = reader.to_json(true, false)?;          // pretty JSON, binary fields 
 | `.github/workflows/python.yml` | 1.7 | CI: pytest on Python 3.11+3.12, golden file checksum verification, CLI validate/export-json, golden file diff check, artifact upload |
 | `python/tests/test_writer_roundtrip.py` | 1.8d | Bidirectional write roundtrip suite: 110 tests across 6 classes; every scalar field; all 18 ClearBox scalar attrs; NaN↔None; axis_configuration "2D"/"3D"/"3D+Focus"; no-ClearBox path; schema validity |
 | `python/tests/test_opcua_roundtrip.py` | 1.8e | OPCUA roundtrip suite: OpcuaClientConfig/OpcuaPipeConfig/OpcuaTrigger models; write-with-OPCUA → read-back field assertion; `extra` passthrough; without-OPCUA path; schema validity |
+| `nodejs/package.json` | 2.0 | npm package manifest: `h5wasm ^0.10.3`, `ajv ^8.17.1`, `commander ^12.1.0`; devDeps: `typescript ^5.5.4`, `vitest ^3.0.0`, `@types/node ^22.0.0`; scripts: `build` (tsc), `test` (vitest run), `typecheck` |
+| `nodejs/tsconfig.json` | 2.0 | TypeScript config: target ES2022, module NodeNext, strict mode, `outDir dist/`, `rootDir src/` |
+| `nodejs/src/models.ts` | 2.4/1 | Full TypeScript interface tree (15 interfaces) mirroring Python models; snake_case throughout; `optional_components: OptionalComponents` always present; `opcua?: OpcuaConfig` optional |
+| `nodejs/src/schema.ts` | 2.1 | Schema loader + AJV compiler: loads `schema/machine_config_v1.schema.json` via `createRequire`; exports `validate(data): string[]` — empty array = valid; `strict: false` to suppress format warnings |
+| `nodejs/src/reader.ts` | 2.4/2/5 | `MachineConfigReader` — h5wasm-based HDF5 → `MachineConfig`; `parse(options?)` and `toJson(options?)`; `includeBinary` flag for correction data and raw `.fc3` bytes; `getCorrectionData(trainIndex)` / `getInverseCorrectionData(trainIndex)` — raw NaN-preserving `Float64Array` + shape, bypassing JSON null-conversion, mirroring Python/Rust; NODERAWFS host filesystem access; type-dispatching attribute helpers (Rules 1–8 §0.5) |
+| `nodejs/src/writer.ts` | 2.4/4 | `MachineConfigWriter` — h5wasm-based `MachineConfig` → HDF5; exact inverse of `reader.ts`; `ws`/`wf`/`wi`/`wb` helpers mirror Python `_s`/`_f`/`_i`/`_b` and Rust conventions; zero-filled correction grids when binary data absent; `extra` passthrough; OPCUA write path |
+| `nodejs/src/builder.ts` | 2.4 | `MockConfigBuilder` — mirrors `python/src/machine_config/builder.py`/`rust/src/builder.rs` field-for-field (same defaults, same Gaussian correction-grid formula, peak 2.0, inverse grid ×0.9); `build()` (sync, in-memory) and `save(path)` (async, via `MachineConfigWriter`); fixed `machine.id`/`meta.export_date` constants for reproducibility, matching Rust's convention rather than Python's random-UUID/current-time one |
+| `nodejs/src/cli.ts` | 2.4/5 | `export-json`, `write-hdf5`, and `correction-hash` (`--train <n> [--inverse]`, SHA-256 of flat little-endian float64 bytes via `node:crypto`) all fully implemented |
+| `nodejs/src/index.ts` | 2.1 | Package exports: `MachineConfigReader`, `MachineConfigWriter`, `MockConfigBuilder`, `SCHEMA_VERSION`/`getSchema`/`validate`, adapters, all model types |
+| `nodejs/src/adapters/` | 2.1 | Adapter layer scaffold — empty until first schema bump |
+| `nodejs/tests/schema.test.ts` | 2.1 | 6 live tests: schema loads; `validate()` rejects empty/missing-meta/empty-trains/7-trains objects; accepts minimal valid document |
+| `nodejs/tests/writer.test.ts` | 2.4/4 | 21 tests — see Test Suites table |
+| `nodejs/tests/reader.test.ts` | 2.4/2.5/5 | 78 fixture-based reader tests across all 3 canonical fixtures (see Test Suites table) |
+| `nodejs/tests/builder.test.ts` | 2.4 | 18 tests — see Test Suites table |
+| `examples/quickstart/nodejs/main.mjs` | 2.4/6 | Node.js quickstart — plain ESM script (no `.ts`/build step of its own); mirrors `examples/quickstart/python/main.py` and `rust/examples/quickstart.rs`; imports from `nodejs/dist/index.js`; resolves repo root via `import.meta.url`; prints PASS/FAIL with field-level diagnostics |
 | `rust/Cargo.toml` | 3.1 | Rust package manifest: `hdf5-metno 0.12` (aliased as `hdf5`, static; no system install), `hdf5-metno-sys 0.11`, `serde`/`serde_json`, `thiserror`, `indexmap`, `clap`, `ndarray 0.16`, `sha2 0.10`; CI matrix: `windows-latest` + `ubuntu-latest` |
 | `rust/src/lib.rs` | 3.1 | Crate root — `pub mod` declarations for all six modules |
 | `rust/src/error.rs` | 3.3 | `MachineConfigError` enum (Hdf5, Json, Parse, UnitMismatch, UnsupportedVersion, MissingGroup); `pub type Result<T>`; 6 inline unit tests |
@@ -231,8 +304,9 @@ let json = reader.to_json(true, false)?;          // pretty JSON, binary fields 
 | `rust/src/adapters/registry.rs` | 3.1 | Adapter registry scaffold — empty until first schema bump |
 | `rust/tests/integration_test.rs` | 3.9 | 14 integration tests across 3 fixtures: structural, correction-data, OPCUA, builder roundtrip, writer roundtrip |
 | `.github/workflows/rust.yml` | 3.CI | Rust CI: `cargo test` + `cargo build --release` on matrix `ubuntu-latest`/`windows-latest`; CLI smoke-test exports JSON + correction hashes for all 3 fixtures (forward + inverse); both artifacts uploaded; `compare` job diffs Linux vs Windows JSON and correction hashes |
-| `.github/workflows/cross_check.yml` | 3.CI | Cross-language CI: matrix `ubuntu-latest`/`windows-latest`; `PYTHONUTF8=1` job-level env; installs Python + deepdiff, builds Rust; 4 phase steps with per-phase `--skip-*` flags; uploads per-OS inspection artifacts |
-| `tools/cross_check.py` | 3.CI | Four-phase correctness checker: (1) schema validation × 3 fixtures × N langs; (2) read parity deep-diff; (3) write interop (Python builder/writer/Rust writer roundtrips); (4) correction hash parity — SHA-256 of flat little-endian f64 bytes, Python vs Rust, all 3 fixtures × {forward, inverse}. `RUNNERS` + `BINARIES` dicts; `PYTHONUTF8=1` in all subprocess envs; per-phase `--skip-*` flags. Adding a language = register in `RUNNERS`/`BINARIES` + add build steps to `cross_check.yml`. |
+| `.github/workflows/cross_check.yml` | 3.CI/2.4/5 | Cross-language CI: matrix `ubuntu-latest`/`windows-latest`; `PYTHONUTF8=1` job-level env; installs Python + deepdiff, builds Rust + Node.js; **all four phases now run for `python,rust,nodejs`** (schema, read parity, write interop, correction-hash all verified live for all three); uploads per-OS inspection artifacts including `nodejs_output_xcheck.json` |
+| `.github/workflows/nodejs.yml` | 2.4/3/5 | Node.js CI: `npm ci`, `npm run build`, `npm test` (123 tests) on matrix `ubuntu-latest`/`windows-latest`; CLI smoke-tests export-json and correction-hash; `compare` job diffs Linux vs Windows JSON output *and* correction-hash output |
+| `tools/cross_check.py` | 3.CI/2.4/5 | Four-phase correctness checker: (1) schema validation × 3 fixtures × N langs; (2) read parity deep-diff; (3) write interop (Python/Rust/Node.js writer roundtrips); (4) correction hash parity — SHA-256 of flat little-endian f64 bytes, all 3 languages, all 3 fixtures × {forward, inverse}. `RUNNERS` + `WRITERS` + `BINARIES` dicts (`BINARIES` returns an argv *prefix* — `["node", ".../cli.js"]` for Node.js — so a bare string is no longer assumed); `PYTHONUTF8=1` in all subprocess envs; per-phase `--skip-*` flags. Adding a language = register in `RUNNERS`/`WRITERS`/`BINARIES` + add build steps to `cross_check.yml`. |
 | `examples/quickstart/python/main.py` | 1.9 | Python quickstart — 6-step read+write roundtrip demo; resolves repo root via `__file__`; prints PASS/FAIL with field-level diagnostics |
 | `rust/examples/quickstart.rs` | 3.QS | Rust quickstart — mirrors Python quickstart; run with `cargo run --example quickstart --manifest-path rust/Cargo.toml`; uses `CARGO_MANIFEST_DIR` to resolve repo root |
 | `examples/quickstart/rust/main.rs` | 3.QS | Reference copy of Rust quickstart source for multi-language directory convention |
@@ -1932,14 +2006,39 @@ This is a self-contained read+write roundtrip. If it passes, the library's reade
 
 **Branch**: new branch off clearbox-tauri `main` (work lives in the clearbox-tauri repo, not here).
 
-**Dependency**:
+**Root workspace** (required for git dep support):
+
+A `Cargo.toml` at the repo root registers `rust/` as a Cargo workspace member so Cargo can locate the `machine-config` package when this repo is referenced as a git dependency. Without it, `cargo` cannot find the crate by name.
+
 ```toml
-# clearbox-tauri/src-tauri/Cargo.toml
+# Machine_Config_Library/Cargo.toml
+[workspace]
+resolver = "2"
+members = ["rust"]
+```
+
+**Dependency** — three modes:
+
+```toml
+# 1. Local path dep (active co-development, no push required)
+machine-config = { path = "../../Machine_Config_Library/rust" }
+
+# 2. Git RC dep (integration-test a candidate before production)
+machine-config = { git = "https://github.com/your-org/Machine_Config_Library", tag = "v0.2.0-rc.1" }
+
+# 3. Git production dep (stable, pinned to a release tag)
+machine-config = { git = "https://github.com/your-org/Machine_Config_Library", tag = "v0.2.0" }
+```
+
+When developing both projects simultaneously with a git tag in the dep declaration, add a `[patch]` override so local changes take effect without modifying the pinned version:
+
+```toml
+# clearbox-tauri/Cargo.toml — local development override (remove before merging)
+[patch."https://github.com/your-org/Machine_Config_Library"]
 machine-config = { path = "../../Machine_Config_Library/rust" }
 ```
-Promote to a git-pinned dep once stable.
 
-**ndarray coexistence**: clearbox-tauri uses ndarray 0.17; this library uses ndarray 0.16 internally. `CorrectionData` carries no ndarray type across the boundary — both versions compile independently in the same build. No action needed.
+**ndarray**: Resolved. This library was bumped to ndarray 0.17 to match `hdf5-metno 0.12`'s resolution in clearbox-tauri's workspace. Both projects now compile against a single ndarray 0.17.2 — no duplicate in the dependency tree. The public API (`CorrectionData`) carries only `Vec<f64>` and `[usize; 3]` across the crate boundary — no ndarray type is ever exposed — so future ndarray bumps in either project are independent.
 
 **Completion criteria (branch merge conditions)**:
 - Existing clearbox-tauri tests pass with the new reader
@@ -1954,26 +2053,31 @@ Promote to a git-pinned dep once stable.
 
 ## Phase 2 — Node.js
 
+> **Status: Complete (2026-07-30).** All phases §2.0–§2.5 and all six §2.4 vertical-slice steps done, including the quickstart (Phase 2.4/6) and `builder.ts`'s `MockConfigBuilder` (not one of the six steps, but implemented alongside). 123 tests passing (78 reader + 6 schema + 21 writer + 18 builder). See Developer Quick Reference for current CLI surface and public API.
+
 > **Implementation order**: Python (Phase 1) → Rust (Phase 3) → Python hello world (Phase 1.9) → clearbox-tauri integration (Phase 3.10) → Node.js scaffold (Phase 2.0) → Node.js implementation (Phase 2) → C++ (Phase 4) → Go (Phase 5). Phase numbering reflects original plan order; new phases inserted with decimal suffixes to avoid renumbering.
 
-**Libraries**: `node-hdf5` (native N-API bindings to libhdf5; no WASM), `vitest` (test runner), `ajv` (JSON Schema validation), `typescript`
+**Libraries**: `h5wasm` (libhdf5 compiled to WASM via Emscripten; zero native compilation), `vitest` (test runner), `ajv` (JSON Schema validation), `typescript`
 
-> **Why `node-hdf5` not `h5wasm`**: Each language implementation must be an independent native implementation for cross_check parity to be meaningful. A WASM build of the Rust library would share the same HDF5 parsing logic and defeat the cross-check. `node-hdf5` links the HDF5 C library natively via N-API.
+> **Why `h5wasm` not a native binding**: `h5wasm` is the HDF5 **C library** compiled to WebAssembly by NIST — it is not a WASM build of this project's Rust library and shares none of its parsing logic. Cross-check independence is fully preserved: each language has its own layer-3 domain model (`reader.ts`, `models.ts`) reading the same HDF5 bytes through an independent execution path. The practical reason to prefer `h5wasm` over native N-API bindings (e.g. `node-hdf5`) is zero build friction: no node-gyp, no MSVC, no system HDF5 install required on Windows, Linux, or macOS — just `npm install`.
 
 **Install**: `npm install machine-config-library`
 
-**Start condition**: Phase 1.9 (Python hello world) and Phase 3.10 (clearbox-tauri integration) complete; `cross_check.py` Phase 3 write interop refactored to data-driven (required before adding a third language). `python.yml` and `rust.yml` CI green.
+**Start condition**: Phase 1.9 (Python hello world) and Phase 3.10 (clearbox-tauri integration) complete. `python.yml` and `rust.yml` CI green.
 
-> **CI added at end of Phase 2**: `.github/workflows/nodejs.yml` (Ubuntu first; Windows added when node-hdf5 Windows CI is proven); `cross_check.yml` `--langs` extended to `python,rust,nodejs`; Node.js build steps added to `cross_check.yml`.
+> **CI milestones**:
+> - `.github/workflows/nodejs.yml` — **Complete (Phase 2.4/3, updated 2.4/5, 2026-07-30).** Runs on `ubuntu-latest` + `windows-latest`; `npm ci`, `npm run build`, `npm test` (123 tests); CLI smoke-tests for both `export-json` and `correction-hash`; `compare` job diffs Linux vs Windows JSON output *and* correction-hash output. `cross_check.yml` extended: **all four phases now include `nodejs`** — schema, read parity, write interop, and correction-hash are all verified live across `python,rust,nodejs`.
+> - `cross_check.py` Phase 3 write interop refactored to data-driven — required before §2.4 step 4 (writer), not before the scaffold/models/reader. See §2.3. **Complete (2026-07-30)** — Node.js registered in `WRITERS`; 3×3 writer/reader parity + fidelity checks pass live.
+> - `cross_check.yml` `--langs` extended to `python,rust,nodejs`; Node.js build steps added — after Node.js CLI (`export-json`) is working. **Complete.**
 
 ---
 
-### 2.0 — Node.js Scaffold (do before implementation)
+### 2.0 — Node.js Scaffold ✅ COMPLETE
 
 Create the package structure and interface contract so the active Node.js consumer has a defined surface to build against. No HDF5 implementation yet — stubs only.
 
 **Deliverables**:
-- `nodejs/package.json` with `node-hdf5`, `typescript`, `vitest`, `ajv`, `commander` dependencies declared
+- `nodejs/package.json` with `h5wasm`, `typescript`, `vitest`, `ajv`, `commander` dependencies declared
 - `nodejs/tsconfig.json`
 - `nodejs/src/models.ts` — TypeScript interfaces for all schema types (fully typed, not stubs)
 - `nodejs/src/reader.ts` — `MachineConfigReader` class shell with method signatures
@@ -1983,16 +2087,16 @@ Create the package structure and interface contract so the active Node.js consum
 
 The consumer sees the full TypeScript interface immediately; the implementation fills in later.
 
-### 2.1 — Package Structure
+### 2.1 — Package Structure ✅ COMPLETE
 
 ```
 nodejs/
 ├── src/
 │   ├── index.ts             ← exports MachineConfigReader, MachineConfigWriter, MockConfigBuilder
 │   ├── models.ts            ← TypeScript interfaces matching the schema
-│   ├── reader.ts            ← node-hdf5-based reader
-│   ├── writer.ts            ← node-hdf5-based writer (inverse of reader; MachineConfig → HDF5)
-│   ├── builder.ts           ← MockConfigBuilder using node-hdf5 write mode
+│   ├── reader.ts            ← h5wasm-based reader
+│   ├── writer.ts            ← h5wasm-based writer (inverse of reader; MachineConfig → HDF5)
+│   ├── builder.ts           ← MockConfigBuilder using h5wasm write mode
 │   ├── schema.ts            ← loads and validates via ajv
 │   ├── cli.ts               ← export-json, write-hdf5, correction-hash subcommands
 │   └── adapters/
@@ -2013,32 +2117,42 @@ TypeScript interfaces mirror the Python dataclasses exactly, with the same field
 
 ### 2.2 — Why Node.js Runs Against the Real Fixtures
 
-`node-hdf5` is a native module with the same performance characteristics as any other C extension. Unlike `h5wasm`, there is no WASM load overhead. The test suite runs against all three fixtures (`reference_config.h5`, `reference_config_opcua.h5`, `synthetic_2laser.h5`) matching the Rust integration test scope.
+`h5wasm` reads files directly from the host filesystem in Node.js via Emscripten NODERAWFS. The test suite runs against all three fixtures (`reference_config.h5`, `reference_config_opcua.h5`, `synthetic_2laser.h5`) matching the Rust integration test scope. The WASM startup cost is a one-time module load; per-file read performance is equivalent to native bindings for config-file-sized HDF5 (< 10 MB).
 
 ---
 
-### 2.3 — cross_check Phase 3 Refactor (prerequisite)
+### 2.3 — cross_check Phase 3 Refactor ✅
 
-Before Node.js is added as the third language, `phase_write_interop()` in `cross_check.py` must be refactored from hardcoded Python↔Rust blocks to a data-driven loop over all language pairs. At two languages the hardcoding is manageable; at three it creates maintenance debt and at four it becomes a combinatorial problem.
+> **Status: Complete.** `phase_write_interop()` refactored to a data-driven `WRITERS` dict loop. Python now writes via its CLI subprocess (no in-process imports in `cross_check.py`). Phase 3a (MockConfigBuilder 1-laser synthetic) dropped — its read-parity coverage is superseded by Phase 2 validating all active languages against `fixtures/synthetic_2laser.h5`. Phase 3 now runs: for each writer language → write HDF5 from canonical JSON → all reader languages verify parity + fidelity.
 
-This refactor happens at the **start** of Phase 2, before the Node.js writer is implemented, so cross_check validates the Node.js write path incrementally as it is built.
+`phase_write_interop()` was refactored from three hardcoded Python↔Rust blocks to a data-driven `WRITERS` dict loop over all language pairs. Adding a new writer language now requires only a single entry in `WRITERS`.
+
+**`copy-hdf5` subcommand (deferred):** Adding a `copy-hdf5` CLI subcommand to each language (read HDF5 → write HDF5, no JSON intermediate) would give stricter fault isolation in Phase 3: a failure would point to HDF5 encoding rather than JSON serialisation. However, Phase 1 schema validation already verifies the JSON round-trip before Phase 3 runs, making the two-stage failure mode largely theoretical in practice. Deferred until there is evidence of a real diagnosis problem.
 
 ---
 
 ### 2.4 — Implementation Order (vertical slice)
 
-1. Models (`models.ts`) — TypeScript types matching the schema
-2. Reader (`reader.ts`) — node-hdf5 → models; add to cross_check Phase 1+2 immediately
-3. `nodejs.yml` CI — add when first test passes
-4. Writer (`writer.ts`) — models → node-hdf5; add to cross_check Phase 3
-5. `correction-hash` CLI subcommand — add to cross_check Phase 4
-6. Hello world (`examples/quickstart/nodejs/main.ts`) — capstone after all above complete
+1. Models (`models.ts`) — TypeScript types matching the schema ✅
+2. Reader (`reader.ts`) — h5wasm → models; add to cross_check Phase 1+2 immediately ✅
+3. `nodejs.yml` CI — add when first test passes ✅
+4. Writer (`writer.ts`) — models → h5wasm; add to cross_check Phase 3 ✅
+5. `correction-hash` CLI subcommand — add to cross_check Phase 4 ✅
+6. Hello world (`examples/quickstart/nodejs/main.mjs`) — capstone after all above complete ✅
+
+> **Status (step 5): Complete (2026-07-30).** `MachineConfigReader.getCorrectionData(trainIndex)` / `getInverseCorrectionData(trainIndex)` added to `reader.ts` — return the raw NaN-preserving `Float64Array` + shape directly from the HDF5 dataset (bypassing the null-converted JSON path used by `parse()`), mirroring Python's and Rust's same-named reader methods. `cli.ts`'s `correction-hash <file> --train <n> [--inverse]` hashes those bytes as flat little-endian float64 via `node:crypto`'s `createHash('sha256')`, matching Python's `hashlib.sha256(arr.astype("<f8").tobytes())` and Rust's `Sha256::digest(&le_bytes)` byte-for-byte. `tools/cross_check.py`'s `BINARIES` dict changed from `Callable[[], str]` to `Callable[[], list[str]]` (an argv *prefix*) to accommodate Node.js's two-token invocation (`["node", ".../cli.js"]`); Python and Rust entries updated to match. Verified live: all 12 fixture × train × {forward, inverse} combinations produce byte-identical SHA-256 digests across Python, Rust, and Node.js. `cross_check.yml` and `nodejs.yml` updated accordingly (see their file-table rows below).
+
+> **Status (step 6): Complete (2026-07-30).** `examples/quickstart/nodejs/main.mjs` implemented — a plain ESM script (not a `.ts` file compiled via `tsc`) mirroring `examples/quickstart/python/main.py` and `rust/examples/quickstart.rs` step-for-step: open the reference fixture, print machine name / optical train count / working distance / correction-grid shape, write to a temp file, read it back, and assert round-trip fidelity (machine name, train count, working distance) before printing `PASS`/`FAIL`. Imports the library from `nodejs/dist/index.js` (the compiled output, same as `cli.ts` does), so it has no build step of its own beyond `npm run build` inside `nodejs/` first — exits early with a clear message if that build output is missing. Verified working from both the repo root and from inside `nodejs/`. (Earlier drafts of this plan named the file `main.ts`; the shipped file is `main.mjs`, matching what `USAGE.md` had already documented as the run command.)
+
+> **`builder.ts` — Complete (2026-07-30).** `MockConfigBuilder` is not one of the six vertical-slice steps above (it was never required to complete §2.4, since `fixtures/synthetic_2laser.h5` is already generated by the Python builder and consumed as-is by the Node.js test suite) but is now implemented anyway, mirroring `python/src/machine_config/builder.py` and `rust/src/builder.rs` field-for-field: same defaults (2 lasers, 250×250×20 mm build plate, `MockMachine`/`MockCo`/`MockMIDI+`/`MOCK-001`), same per-train geometry (alternating ±87.5/∓23.5 mm scan-head offsets, 0°/180° rotation), and the same Gaussian correction-grid formula (`2.0 * exp(-(x²+y²)/0.5)` over a `linspace(-1,1,257)` grid, peak 2.0 at centre; inverse grid = forward × 0.9, matching Rust's builder and Python's on-disk `save()` output — Python's *in-memory* `build()` uses a `×0.95` inverse factor that never survives its own `save()`, so the Node.js port intentionally follows the `×0.9` value both languages agree on after a round-trip). Departs from Python/Rust in two deliberate ways: (1) `machine.id` and `meta.export_date` are fixed constants (`00000000-0000-0000-0000-000000000001` / `2026-01-01T00:00:00.000Z`) rather than randomly/time generated, matching Rust's reproducibility convention rather than Python's; (2) the existing stub's two independent `includeClearbox`/`includeSfcf` options were collapsed into the single `includeClearbox` flag that Python and Rust both use to gate ClearBox and ScanFieldCorrectionFile together (nothing depended on the stub's two-flag runtime behavior, since it only ever threw). 18 new tests in `nodejs/tests/builder.test.ts` cover both `build()` (in-memory) and `save()` + read-back (full HDF5 round-trip): laser count, default/custom build-plate dimensions, offset/rotation alternation, ClearBox/SFCF presence and absence, correction-grid shape/centre-peak/non-zero, inverse-grid ratio, and schema validity.
 
 ---
 
 ### 2.5 — Tests
 
-The Node.js test suite runs against `fixtures/synthetic_2laser.h5`. Tests cover the same logical assertions as the Python suite so any structural gap between implementations surfaces immediately.
+> **Status: Complete.** 78 fixture-based reader tests added to `nodejs/tests/reader.test.ts`, replacing the 4 scaffold smoke tests. Tests run against all 3 fixtures (`synthetic_2laser.h5`, `reference_config.h5`, `reference_config_opcua.h5`). Full suite: 123 tests passing (78 reader + 6 schema + 21 writer + 18 builder). Test groups: meta, machine geometry, optical trains, scanner, collimator, light_source, scanner_card, thermal lensing, ClearBox, ScanFieldCorrectionFile, correction data arrays (includeBinary:true), raw `getCorrectionData`/`getInverseCorrectionData` accessors (as of Phase 2.4/5), OPCUA client/pipe/triggers, JSON serialization, schema validation, writer roundtrip across all 3 fixtures including OPC-UA triggers (as of Phase 2.4/4), and `MockConfigBuilder` build/save/round-trip (`nodejs/tests/builder.test.ts`, new).
+
+The Node.js test suite runs against all three canonical fixtures. Tests cover the same logical assertions as the Python/Rust suites so any structural gap between implementations surfaces immediately.
 
 ```typescript
 // tests/reader.test.ts
@@ -3163,7 +3277,71 @@ test.describe('Export Canonical JSON', () => {
 
 ### Versioning Policy
 
-All four packages share the same semver version. When the schema changes in a way that alters the canonical JSON output, all four packages bump their major version together. This is enforced by the cross-check CI job: if `$schema` version in `machine_config_v1.schema.json` changes, the CI pipeline requires all four packages to have updated their version numbers before merging.
+All four packages share the **same semver version number** at all times. A `v0.3.0` tag means the Python, Rust, Node.js, and C++ libraries all implement the same schema revision at that point.
+
+#### Tooling
+
+| Tool | Role |
+|---|---|
+| `semantic-release` | Analyses commits, determines next version, creates git tag, generates release notes, triggers version-file updates |
+| `@semantic-release/exec` | Calls `scripts/bump-versions.mjs` to update all language manifests atomically |
+| `@semantic-release/git` | Commits the updated manifests back to the branch with a `chore(release):` message |
+| `@semantic-release/github` | Creates the GitHub Release with auto-generated notes |
+| `commitlint` | Validates every commit message against the Conventional Commits spec |
+| `husky` | Runs `commitlint` as a `commit-msg` git hook so invalid messages are rejected before push |
+
+All tooling lives in a root `package.json` (tooling-only, never published). The `scripts/bump-versions.mjs` script updates `rust/Cargo.toml`, `python/pyproject.toml`, and `nodejs/package.json` (and eventually `cpp/CMakeLists.txt`) to the new version in a single atomic step.
+
+#### Branch strategy
+
+| Branch | Channel | Tag format | Example |
+|---|---|---|---|
+| `main` | Pre-release (RC) | `vX.Y.Z-rc.N` | `v0.3.0-rc.1` |
+| `release` | Production | `vX.Y.Z` | `v0.3.0` |
+
+- Every merge to `main` that contains a version-bumping commit type triggers a new RC automatically.
+- Merging `main` into `release` promotes the current RC to a production release. No new commits are added; semantic-release strips the `-rc.N` suffix and creates the final tag.
+- `release` is a promotion-only branch — nothing is ever developed directly on it.
+
+#### Commit type → version bump rules
+
+| Commit type | Bump | Example |
+|---|---|---|
+| `feat` | minor | `feat(nodejs): add getRawGroup` |
+| `fix`, `perf`, `refactor` | patch | `fix(python): reader handles empty attrs` |
+| `feat!` or `BREAKING CHANGE:` footer | major | `feat!: remove legacy parse_v0 API` |
+| `docs`, `style`, `test`, `build`, `ci`, `chore` | none | `docs: update USAGE.md feature matrix` |
+
+semantic-release analyses **all commits since the last production tag** and applies the highest-priority bump found. If a `feat:` and three `fix:` commits land between two production releases, the result is a minor bump.
+
+#### Scope convention
+
+Scopes are informational — they appear in the CHANGELOG and help readers understand which language or subsystem changed. They do not gate which packages get bumped (all bump together).
+
+Standard scopes: `rust`, `python`, `nodejs`, `cpp`, `schema`, `ci`, `docs`.
+
+#### Setup order (one-time, from a clean `main` baseline)
+
+1. Merge all pending feature branches to `main`
+2. Manually tag the current tip of `main` as `v0.1.0` — gives semantic-release its anchor point
+3. Create the `release` branch from `main` at that same commit
+4. On a new branch (`chore/release-pipeline`), add in order:
+   - Root `Cargo.toml` workspace file (two lines)
+   - Root `package.json` + install semantic-release + commitlint
+   - `.releaserc.json`
+   - `scripts/bump-versions.mjs`
+   - `commitlint.config.js`
+   - `.husky/commit-msg` hook
+   - `.github/workflows/release.yml`
+5. Dry-run: `npx semantic-release --dry-run` — verify config without pushing
+6. PR `chore/release-pipeline` → `main` (all `chore:` commits → no RC triggered)
+7. Set branch protection rules on GitHub for both `main` and `release`
+8. The next `feat:` or `fix:` PR merged to `main` creates the first live RC (`v0.2.0-rc.1`)
+9. Validate RC, then PR `main` → `release` → first production release (`v0.2.0`)
+
+#### Extending to C++
+
+When the C++ implementation lands, add one line to `scripts/bump-versions.mjs` that patches the version in `cpp/CMakeLists.txt`. No other part of the pipeline changes.
 
 ---
 
@@ -3231,6 +3409,8 @@ Phase 9 adds what cannot be done incrementally: **release automation, smoke test
 | `smoke.yml` — clean-install smoke tests per language | Needs published packages to install |
 | Version-bump enforcement in `cross_check.yml` | Needs all four languages to have agreed on semver policy |
 | Automated release notes generation | Needs a stable commit history across all languages |
+
+The versioning mechanics (semantic-release, conventional commits, branch strategy, bump-versions script) are specified in full in [§ Phase 9 — Versioning Policy](#versioning-policy). Phase 10 adds only the publish steps on top of that foundation.
 
 The workflow files below are the **final state** after all incremental additions. The per-language files are shown for completeness; `cross_check.yml` shows the full four-language form.
 

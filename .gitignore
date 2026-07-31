@@ -17,6 +17,7 @@ scratch/
 
 # Node / Rust / C++ build outputs
 nodejs/node_modules/
+nodejs/dist/
 rust/target/
 cpp/build/
 
