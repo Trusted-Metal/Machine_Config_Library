@@ -1,0 +1,5 @@
+[build]
+# Keep the Rust build output inside rust/target/ even though the workspace
+# root is at the repo root. This preserves the binary paths that CI workflows
+# and tools/cross_check.py expect (rust/target/release/machine-config-cli).
+target-dir = "rust/target"

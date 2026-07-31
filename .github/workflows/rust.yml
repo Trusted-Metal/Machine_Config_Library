@@ -43,7 +43,7 @@ jobs:
       - name: Smoke-test CLI and export reference fixture
         shell: bash
         run: |
-          bin="./target/release/machine-config-cli"
+          bin="target/release/machine-config-cli"
           [[ "$RUNNER_OS" == "Windows" ]] && bin="${bin}.exe"
           "${bin}" export-json ../fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output.json"
           echo "Exported $(wc -c < "$RUNNER_TEMP/rust_output.json") bytes"
