@@ -1,0 +1,15 @@
+## <small>0.1.1-rc.1 (2026-07-31)</small>
+
+* Merge pull request #5 from Trusted-Metal/SD-1653 ([9a671ca](https://github.com/Trusted-Metal/Machine_Config_Library/commit/9a671ca)), closes [#5](https://github.com/Trusted-Metal/Machine_Config_Library/issues/5)
+* Merge pull request #6 from Trusted-Metal/SD-1655 ([33d1ba1](https://github.com/Trusted-Metal/Machine_Config_Library/commit/33d1ba1)), closes [#6](https://github.com/Trusted-Metal/Machine_Config_Library/issues/6)
+* Merge pull request #7 from Trusted-Metal/SD-1656 ([ae86c79](https://github.com/Trusted-Metal/Machine_Config_Library/commit/ae86c79)), closes [#7](https://github.com/Trusted-Metal/Machine_Config_Library/issues/7)
+* Merge pull request #8 from Trusted-Metal/SD-1656 ([b0631b8](https://github.com/Trusted-Metal/Machine_Config_Library/commit/b0631b8)), closes [#8](https://github.com/Trusted-Metal/Machine_Config_Library/issues/8)
+* fix(ci): disable husky hooks in release canidate workflow ([bb43368](https://github.com/Trusted-Metal/Machine_Config_Library/commit/bb43368))
+* fix(ci): pin Rust target dir to rust/target via .cargo/config.toml ([f625611](https://github.com/Trusted-Metal/Machine_Config_Library/commit/f625611))
+* fix(ci): update Rust binary path after root workspace Cargo.toml was added ([d6a003d](https://github.com/Trusted-Metal/Machine_Config_Library/commit/d6a003d))
+* fix(ci): use SSH deploy key to bypass branch ruleset for semantic-release push ([47b8c0f](https://github.com/Trusted-Metal/Machine_Config_Library/commit/47b8c0f))
+* fix(nodejs): read CLI version from package.json instead of hardcoding ([3a52122](https://github.com/Trusted-Metal/Machine_Config_Library/commit/3a52122))
+* ci: run all checks regardless on PR and push to main/release ([ba05827](https://github.com/Trusted-Metal/Machine_Config_Library/commit/ba05827))
+* chore(ci): add commitlint and husky commit-msg hook ([0bde128](https://github.com/Trusted-Metal/Machine_Config_Library/commit/0bde128))
+* chore(ci): add semantic-release pipeline ([eeada63](https://github.com/Trusted-Metal/Machine_Config_Library/commit/eeada63))
+* chore(rust): add workspace root for git dep support ([dfd4cdb](https://github.com/Trusted-Metal/Machine_Config_Library/commit/dfd4cdb))
