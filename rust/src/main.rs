@@ -61,6 +61,14 @@ enum Command {
         #[arg(long)]
         inverse: bool,
     },
+    /// Copy an HDF5 machine config file, preserving all binary data
+    /// (correction grids, fc3 bytes).  Used by cross_check Phase 3.5.
+    CopyHdf5 {
+        /// Path to the source .h5 file.
+        input: PathBuf,
+        /// Path to write the copied .h5 file (created or overwritten).
+        output: PathBuf,
+    },
 }
 
 fn main() {
@@ -98,6 +106,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let bytes: Vec<u8> = cd.data.iter().flat_map(|&v| v.to_le_bytes()).collect();
             let digest = Sha256::digest(&bytes);
             println!("{digest:x}");
+        }
+        Command::CopyHdf5 { input, output } => {
+            let reader = MachineConfigReader::open(&input)?;
+            let config = reader.parse_with_binary()?;
+            MachineConfigWriter::new(&config).write(&output)?;
         }
     }
     Ok(())

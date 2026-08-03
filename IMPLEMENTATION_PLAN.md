@@ -2127,7 +2127,7 @@ TypeScript interfaces mirror the Python dataclasses exactly, with the same field
 
 `phase_write_interop()` was refactored from three hardcoded Python↔Rust blocks to a data-driven `WRITERS` dict loop over all language pairs. Adding a new writer language now requires only a single entry in `WRITERS`.
 
-**`copy-hdf5` subcommand (deferred):** Adding a `copy-hdf5` CLI subcommand to each language (read HDF5 → write HDF5, no JSON intermediate) would give stricter fault isolation in Phase 3: a failure would point to HDF5 encoding rather than JSON serialisation. However, Phase 1 schema validation already verifies the JSON round-trip before Phase 3 runs, making the two-stage failure mode largely theoretical in practice. Deferred until there is evidence of a real diagnosis problem.
+**`copy-hdf5` subcommand (implemented):** Each language now exposes a `copy-hdf5` CLI subcommand (read HDF5 with full binary data → write HDF5, no JSON intermediate). This closes the binary round-trip testing gap: Phase 3 write-interop uses a JSON intermediate that excludes correction arrays, so correction-grid encoding was only tested by Phase 4 reading the original fixture. Phase 3.5 (`phase_binary_copy`) uses `copy-hdf5` to verify that each language can faithfully round-trip binary data end-to-end, and that all readers agree on the resulting correction hash.
 
 ---
 
@@ -2827,7 +2827,8 @@ impl<'a> MachineConfigWriter<'a> {
 3. `cpp.yml` CI — add when first test passes (matrix: Ubuntu + Windows via vcpkg)
 4. Writer — add to cross_check Phase 3
 5. `correction-hash` CLI — add to cross_check Phase 4
-6. Hello world (`examples/quickstart/cpp/main.cpp`) — capstone
+6. `copy-hdf5` CLI — add to `COPIERS` dict in cross_check for Phase 3.5
+7. Hello world (`examples/quickstart/cpp/main.cpp`) — capstone
 
 **Windows CI approach**: vcpkg with `hdf5` port. The experience from Node.js CI will clarify whether this is sufficient or whether a pre-built static HDF5 is needed.
 
@@ -2921,7 +2922,7 @@ C++ has the most environment friction (system HDF5, CMake, vcpkg setup). Buildin
 - **Tests**: standard `go test`
 - **JSON Schema**: `github.com/santhosh-tekuri/jsonschema/v6`
 
-**Implementation order**: same vertical slice as all other languages (models → reader → CI → writer → correction hash → hello world).
+**Implementation order**: same vertical slice as all other languages (models → reader → CI → writer → correction-hash → copy-hdf5 → hello world).
 
 **Windows CI**: deferred. CGO on Windows requires MinGW-w64 + libhdf5, which is non-trivial. Ubuntu CI is added first; Windows CI added after the pattern is validated.
 
