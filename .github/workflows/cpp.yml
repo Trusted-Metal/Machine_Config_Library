@@ -86,14 +86,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cpp/build/_deps
-          key: cmake-deps-v2-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt', 'cpp/tests/CMakeLists.txt') }}
+          key: cmake-deps-v3-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt', 'cpp/tests/CMakeLists.txt') }}
 
       - name: Configure CMake (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH=$HDF5_INSTALL \
-            -DHDF5_ROOT=$HDF5_INSTALL
+            -DHDF5_ROOT=$HDF5_INSTALL \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
       - name: Confirm HDF5 version found by CMake (Ubuntu)
         if: runner.os == 'Linux'
@@ -110,7 +111,8 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release `
-            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         shell: pwsh
 
       - name: Build
