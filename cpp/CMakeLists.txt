@@ -42,10 +42,9 @@ FetchContent_Declare(picosha2
   GIT_TAG        master)
 FetchContent_MakeAvailable(picosha2)
 
-# HDF5 is found transitively via HighFive's own find_package call.
-# Ubuntu:  sudo apt-get install -y libhdf5-dev
-# Windows: vcpkg install hdf5:x64-windows-static
-#          cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_PATH/scripts/buildsystems/vcpkg.cmake
+# HDF5 is found transitively via HighFive; the version gate above catches < 1.12.
+# Ubuntu CI: cmake -DCMAKE_PREFIX_PATH=<hdf5-install> (apt ships 1.10.10, incompatible)
+# Windows:   cmake -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake
 
 # Header-only library — consumers link machine_config and get HighFive + nlohmann transitively
 add_library(machine_config INTERFACE)
