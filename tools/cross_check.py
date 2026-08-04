@@ -125,6 +125,17 @@ WRITERS: dict[str, Callable[[Path, Path], list[str]]] = {
     # "cpp": lambda j, h: [str(REPO / f"cpp/build/machine_config_cli{_EXT}"), "write-hdf5", str(j), str(h)],
 }
 
+# Each entry is a callable(input: Path, output: Path) -> list[str] that returns
+# the argv for the language's copy-hdf5 CLI subcommand (read with full binary
+# data, write verbatim — used in Phase 3.5 binary round-trip).
+COPIERS: dict[str, Callable[[Path, Path], list[str]]] = {
+    "python": lambda i, o: [_python_cli(), "copy-hdf5", str(i), "--output", str(o)],
+    "rust":   lambda i, o: [str(_rust_bin()), "copy-hdf5", str(i), str(o)],
+    "nodejs": lambda i, o: ["node", str(REPO / "nodejs/dist/cli.js"), "copy-hdf5", str(i), str(o)],
+    # "cpp":    lambda i, o: [str(REPO / f"cpp/build/machine_config_cli{_EXT}"), "copy-hdf5", str(i), str(o)],
+    # "go":     lambda i, o: [str(REPO / f"go/machine-config-cli{_EXT}"), "copy-hdf5", str(i), str(o)],
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -212,6 +223,20 @@ def _validate_schema(data: dict, schema: dict) -> list[str]:
         return [exc.message]
 
 
+def _ref_lang(langs: list[str]) -> str:
+    """Return Python as the fixed parity anchor.
+
+    Falls back to langs[0] with a warning only when Python is absent, so
+    a local run with --langs rust,nodejs still produces useful output instead
+    of crashing.  In CI, Python is always present.
+    """
+    if "python" in langs:
+        return "python"
+    print(f"{WARN} Python not in active set — using {langs[0]!r} as parity anchor "
+          "(two languages with the same bug can both agree; results may be unreliable)")
+    return langs[0]
+
+
 # ---------------------------------------------------------------------------
 # Phase 1 — Schema validation
 # ---------------------------------------------------------------------------
@@ -257,7 +282,7 @@ def phase_read_parity(langs: list[str], verbose: bool) -> bool:
         print(f"{SKIP} Need ≥2 languages for parity check.")
         return True
 
-    ref_lang = langs[0]
+    ref_lang = _ref_lang(langs)
     failures: list[str] = []
 
     for name, path in FIXTURES.items():
@@ -360,8 +385,8 @@ def phase_write_interop(langs: list[str], verbose: bool) -> bool:
                         print(f"{FAIL} {tag}: {exc}")
                         failures.append(tag)
 
-                # Parity: every reader must agree with the first.
-                ref_reader = langs[0]
+                # Parity: every reader must agree with the Python anchor.
+                ref_reader = _ref_lang(langs)
                 if ref_reader in reader_outputs:
                     for reader_lang, data in reader_outputs.items():
                         if reader_lang == ref_reader:
@@ -432,7 +457,7 @@ def phase_correction_hash(langs: list[str], verbose: bool) -> bool:
         print(f"{SKIP} Need ≥2 languages for hash parity check.")
         return True
 
-    ref_lang = langs[0]
+    ref_lang = _ref_lang(langs)
     failures: list[str] = []
 
     for name, path in FIXTURES.items():
@@ -471,6 +496,111 @@ def phase_correction_hash(langs: list[str], verbose: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Phase 3.5 — Binary copy round-trip
+# ---------------------------------------------------------------------------
+
+def phase_binary_copy(langs: list[str], verbose: bool) -> bool:
+    """Each writer copies reference_config.h5 via copy-hdf5 (full binary round-trip).
+
+    Two checks per writer × direction (forward + inverse correction grid):
+      Parity   — all reader languages produce the same correction hash for the copy.
+      Fidelity — Python’s hash of the copy matches Python’s hash of the original fixture.
+    """
+    print("\n=== Phase 3.5: Binary Copy Round-trip ===")
+
+    copy_langs = [l for l in langs if l in COPIERS]
+    if not copy_langs:
+        print(f"{SKIP} No copy-capable languages in active set.")
+        return True
+
+    # Baseline: Python’s correction hashes of the original reference fixture.
+    baselines: dict[bool, str] = {}
+    for inverse in [False, True]:
+        try:
+            baselines[inverse] = _run_text(
+                _correction_hash_cmd("python", FIXTURES["reference"], inverse=inverse)
+            )
+        except Exception as exc:
+            print(f"{FAIL} Could not establish baseline hash from original fixture: {exc}")
+            return False
+
+    failures: list[str] = []
+
+    for copy_lang in copy_langs:
+        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as hf:
+            copy_path = Path(hf.name)
+        try:
+            env = {**os.environ, "PYTHONUTF8": "1"}
+            r = subprocess.run(
+                COPIERS[copy_lang](FIXTURES["reference"], copy_path),
+                capture_output=True, text=True, encoding="utf-8", env=env,
+            )
+            if r.returncode != 0:
+                tag = f"{copy_lang}-copy"
+                print(f"{FAIL} {tag}: copy-hdf5 exited {r.returncode}\n"
+                      f"  stderr: {r.stderr.strip()}")
+                failures.append(tag)
+                continue
+
+            for inverse in [False, True]:
+                kind = "inverse" if inverse else "forward"
+
+                # Gather hashes from all reader languages.
+                hashes: dict[str, str] = {}
+                for reader_lang in langs:
+                    try:
+                        hashes[reader_lang] = _run_text(
+                            _correction_hash_cmd(reader_lang, copy_path, inverse=inverse)
+                        )
+                    except Exception as exc:
+                        tag = f"{copy_lang}-copy / {reader_lang}-reads / {kind}"
+                        print(f"{FAIL} {tag}: {exc}")
+                        failures.append(tag)
+
+                # Parity: all readers must agree with the Python anchor.
+                ref_reader = _ref_lang(langs)
+                if ref_reader in hashes:
+                    for reader_lang, h in hashes.items():
+                        if reader_lang == ref_reader:
+                            continue
+                        tag = f"{copy_lang}-copy / {ref_reader} vs {reader_lang} / {kind} parity"
+                        if h != hashes[ref_reader]:
+                            print(f"{FAIL} {tag}:")
+                            print(f"  {ref_reader}: {hashes[ref_reader]}")
+                            print(f"  {reader_lang}: {h}")
+                            failures.append(tag)
+                        elif verbose:
+                            print(f"{PASS} {tag}")
+
+                # Fidelity: Python’s hash of the copy must match Python’s hash
+                # of the original fixture.
+                if "python" in hashes:
+                    tag = f"{copy_lang}-copy / python fidelity / {kind}"
+                    if hashes["python"] != baselines[inverse]:
+                        print(f"{FAIL} {tag}:")
+                        print(f"  copy:     {hashes['python']}")
+                        print(f"  original: {baselines[inverse]}")
+                        failures.append(tag)
+                    elif verbose:
+                        print(f"{PASS} {tag}")
+
+        except Exception as exc:
+            tag = f"{copy_lang}-copy"
+            print(f"{FAIL} {tag}: {exc}")
+            failures.append(tag)
+        finally:
+            copy_path.unlink(missing_ok=True)
+
+    if not failures:
+        checks = len(copy_langs) * (max(0, len(langs) - 1) + 1) * 2
+        print(
+            f"{PASS} Binary copy round-trip: {len(copy_langs)} writer(s) × "
+            f"{len(langs)} reader(s) × 2 directions — {checks} checks passed."
+        )
+    return not failures
+
+
+# ---------------------------------------------------------------------------
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -501,6 +631,11 @@ def _parse_args() -> argparse.Namespace:
         "--skip-correction-hash",
         action="store_true",
         help="Skip Phase 4 (correction data hash parity).",
+    )
+    p.add_argument(
+        "--skip-binary-copy",
+        action="store_true",
+        help="Skip Phase 3.5 (binary copy round-trip).",
     )
     p.add_argument(
         "--verbose", "-v",
@@ -541,24 +676,28 @@ def main() -> None:
 
     schema = json.loads(SCHEMA_FILE.read_text())
 
-    results = []
-    if not args.skip_schema:
-        results.append(phase_schema(reachable, schema, args.verbose))
-    if not args.skip_read_parity:
-        results.append(phase_read_parity(reachable, args.verbose))
-    if not args.skip_write_interop:
-        results.append(phase_write_interop(reachable, args.verbose))
-    if not args.skip_correction_hash:
-        results.append(phase_correction_hash(reachable, args.verbose))
+    # None = skipped, True = passed, False = failed
+    results: list[tuple[str, bool | None]] = [
+        ("Phase 1 (Schema)",          None if args.skip_schema          else phase_schema(reachable, schema, args.verbose)),
+        ("Phase 2 (Read Parity)",     None if args.skip_read_parity     else phase_read_parity(reachable, args.verbose)),
+        ("Phase 3 (Write Interop)",   None if args.skip_write_interop   else phase_write_interop(reachable, args.verbose)),
+        ("Phase 3.5 (Binary Copy)",   None if args.skip_binary_copy     else phase_binary_copy(reachable, args.verbose)),
+        ("Phase 4 (Correction Hash)", None if args.skip_correction_hash else phase_correction_hash(reachable, args.verbose)),
+    ]
 
     print()
-    if all(results):
-        print("All checks passed.")
-        sys.exit(0)
-    else:
-        n_failed = sum(1 for r in results if not r)
-        print(f"{n_failed} phase(s) failed.")
+    skipped = [name for name, r in results if r is None]
+    failed  = [name for name, r in results if r is False]
+    active  = sum(1 for _, r in results if r is not None)
+
+    if skipped:
+        print(f"{SKIP} Skipped: {', '.join(skipped)}")
+    if failed:
+        print(f"{len(failed)} phase(s) failed: {', '.join(failed)}")
         sys.exit(1)
+    else:
+        print(f"All {active} active phase(s) passed.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -197,6 +197,24 @@ def write(json_path: str, output: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# copy-hdf5
+# ---------------------------------------------------------------------------
+
+@main.command("copy-hdf5")
+@click.argument("input_path", metavar="INPUT", type=click.Path(exists=True))
+@click.option("--output", "-o", required=True, type=click.Path(), help="Output HDF5 file.")
+def copy_hdf5(input_path: str, output: str) -> None:
+    """Copy an HDF5 machine config file, preserving all binary data (correction grids, fc3 bytes)."""
+    try:
+        config = MachineConfigReader(input_path).parse()
+        MachineConfigWriter(config).write(output)
+        click.echo(f"Written to {output}")
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # build
 # ---------------------------------------------------------------------------
 

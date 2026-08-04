@@ -63,4 +63,14 @@ program
     process.stdout.write(digest + '\n');
   });
 
+program
+  .command('copy-hdf5 <input> <output>')
+  .description('Copy an HDF5 machine config file, preserving all binary data (correction grids, fc3 bytes)')
+  .action(async (input: string, output: string) => {
+    const { MachineConfigReader } = await import('./reader.js');
+    const { MachineConfigWriter } = await import('./writer.js');
+    const config = await new MachineConfigReader(input).parse({ includeBinary: true });
+    await new MachineConfigWriter(config).write(output);
+  });
+
 program.parse();

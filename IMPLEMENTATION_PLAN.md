@@ -323,6 +323,43 @@ All planned tests are now active. No deferred tests remain.
 
 ---
 
+### Pre-C++/Go Readiness Checklist
+
+All items below must be complete and CI-green before C++ (Phase 4) development begins.
+
+#### Binary dataset contract for C++/Go implementors
+
+C++ and Go must write these three datasets exactly as specified. All three are validated
+implicitly by the existing cross-check phases (wrong dtype → reader fails in Phase 3;
+wrong correction values → hash differs in Phase 4; wrong scan field bytes → copy hash
+differs in Phase 3.5), so no separate structural check phase is needed.
+
+| Dataset path (pattern) | dtype | shape | required |
+|---|---|---|---|
+| `Machine/Optical_Trains/Optical_Train_\d+/Optional_Components/ClearBox/Correction_Data` | `float64` | `[257, 257, 2]` | yes |
+| `Machine/Optical_Trains/Optical_Train_\d+/Optional_Components/ClearBox/Inverse_Correction_Data` | `float64` | `[257, 257, 2]` | yes |
+| `Machine/Optical_Trains/Optical_Train_\d+/scan_field_correction_file` | `uint8` | `[variable]` | yes |
+
+#### SD-1658 — Testing Infrastructure (current branch)
+
+| Item | Status | Notes |
+|---|---|---|
+| `copy-hdf5` CLI — Python, Rust, Node.js | ✅ Done | All three languages implement the subcommand |
+| Phase 3.5 `phase_binary_copy()` in `cross_check.py` | ✅ Done | 18 checks passing locally |
+| `--skip-binary-copy` flag + CI step | ✅ Done | `cross_check.yml` updated |
+| Pin `ref_lang` to Python (not `langs[0]`) in Phases 2, 3.5, 4 | ✅ Done | `_ref_lang()` helper; falls back to `langs[0]` with a warning if Python absent |
+| SKIP phases visible in final summary (not silently `True`) | ✅ Done | Summary lists skipped phase names; `active` count excludes skipped |
+| SD-1658 PR merged, CI green | ⬜ Todo | Gate for all of the above |
+
+#### Post-merge (separate branch/PR)
+
+| Item | Status | Notes |
+|---|---|---|
+| Full workflow examples — Python, Rust, Node.js | ⬜ Todo | Informs C++ API design; do before C++ |
+| Viewer enhancements (JSON load button, correction grid heatmap) | ⬜ Todo | Independent; any time |
+
+---
+
 ## Phase 0 — Foundation (Do First, Everything Depends On It)
 
 **Goal**: Establish the repo scaffold, canonical schema, and golden fixtures before any language implementation begins. This phase is the contract that all four libraries must satisfy.
@@ -2127,7 +2164,7 @@ TypeScript interfaces mirror the Python dataclasses exactly, with the same field
 
 `phase_write_interop()` was refactored from three hardcoded Python↔Rust blocks to a data-driven `WRITERS` dict loop over all language pairs. Adding a new writer language now requires only a single entry in `WRITERS`.
 
-**`copy-hdf5` subcommand (deferred):** Adding a `copy-hdf5` CLI subcommand to each language (read HDF5 → write HDF5, no JSON intermediate) would give stricter fault isolation in Phase 3: a failure would point to HDF5 encoding rather than JSON serialisation. However, Phase 1 schema validation already verifies the JSON round-trip before Phase 3 runs, making the two-stage failure mode largely theoretical in practice. Deferred until there is evidence of a real diagnosis problem.
+**`copy-hdf5` subcommand (implemented):** Each language now exposes a `copy-hdf5` CLI subcommand (read HDF5 with full binary data → write HDF5, no JSON intermediate). This closes the binary round-trip testing gap: Phase 3 write-interop uses a JSON intermediate that excludes correction arrays, so correction-grid encoding was only tested by Phase 4 reading the original fixture. Phase 3.5 (`phase_binary_copy`) uses `copy-hdf5` to verify that each language can faithfully round-trip binary data end-to-end, and that all readers agree on the resulting correction hash.
 
 ---
 
@@ -2827,7 +2864,8 @@ impl<'a> MachineConfigWriter<'a> {
 3. `cpp.yml` CI — add when first test passes (matrix: Ubuntu + Windows via vcpkg)
 4. Writer — add to cross_check Phase 3
 5. `correction-hash` CLI — add to cross_check Phase 4
-6. Hello world (`examples/quickstart/cpp/main.cpp`) — capstone
+6. `copy-hdf5` CLI — add to `COPIERS` dict in cross_check for Phase 3.5
+7. Hello world (`examples/quickstart/cpp/main.cpp`) — capstone
 
 **Windows CI approach**: vcpkg with `hdf5` port. The experience from Node.js CI will clarify whether this is sufficient or whether a pre-built static HDF5 is needed.
 
@@ -2921,7 +2959,7 @@ C++ has the most environment friction (system HDF5, CMake, vcpkg setup). Buildin
 - **Tests**: standard `go test`
 - **JSON Schema**: `github.com/santhosh-tekuri/jsonschema/v6`
 
-**Implementation order**: same vertical slice as all other languages (models → reader → CI → writer → correction hash → hello world).
+**Implementation order**: same vertical slice as all other languages (models → reader → CI → writer → correction-hash → copy-hdf5 → hello world).
 
 **Windows CI**: deferred. CGO on Windows requires MinGW-w64 + libhdf5, which is non-trivial. Ubuntu CI is added first; Windows CI added after the pattern is validated.
 
