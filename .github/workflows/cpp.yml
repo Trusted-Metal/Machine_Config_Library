@@ -31,6 +31,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y libhdf5-dev
+          dpkg -s libhdf5-dev | grep Version
 
       # vcpkg is pre-installed on the GitHub Windows runner. We install
       # the dynamic HDF5 package and then add its DLL directory to PATH so
@@ -64,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: cpp/build/_deps
-          key: cmake-deps-${{ runner.os }}-${{ hashFiles('cpp/CMakeLists.txt', 'cpp/tests/CMakeLists.txt') }}
+          key: cmake-deps-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt', 'cpp/tests/CMakeLists.txt') }}
 
       - name: Configure CMake (Ubuntu)
         if: runner.os == 'Linux'
