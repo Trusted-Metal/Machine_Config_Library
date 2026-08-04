@@ -35,9 +35,9 @@ inline std::optional<RawAttr> readRaw(const Loc& loc, const std::string& key) {
     auto attr = loc.getAttribute(key);
     switch (attr.getDataType().getClass()) {
         case HighFive::DataTypeClass::Float:
-            return RawAttr{attr.read<double>()};
+            return RawAttr{attr.template read<double>()};
         case HighFive::DataTypeClass::Integer:
-            return RawAttr{attr.read<int64_t>()};
+            return RawAttr{attr.template read<int64_t>()};
         default: { // String
             // HighFive's read<string> mishandles VarLen strings whose strpad is
             // H5T_STR_SPACEPAD — it sets string_length=SIZE_MAX and std::string::assign
