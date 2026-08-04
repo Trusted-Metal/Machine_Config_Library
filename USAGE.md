@@ -16,7 +16,7 @@ This document covers *how to use it once built*.
 - [Shared Concepts](#shared-concepts)
 - [Python](#python)
   - [Quickstart example](#quickstart-example)
-  - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file)
+  - [Full workflow example](#full-workflow-example)(#use-case-1--parse-a-machine-config-file)
   - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json)
   - [Use case 3 — Reconstruct a config from JSON](#use-case-3--reconstruct-a-config-from-json)
   - [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5)
@@ -39,7 +39,7 @@ This document covers *how to use it once built*.
   - [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema-1)
   - [CLI reference](#cli-reference)
   - [Quickstart example](#quickstart-example-1)
-  - [Running the Node.js test suite](#running-the-nodejs-test-suite)
+  - [Full workflow example](#full-workflow-example-1)(#running-the-nodejs-test-suite)
 - [Rust](#rust) ← *Phase 3 complete*
   - [What's usable today](#whats-usable-today-1)
   - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file-2)
@@ -50,7 +50,7 @@ This document covers *how to use it once built*.
   - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays-2)
   - [CLI reference](#cli-reference-1)
   - [Quickstart example](#quickstart-example-2)
-  - [Running the Rust test suite](#running-the-rust-test-suite)
+  - [Full workflow example](#full-workflow-example-2)(#running-the-rust-test-suite)
 - [C++](#c) ← *coming in Phase 4*
 - [Contributor Workflows](#contributor-workflows)
 
@@ -491,6 +491,50 @@ The script resolves paths relative to the repo root automatically, so it runs co
 
 ---
 
+### Full workflow example
+
+**Scenario:** a field calibration has produced new scanner-head positions. Load the current
+config, apply the updated offsets for both trains, write a modified config, and verify the
+changes persisted alongside the binary correction data.
+
+```powershell
+# PowerShell
+.venv\Scripts\python.exe examples/full_workflow/python/main.py
+```
+
+```bash
+# Git Bash
+.venv/Scripts/python.exe examples/full_workflow/python/main.py
+```
+
+Expected output:
+
+```
+=== Full Workflow: Calibration Adjustment ===
+
+Machine : TM-LPBF-02: AconityMIDI+_OG
+Trains  : 2
+
+Before calibration:
+  Train 1  offset x=-87.5, y=23.5
+           correction grid 257×257×2
+  Train 2  offset x=86.074, y=-21.695
+           correction grid 257×257×2
+
+Written to : <tmp>.h5
+
+After calibration:
+  Train 1  offset x=-91.5, y=24.0
+  Train 2  offset x=91.5, y=-24.0
+
+PASS
+```
+
+The source lives at [examples/full_workflow/python/main.py](examples/full_workflow/python/main.py).
+Uses `ConfigEditor` for immutable-style struct updates.
+
+---
+
 ### Running the Python test suite
 
 ```powershell
@@ -841,6 +885,44 @@ The script resolves paths relative to the repo root automatically, so it runs co
 
 ---
 
+### Full workflow example
+
+**Scenario:** same calibration adjustment as the Python full workflow — load config, apply new
+scanner offsets via direct field mutation (no editor helper needed in TypeScript), write,
+and verify.
+
+```bash
+# Git Bash / PowerShell — from the repo root
+node examples/full_workflow/nodejs/main.mjs
+```
+
+Expected output:
+
+```
+=== Full Workflow: Calibration Adjustment ===
+
+Machine : TM-LPBF-02: AconityMIDI+_OG
+Trains  : 2
+
+Before calibration:
+  Train 1  offset x=-87.5, y=23.5
+           correction grid [257, 257, 2]
+  Train 2  offset x=86.074, y=-21.695
+           correction grid [257, 257, 2]
+
+Written to : <tmp>.h5
+
+After calibration:
+  Train 1  offset x=-91.5, y=24
+  Train 2  offset x=91.5, y=-24
+
+PASS
+```
+
+The source lives at [examples/full_workflow/nodejs/main.mjs](examples/full_workflow/nodejs/main.mjs).
+
+---
+
 ### Running the Node.js test suite
 
 ```powershell
@@ -1127,6 +1209,49 @@ PASS
 ```
 
 The source lives at [rust/examples/quickstart.rs](rust/examples/quickstart.rs) (a standard Cargo example) with a reference copy at [examples/quickstart/rust/main.rs](examples/quickstart/rust/main.rs).
+
+---
+
+### Full workflow example
+
+**Scenario:** same calibration adjustment — load config, apply new scanner offsets via direct
+struct mutation, write, and verify correction data survived the round-trip.
+
+```powershell
+# PowerShell — from repo root
+cargo run --example full_workflow --manifest-path rust/Cargo.toml
+```
+
+```bash
+# Git Bash — from repo root
+cargo run --example full_workflow --manifest-path rust/Cargo.toml
+```
+
+Expected output:
+
+```
+=== Full Workflow: Calibration Adjustment ===
+
+Machine : TM-LPBF-02: AconityMIDI+_OG
+Trains  : 2
+
+Before calibration:
+  Train 1  offset x=Some(-87.5), y=Some(23.5)
+           correction grid [257, 257, 2]
+  Train 2  offset x=Some(86.074), y=Some(-21.695)
+           correction grid [257, 257, 2]
+
+Written to : <tmp>.h5
+
+After calibration:
+  Train 1  offset x=Some(-91.5), y=Some(24.0)
+  Train 2  offset x=Some(91.5), y=Some(-24.0)
+
+PASS
+```
+
+The source lives at [rust/examples/full_workflow.rs](rust/examples/full_workflow.rs) with a
+reference pointer at [examples/full_workflow/rust/main.rs](examples/full_workflow/rust/main.rs).
 
 ---
 

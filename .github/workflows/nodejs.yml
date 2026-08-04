@@ -45,6 +45,9 @@ jobs:
 
       # Export the reference fixture to JSON and upload as an artifact so the
       # compare job can verify that Linux and Windows produce identical output.
+      - name: Full workflow example (smoke test)
+        run: node examples/full_workflow/nodejs/main.mjs
+
       - name: Smoke-test CLI — export reference fixture to JSON
         shell: bash
         run: |
