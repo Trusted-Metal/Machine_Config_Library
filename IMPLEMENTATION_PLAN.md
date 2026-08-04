@@ -349,13 +349,13 @@ differs in Phase 3.5), so no separate structural check phase is needed.
 | `--skip-binary-copy` flag + CI step | ✅ Done | `cross_check.yml` updated |
 | Pin `ref_lang` to Python (not `langs[0]`) in Phases 2, 3.5, 4 | ✅ Done | `_ref_lang()` helper; falls back to `langs[0]` with a warning if Python absent |
 | SKIP phases visible in final summary (not silently `True`) | ✅ Done | Summary lists skipped phase names; `active` count excludes skipped |
-| SD-1658 PR merged, CI green | ⬜ Todo | Gate for all of the above |
+| SD-1658 PR merged, CI green | ✅ Done | Merged 2026-08-04 |
 
 #### Post-merge (separate branch/PR)
 
 | Item | Status | Notes |
 |---|---|---|
-| Full workflow examples — Python, Rust, Node.js | ⬜ Todo | Informs C++ API design; do before C++ |
+| Full workflow examples — Python, Rust, Node.js | ✅ Done | Smoke tests wired into python.yml, rust.yml, nodejs.yml CI |
 | Viewer enhancements (JSON load button, correction grid heatmap) | ⬜ Todo | Independent; any time |
 
 ---

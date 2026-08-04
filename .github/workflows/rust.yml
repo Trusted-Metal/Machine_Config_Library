@@ -40,6 +40,10 @@ jobs:
       # Export the reference fixture to JSON and hash all correction grids.
       # Both outputs are uploaded as artifacts so the compare job can verify
       # that Linux and Windows produce byte-identical results.
+      - name: Full workflow example (smoke test)
+        run: cargo run --example full_workflow
+        working-directory: rust
+
       - name: Smoke-test CLI and export reference fixture
         shell: bash
         run: |
