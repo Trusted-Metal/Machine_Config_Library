@@ -2849,7 +2849,11 @@ impl<'a> MachineConfigWriter<'a> {
 
 ## Phase 4 — C++
 
-> **Detail deferred.** This section will be fully fleshed out after Node.js (Phase 2) is complete and the Phase 3 write interop refactor is proven. The patterns established in Node.js CI (libhdf5 on Windows, data-driven Phase 3) directly inform the C++ implementation.
+> **Ready to start.** All prerequisites (Python Phase 1, Rust Phase 3, Node.js Phase 2) are complete and cross-check CI is green for all three languages.
+>
+> **Scaffold done (2026-08-04):** `cpp/CMakeLists.txt`, all stub headers, `tests/CMakeLists.txt`, and placeholder test files created. **§4.7 done (2026-08-05): `models.hpp` fully implemented, 6/6 tests passing. §4.8 done (2026-08-04): `reader.hpp` (root attrs + Machine group), `src/main.cpp` CLI, 8/8 tests. §4.9 done (2026-08-04): optical train loop, 12/12 tests. §4.10 done (2026-08-04): ClearBox scalar attributes, 15/15 tests. §4.11 done (2026-08-04): binary data (correction grids + fc3 bytes), 19/19 tests. §4.12 done (2026-08-04): OpcuaConfig, 23/23 tests passing. Reader complete. §4.13 done (2026-08-05): CI (`cpp.yml`), Windows stdout binary-mode fix in `main.cpp`. Next step: §4.14 — Writer.**
+
+**Independence guarantee**: The C++ implementation is a fresh, self-contained implementation against the shared schema and `fixtures/` files — it does not link to, call, or derive from any other language's code. `cross_check.py` compares outputs from independent CLI binaries; a bug in one language cannot mask a bug in another.
 
 **Library choices** (decided now, not subject to change):
 - **HDF5 wrapper**: HighFive (header-only C++ wrapper over the HDF5 C library; CMake `FetchContent`)
@@ -2859,21 +2863,27 @@ impl<'a> MachineConfigWriter<'a> {
 - **Tests**: Catch2 (header-only via `FetchContent`)
 
 **Implementation order** (same vertical slice as all other languages):
-1. Models (`models.hpp`) — POD structs matching the schema
-2. Reader — add to cross_check Phase 1+2 immediately
-3. `cpp.yml` CI — add when first test passes (matrix: Ubuntu + Windows via vcpkg)
-4. Writer — add to cross_check Phase 3
-5. `correction-hash` CLI — add to cross_check Phase 4
-6. `copy-hdf5` CLI — add to `COPIERS` dict in cross_check for Phase 3.5
-7. Hello world (`examples/quickstart/cpp/main.cpp`) — capstone
+1. Models (`models.hpp`) — POD structs matching the schema (see §4.6 for type mapping)
+2. Reader — built incrementally; add `cpp` to `RUNNERS`+`BINARIES` in `cross_check.py` after 2a:
+   - 2a: Read root HDF5 attributes → `MachineConfigMeta`; read `Machine/` group → `Machine` + `BuildPlate`
+   - 2b: Read `Optical_Train_NN` loop → `OpticalTrain` (Scanner, LightSource, Collimator, ScannerCard); cross_check Phases 1+2 green
+   - 2c: Read `Optional_Components/ClearBox/` scalar attrs → `ClearBox` (no binary yet)
+   - 2d: Read ClearBox correction datasets as flat `float64` buffer + shape; read `scan_field_correction_file` as `uint8` dataset
+   - 2e: Read `OPCUA/` group → `OpcuaConfig` (only present in `reference_config_opcua.h5`)
+3. `cpp.yml` CI — add when first Catch2 test passes (Ubuntu + Windows; see §4.5)
+4. Writer (`write-hdf5` CLI) — uncomment `cpp` in `WRITERS`; Phase 3 active
+5. `copy-hdf5` CLI — uncomment `cpp` in `COPIERS`; Phase 3.5 active
+6. `correction-hash` CLI — Phase 4 (correction hash) active
+7. Full workflow example (`examples/full_workflow/cpp/main.cpp`) — same calibration-adjustment scenario as the other languages
+8. Quickstart example (`examples/quickstart/cpp/main.cpp`) — capstone
 
-**Windows CI approach**: vcpkg with `hdf5` port. The experience from Node.js CI will clarify whether this is sufficient or whether a pre-built static HDF5 is needed.
-
-> Full directory structure, test patterns, and cross_check integration details to be added when Phase 2 is complete.
+**Windows CI approach**: vcpkg `hdf5:x64-windows-static` port. GitHub Actions `windows-latest` has vcpkg pre-installed; pass `-DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_PATH/scripts/buildsystems/vcpkg.cmake` to CMake. Ubuntu: `apt-get install -y libhdf5-dev`.
 
 ---
 
 ### 4.1 — Package Structure
+
+> **Done (2026-08-04).** Directory structure and all stub files created.
 
 ```
 cpp/
@@ -2901,8 +2911,10 @@ cpp/
 
 ### 4.2 — CMakeLists.txt Key Setup
 
+> **Done (2026-08-04).** `cpp/CMakeLists.txt` created. Additions vs. the sketch below: `LANGUAGES CXX`, `CMAKE_CXX_STANDARD 17`, CLI11 v2.4.1 FetchContent, picosha2 FetchContent (commented out, for §4.16), per-compiler warning flags (`/W4` / `-Wall -Wextra -Wpedantic`), `tests/` subdirectory active, CLI and examples subdirectories commented out pending §4.8 and §4.17–18.
+
 ```cmake
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 project(machine_config VERSION 0.1.0)
 
 include(FetchContent)
@@ -2924,7 +2936,9 @@ FetchContent_Declare(Catch2
   GIT_TAG v3.7.1)
 FetchContent_MakeAvailable(Catch2)
 
-find_package(HDF5 REQUIRED)   # system libhdf5
+# HDF5 is found transitively by HighFive's own find_package call.
+# Only add an explicit find_package(HDF5 REQUIRED) here if vcpkg does not
+# wire it automatically via the toolchain file.
 
 add_library(machine_config INTERFACE)
 target_include_directories(machine_config INTERFACE include)
@@ -2945,13 +2959,431 @@ C++ has the most environment friction (system HDF5, CMake, vcpkg setup). Buildin
 
 ---
 
-> **§4.1–§4.4 (directory structure, CMakeLists.txt, test patterns, cross_check integration) — deferred until Phase 2 (Node.js) is complete.** See Phase 4 intro above for library choices and implementation order.
+### 4.4 — CLI Contract
+
+`cross_check.py` already has the C++ entries commented out. When the reader lands,
+uncomment them and add a `_cpp_bin()` helper (mirrors `_rust_bin()`) that checks
+both the single-config path (`cpp/build/machine_config_cli`) and the MSVC
+multi-config path (`cpp/build/Release/machine_config_cli.exe`).
+
+All four subcommands must match the interface used by Python, Rust, and Node.js:
+
+| Subcommand | Argv | cross_check phase |
+|---|---|---|
+| `export-json <path>` | JSON to stdout | Phases 1, 2 (`RUNNERS`) |
+| `write-hdf5 <json> <output.h5>` | writes HDF5 | Phase 3 (`WRITERS`) |
+| `copy-hdf5 <input.h5> <output.h5>` | binary round-trip | Phase 3.5 (`COPIERS`) |
+| `correction-hash <path> [--train N] [--inverse]` | SHA-256 to stdout | Phase 4 (`BINARIES`) |
+
+The correction hash must be computed as flat little-endian `float64` bytes (same
+algorithm as all other languages) so the digest is platform-independent.
+
+**JSON output contract** — the `export-json` output must satisfy all of the following
+or cross_check Phase 2 will report a false mismatch:
+- **Null fields**: optional fields that are absent in the HDF5 file must serialize as JSON
+  `null`, not be omitted. Configure nlohmann/json accordingly (`NLOHMANN_DEFINE_TYPE_INTRUSIVE`
+  or a custom `to_json` that explicitly writes `j["field"] = nullptr` for missing optionals).
+- **Whole-number floats**: values like `670.0` must serialize as `670` (integer), not `670.0`.
+  `cross_check.py` normalises both sides with `_normalize_numbers()` so this does not cause
+  a spurious failure, but matching the canonical form avoids noise in artifact diffs.
+- **NaN correction cells**: `float64` NaN values in correction grids must serialize as JSON
+  `null` (JSON has no NaN literal). nlohmann/json raises by default on NaN — override with a
+  custom serializer or use the `json::value_t::null` substitution approach.
+- **Field naming**: HDF5 attribute names are PascalCase with underscores (e.g. `IP_Address`,
+  `Serial_Number`). JSON field names are snake_case (e.g. `ip_address`, `serial_number`).
+  The Python reader (`reader.py`) has the authoritative mapping; the Rust reader is a second
+  reference. There is no automatic convention — each field must be mapped explicitly.
+
+---
+
+### 4.6 — C++ Type Mapping
+
+The Rust models (`rust/src/models.rs`) already solved all of these mapping problems and
+are the closest reference. Key decisions:
+
+| Python type | C++ type | Notes |
+|---|---|---|
+| `Optional[str]` | `std::optional<std::string>` | |
+| `Optional[float]` | `std::optional<double>` | HDF5 `float64`; use `double` throughout |
+| `Optional[int]` | `std::optional<int64_t>` | HDF5 integers are 64-bit |
+| `Optional[bool]` | `std::optional<bool>` | HDF5 stores as int 0/1; read as int, cast |
+| `Optional[bytes]` | `std::optional<std::vector<uint8_t>>` | `.fc3` raw bytes from uint8 dataset |
+| Correction grid | `std::vector<double>` + `std::array<size_t,3> shape` | Flat row-major buffer; same pattern as Rust `CorrectionData`. NaN = out-of-field cell. |
+| `dict[str, OpcuaTrigger]` | `std::map<std::string, OpcuaTrigger>` | Preserve insertion order if JSON parity matters; consider `std::vector<std::pair<>>` |
+| `dict[str, Any]` (extra attrs) | `nlohmann::json` | One `nlohmann::json` bag per struct that has `extra` |
+
+**nlohmann/json gotchas**:
+- `std::optional<T>` has no built-in nlohmann support. Either use
+  `nlohmann::json::value_or` pattern or the community `nlohmann/json` optional macro
+  in newer releases (≥ 3.11). Write a `to_json` / `from_json` ADL pair per struct.
+- Serialising `NaN` throws by default. Use `j = value != value ? nullptr : value`
+  (IEEE NaN self-comparison) or a helper that maps NaN to `nlohmann::json()`.
+- HDF5 string attributes arrive as `std::string` from HighFive; empty strings should
+  follow the same `None`-on-empty rule the Python reader applies via `_read_str()`
+  (strip whitespace, return `std::nullopt` if blank).
+
+**HighFive reading patterns**:
+- Attributes: `file[path].getAttribute("Key").read<T>()`
+- Scalar dataset: `file[path]["DatasetName"].read<T>()`
+- nd-array dataset: `file[path]["DatasetName"].read<std::vector<double>>()` then
+  `file[path]["DatasetName"].getSpace().getDimensions()` for the shape
+- Optional group presence: `file.exist(path)` before descending
+
+---
+
+```yaml
+name: C++
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "release"]
+  pull_request:
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HDF5 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      - name: Install HDF5 (Windows — vcpkg)
+        if: runner.os == 'Windows'
+        run: vcpkg install hdf5:x64-windows-static
+
+      - name: Configure
+        shell: bash
+        run: |
+          toolchain_arg=""
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            toolchain_arg="-DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_PATH/scripts/buildsystems/vcpkg.cmake"
+          fi
+          cmake -B cpp/build -S cpp -DCMAKE_BUILD_TYPE=Release $toolchain_arg
+
+      - name: Build
+        run: cmake --build cpp/build --config Release
+
+      - name: Run Catch2 tests
+        run: ctest --test-dir cpp/build -C Release --output-on-failure
+
+      - name: Full workflow example (smoke test)
+        run: cpp/build/machine_config_cli export-json fixtures/reference_config.h5
+        # adjust path for Windows MSVC multi-config output (Release/machine_config_cli.exe)
+
+      - name: Export reference fixture
+        shell: bash
+        run: |
+          bin="cpp/build/machine_config_cli"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/machine_config_cli.exe"
+          "${bin}" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/cpp_output.json"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-output-${{ matrix.os }}
+          path: ${{ runner.temp }}/cpp_output.json
+          retention-days: 14
+
+  compare:
+    name: Platform parity (Linux vs Windows)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: cpp-output-ubuntu-latest, path: linux }
+      - uses: actions/download-artifact@v4
+        with: { name: cpp-output-windows-latest, path: windows }
+      - run: diff linux/cpp_output.json windows/cpp_output.json
+```
+
+---
+
+### 4.7 — Step 1: Models (`models.hpp`)
+
+> **Done (2026-08-05).** `cpp/include/machine_config/models.hpp` complete. 6/6 Catch2 tests passing in `test_models.cpp`. One MSVC fix required: replaced `decltype(Grid3D::value_type)` with explicit types in `grid3d_from_json`; added `HIGHFIVE_USE_BOOST=OFF` (and other optional-serializer flags) to `cpp/CMakeLists.txt` to avoid a spurious Boost dependency in HighFive v2.10.0.
+
+**Goal**: Define all C++ structs matching `python/src/machine_config/models.py`. No HDF5 dependency — pure data types only.
+
+**Files to create**:
+- `cpp/include/machine_config/models.hpp` — all struct definitions with nlohmann/json `to_json`/`from_json` ADL pairs
+- `cpp/tests/test_models.cpp` — Catch2 unit tests
+
+**Acceptance criteria**:
+- Compiles with `-Wall -Wextra` and no warnings
+- All structs use `std::optional<T>` for nullable fields per §4.6 table
+- Correction grid represented as `std::vector<double>` flat buffer + `std::array<size_t, 3> shape` — not nested vectors
+- `std::optional<std::string>` fields that are absent serialize to JSON `null`, not omitted
+- `NaN` values in a correction grid cell serialize to JSON `null` (not rejected by nlohmann)
+- `ExtraAttrs` fields (`nlohmann::json` bag) round-trip through `to_json`/`from_json`
+
+**Catch2 tests**:
+- `NullOptionalSerializesAsNull` — nullopt field → JSON `null`
+- `PresentOptionalSerializesValue` — value present → correct JSON value
+- `NanCellSerializesAsNull` — NaN float64 in correction data → JSON `null`
+- `CorrectionDataFlatIndexing` — element at `(i,j,k)` lives at `i*d1*d2 + j*d2 + k`
+
+**Done when**: `cmake --build cpp/build` succeeds and all `test_models.cpp` tests pass locally.
+
+---
+
+### 4.8 — Step 2a: Reader — Root Attributes + Machine Group
+
+> **Done (2026-08-04).** `cpp/include/machine_config/reader.hpp` complete for meta + machine. `cpp/src/main.cpp` CLI with `export-json`. 8/8 tests passing (6 models + 2 reader). Key fix: all VarLen string attributes in these HDF5 files use `H5T_STR_SPACEPAD` (strpad=2); HighFive v2.10's `read<string>` sets `string_length=SIZE_MAX` for non-null-terminated VarLen strings, causing `std::length_error`. Fixed by calling `H5Aread` with the file's own datatype directly — HDF5 always stores VarLen heap data as a null-terminated `char*` regardless of the strpad metadata.
+
+**Goal**: Read root HDF5 attributes → `MachineConfigMeta`; read `Machine/` group → `Machine` + `BuildPlate`. First working slice of the reader and CLI.
+
+**Files to create/modify**:
+- `cpp/include/machine_config/reader.hpp` — `MachineConfigReader` class with `parse()` and `toJson()`
+- `cpp/src/main.cpp` — CLI entry point with `export-json <path>` subcommand (CLI11)
+- `cpp/CMakeLists.txt` — `machine_config_cli` executable target
+
+**Acceptance criteria**:
+- `./machine_config_cli export-json fixtures/reference_config.h5` exits 0
+- Output JSON contains `meta.machine_name == "TM-LPBF-02: AconityMIDI+_OG"`
+- `machine.manufacturer`, `machine.model`, `machine.serial_number` populated
+- `build_plate` object present (fields may be null)
+- `optical_trains` can be an empty array at this stage — completing it is 2b
+
+**Catch2 tests**:
+- `ParsesMeta` — `meta.machine_name`, `meta.schema_version`, `meta.configuration_hash` match fixture
+- `ParsesMachineGroup` — `machine.manufacturer`, `machine.model` match fixture
+
+**Done when**: `export-json` exits 0 on all three fixtures and emits valid JSON with `meta` and `machine` populated.
+
+---
+
+### 4.9 — Step 2b: Reader — Optical Train Loop
+
+> **Done (2026-08-04).** Full optical train loop implemented: Scanner (X/Y/Z/Focus axes via group-existence checks), LightSource, Collimator, ScannerCard, ClearBox scalar stub, ScanFieldCorrectionFile scalar stub. 12/12 tests passing. Key finding: reference fixture is `Axis_Configuration='3D'` (has Z_Axis, no Focus) — `AxisConfig2D` test renamed `AxisConfig3DNoFocus` and corrected accordingly. Python reader uses group-existence checks for optional axes, not the `Axis_Configuration` string value as a gate.
+
+**Goal**: Read all `Optical_Train_NN` groups → `vector<OpticalTrain>` with Scanner, LightSource, Collimator, ScannerCard. `optional_components` has a null ClearBox at this stage.
+
+**Acceptance criteria**:
+- `optical_trains` array length is 2 for the reference fixture and 2 for synthetic
+- `scanner.working_distance == 670.0` for train 0 of reference fixture
+- `scanner.scan_head_offset_x == -87.5`, `scan_head_offset_y == 23.5` for train 0
+- `scanner.x_axis` and `scanner.y_axis` present; `z_axis` and `focus` null for 2D configs
+- `light_source`, `collimator`, `scanner_card` all populated with non-null required fields
+- `cross_check.py --langs cpp,python` Phase 2 passes for reference and synthetic fixtures (opcua fixture will fail until 2e — expected)
+- Uncomment `cpp` in `RUNNERS` and `BINARIES` in `cross_check.py` at this point
+
+**Catch2 tests**:
+- `OpticalTrainCount` — 2 trains for reference fixture
+- `TrainZeroScannerOffsets` — `scan_head_offset_x == -87.5`, `scan_head_offset_y == 23.5`
+- `TrainZeroWorkingDistance` — `working_distance == 670.0`
+- `AxisConfig2D` — `z_axis` and `focus` are nullopt for a 2D scanner configuration
+
+**Done when**: Phase 2 green for cpp+python on reference and synthetic fixtures.
+
+---
+
+### 4.10 — Step 2c: Reader — ClearBox Scalar Attributes
+
+> **Done (2026-08-04).** `parseClearBox` reads all 18 scalar attrs; `correction_data`/`inverse_correction_data` remain `nullopt` (deferred to §4.11). 15/15 tests passing. Note: every fixture has ClearBox on all trains, so `ClearBoxAbsentForTrainWithoutIt` was replaced with `ClearBoxPresentForBothTrains` (both trains, distinct IPs 192.168.1.10 / 192.168.1.11) and `ClearBoxScalars` (data_port, server_port, timing offsets, show_console, volts_to_watts_algorithm).
+
+**Goal**: Read `Optional_Components/ClearBox/` group (when present) → `ClearBox` struct, scalar attributes only. Binary arrays (correction grids) deferred to 2d.
+
+**Acceptance criteria**:
+- `optional_components.clearbox` non-null for trains that have a ClearBox group
+- `clearbox.ip_address`, `clearbox.serial_number` match fixture values
+- `clearbox.correction_data` and `clearbox.inverse_correction_data` are JSON `null` (binary not loaded in default export mode — correct behavior)
+- Trains without a ClearBox group have `optional_components.clearbox == null`
+- Phase 2 still passes for reference and synthetic fixtures
+
+**Catch2 tests**:
+- `ClearBoxPresentForTrain0` — reference fixture train 0 has non-null ClearBox
+- `ClearBoxIpAddress` — known value matches fixture
+- `ClearBoxAbsentForTrainWithoutIt` — nullopt when ClearBox group does not exist
+
+**Done when**: ClearBox scalar fields match Python output; Phase 2 still green.
+
+---
+
+### 4.11 — Step 2d: Reader — Binary Data (Correction Grids + fc3 Bytes)
+
+> **Done (2026-08-04).** Added `getCorrectionData`, `getInverseCorrectionData`, `getScanFieldCorrectionBytes` using raw `H5Dread` for flat reads. Enabled picosha2 (header-only SHA-256) in `cpp/CMakeLists.txt` to support the hash test. 19/19 tests passing. Confirmed values: shape `{257,257,2}`, 132098 elements, SHA-256 = `b3b95bf5d5e73119ad8c632e6f5b44ba3beada6f054e04797afd6f193f2cebc6`, fc3 bytes = 1138799.
+
+**Goal**: Implement `getCorrectionData(train_index)` and `getInverseCorrectionData(train_index)` returning a flat `CorrectionData` buffer. Implement `getScanFieldCorrectionBytes(train_index)`. These methods power `correction-hash` and `copy-hdf5` in later steps.
+
+**Acceptance criteria**:
+- `getCorrectionData(0).shape == {257, 257, 2}` for reference fixture
+- `getCorrectionData(0).data.size() == 257 * 257 * 2 == 132098`
+- SHA-256 of flat little-endian `float64` bytes matches Python and Rust hashes for the same fixture (hardcode the expected hash in the test from known-good output)
+- `getScanFieldCorrectionBytes(0).size()` matches expected fc3 file size
+
+**Catch2 tests**:
+- `CorrectionDataShape` — shape `{257, 257, 2}` for reference fixture train 0
+- `CorrectionDataSize` — `data.size() == 132098`
+- `CorrectionHashMatchesReference` — SHA-256 of flat LE float64 bytes matches hardcoded digest
+
+**Done when**: Correction hash matches Python and Rust hashes for all three fixtures (obtained by running `python tools/cross_check.py` and recording digests).
+
+---
+
+### 4.12 — Step 2e: Reader — OpcuaConfig
+
+> **Done (2026-08-04).** `parseOpcua` added to reader.hpp: returns `std::nullopt` when `OPCUA` group absent; parses `OPCUA/Client`, `OPCUA/Pipe`, and all `OPCUA/Triggers/` subgroups with `collectExtra` for unknown attrs. `Triggers_Enabled` stored as float `1.0` correctly handled by `readBoolFromInt` (float → int64 → bool). 23/23 tests passing. Fixture: 2 triggers, server URL confirmed.
+
+**Goal**: Read `OPCUA/` group (present only in `reference_config_opcua.h5`) → `OpcuaConfig`. Return `std::nullopt` gracefully when the group is absent.
+
+**Acceptance criteria**:
+- `parse("reference_config.h5").opcua == std::nullopt`
+- `parse("reference_config_opcua.h5").opcua` is non-null
+- `opcua.client.server_url`, `opcua.client.auth_mode` match fixture values
+- `opcua.pipe.pipe_enabled`, `opcua.pipe.buffer_size` correct
+- Trigger map contains expected trigger names with correct field values
+- `cross_check.py --langs cpp,python` Phase 2 passes for **all three fixtures** including `reference_opcua`
+
+**Catch2 tests**:
+- `OpcuaAbsentReturnsNullopt` — reference fixture (no OPCUA group)
+- `OpcuaClientServerUrl` — known URL from opcua fixture
+- `OpcuaTriggerCount` — expected number of triggers
+- `OpcuaTriggerFieldsPopulated` — Signal and Subsystem for a known trigger
+
+**Done when**: Phase 2 fully green for all three fixtures with cpp+python. Reader is complete.
+
+---
+
+### 4.13 — Step 3: CI (`cpp.yml`)
+
+**Goal**: Add `.github/workflows/cpp.yml` so every PR validates the C++ build and tests on both Ubuntu and Windows.
+
+**Files to create**:
+- `.github/workflows/cpp.yml` — use §4.5 skeleton as the starting point
+
+**Acceptance criteria**:
+- `test` job passes on `ubuntu-latest` and `windows-latest`
+- All Catch2 tests pass in CI
+- `export-json` artifact uploaded for both platforms
+- `compare` job diffs Linux vs Windows JSON and exits 0 (platform parity confirmed)
+- No manual steps — fully automated
+
+**Done when**: CI green on both platforms on a PR. Merge to main.
+
+---
+
+### 4.14 — Step 4: Writer (`write-hdf5` CLI)
+
+**Goal**: Implement `MachineConfigWriter` (inverse of the reader) and the `write-hdf5 <json> <output.h5>` CLI subcommand.
+
+**Files to create/modify**:
+- `cpp/include/machine_config/writer.hpp`
+- `cpp/src/main.cpp` — add `write-hdf5` subcommand
+- `cpp/tests/test_writer.cpp` — Catch2 writer tests
+
+**Acceptance criteria**:
+- `write-hdf5 fixtures/reference_output.json out.h5` exits 0
+- Reading `out.h5` back with the C++ reader produces JSON byte-identical to the input JSON (field-for-field, not byte-for-byte HDF5)
+- `cross_check.py --langs cpp,python,rust,nodejs` Phase 3 (write interop) passes — all readers agree on the C++-written HDF5
+- Uncomment `cpp` in `WRITERS` in `cross_check.py`
+
+**Catch2 tests**:
+- `RoundtripAllScalarFields` — write known config; read back; every scalar field matches
+- `RoundtripWithoutClearBox` — config with no ClearBox optional component
+- `RoundtripWithOpcua` — config with OpcuaConfig populated
+- `WrittenHdf5ValidatesSchema` — JSON from reading back the written file passes `machine_config_v1.schema.json`
+
+**Done when**: Phase 3 green with cpp in WRITERS.
+
+---
+
+### 4.15 — Step 5: `copy-hdf5` CLI
+
+**Goal**: Binary round-trip copy — read HDF5 with full binary data (correction grids, fc3 bytes) and write it back verbatim. This is the most demanding write-path test.
+
+**Files to modify**:
+- `cpp/src/main.cpp` — add `copy-hdf5 <input> <output>` subcommand
+
+**Acceptance criteria**:
+- `copy-hdf5 fixtures/reference_config.h5 copy.h5` exits 0
+- `correction-hash copy.h5 --train 0` matches `correction-hash fixtures/reference_config.h5 --train 0`
+- Same for `--train 1` and `--inverse`
+- `cross_check.py` Phase 3.5 (`phase_binary_copy`) passes with cpp in `COPIERS`
+- Uncomment `cpp` in `COPIERS` in `cross_check.py`
+
+**Catch2 tests**:
+- `BinaryRoundtripCorrectionGridHash` — copy fixture; hash correction grid of copy; assert matches original
+- `BinaryRoundtripFc3Size` — copy fixture; fc3 byte count of copy matches original
+
+**Done when**: Phase 3.5 green for all three fixtures.
+
+---
+
+### 4.16 — Step 6: `correction-hash` CLI
+
+**Goal**: Add `correction-hash <path> [--train N] [--inverse]` subcommand. Output is a single hex SHA-256 digest printed to stdout.
+
+**Files to modify**:
+- `cpp/src/main.cpp` — add `correction-hash` subcommand
+
+**Algorithm**: read the flat `float64` buffer via `getCorrectionData(train_index)`, hash bytes in **little-endian** order using a SHA-256 library (OpenSSL, `picosha2`, or `mbedtls` — choose one and document in CMakeLists). This must be platform-independent.
+
+**Acceptance criteria**:
+- `correction-hash fixtures/reference_config.h5 --train 0` prints a hex digest
+- Digest matches the hardcoded known-good hash used in `CorrectionHashMatchesReference` (Step 2d test)
+- Digests for all three fixtures (forward + inverse, all trains) match Python, Rust, and Node.js outputs
+- `cross_check.py --langs cpp,python,rust,nodejs` Phase 4 passes
+
+**Done when**: Phase 4 green. `cross_check.py` exits 0 for all four languages.
+
+---
+
+### 4.17 — Step 7: Full Workflow Example
+
+**Goal**: `examples/full_workflow/cpp/main.cpp` — same calibration-adjustment scenario as Python, Rust, and Node.js examples.
+
+**Scenario** (identical to other languages):
+1. Load `fixtures/reference_config.h5`
+2. Print machine name, train count, pre-calibration scanner offsets and correction grid shape for both trains
+3. Update `scan_head_offset_x` / `scan_head_offset_y` for train 0 → `(-91.5, 24.0)` and train 1 → `(91.5, -24.0)`
+4. Write to a temp file via `MachineConfigWriter`
+5. Read temp file back; assert offsets match updated values; assert correction grid shape `{257, 257, 2}` preserved
+6. Delete temp file
+7. Print `PASS` and exit 0, or `FAIL` with details and exit 1
+
+**Acceptance criteria**:
+- Exits 0 with `PASS` on the reference fixture
+- Temp file is deleted on both success and failure paths
+
+**Done when**: `./cpp/build/full_workflow` exits 0. Add smoke-test step to `cpp.yml`:
+```yaml
+- name: Full workflow example (smoke test)
+  run: |
+    bin="cpp/build/full_workflow"
+    [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/full_workflow.exe"
+    "${bin}"
+  shell: bash
+```
+
+---
+
+### 4.18 — Step 8: Quickstart Example
+
+**Goal**: `examples/quickstart/cpp/main.cpp` — mirrors the Python quickstart. Demonstrates read + write roundtrip from a consumer's perspective.
+
+**Scenario** (identical structure to `examples/quickstart/python/main.py`):
+1. Open `fixtures/reference_config.h5` via `MachineConfigReader`
+2. Print machine name, optical train count, working distance (train 0), correction grid shape (train 0)
+3. Write copy to temp file; read back; assert machine name, train count, working distance match
+4. Delete temp file; print `PASS` and exit 0
+
+**Done when**: `./cpp/build/quickstart` exits 0. Update USAGE.md quickstart section for C++.
 
 ---
 
 ## Phase 5 — Go
 
 > **Detail deferred.** This section will be fully fleshed out after C++ (Phase 4) is complete. Go is last because CGO + Windows CI is the most complex dependency setup of any language in this project.
+
+**Independence guarantee**: The Go implementation is a fresh, self-contained implementation against the shared schema and `fixtures/` files — it does not link to, call, or derive from C++ or any other language's code. It is sequenced after C++ only because CGO + Windows CI is the most environment-sensitive setup; the sequencing avoids debugging two difficult environments simultaneously. `cross_check.py` verifies Go independently alongside the other languages.
 
 **Library choices** (decided):
 - **HDF5 wrapper**: `gonum/hdf5` (CGO wrapper around the HDF5 C library)
@@ -2963,7 +3395,7 @@ C++ has the most environment friction (system HDF5, CMake, vcpkg setup). Buildin
 
 **Windows CI**: deferred. CGO on Windows requires MinGW-w64 + libhdf5, which is non-trivial. Ubuntu CI is added first; Windows CI added after the pattern is validated.
 
-**Prerequisite**: Phase 4 (C++) complete and cross-check CI green for all implemented languages.
+**Scheduling note**: C++ (Phase 4) is completed first; Go can begin at any point after cross-check CI is green for C++. There is no code-level dependency between the two.
 
 > Full directory structure, test patterns, and cross_check integration details to be added when Phase 4 (C++) is complete.
 
