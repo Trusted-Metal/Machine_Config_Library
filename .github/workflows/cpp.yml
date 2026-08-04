@@ -1,0 +1,134 @@
+name: C++
+
+# Builds and tests the C++ library on Ubuntu and Windows, then verifies that
+# both platforms produce bit-identical JSON output from the reference fixture.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "release"]
+  pull_request:
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # System HDF5
+      # Node/Rust manage their own HDF5 (WASM / static); C++ needs a system
+      # install that CMake's find_package(HDF5) can locate.
+      # -----------------------------------------------------------------------
+      - name: Install HDF5 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y libhdf5-dev
+
+      # vcpkg is pre-installed on the GitHub Windows runner. We install
+      # the dynamic HDF5 package and then add its DLL directory to PATH so
+      # that the test runner and CLI can load them at runtime.
+      - name: Cache vcpkg HDF5 package (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_INSTALLATION_ROOT }}\installed
+          key: vcpkg-hdf5-x64-windows-v1
+
+      - name: Install HDF5 via vcpkg (Windows)
+        if: runner.os == 'Windows'
+        run: vcpkg install hdf5:x64-windows
+        shell: pwsh
+
+      - name: Add HDF5 DLLs to PATH (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin" |
+            Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_PATH
+        shell: pwsh
+
+      # -----------------------------------------------------------------------
+      # CMake — configure, build, test
+      # -----------------------------------------------------------------------
+
+      # Cache the FetchContent download/build tree to avoid re-fetching
+      # HighFive, nlohmann_json, CLI11, Catch2, and picosha2 on every run.
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: cpp/build/_deps
+          key: cmake-deps-${{ runner.os }}-${{ hashFiles('cpp/CMakeLists.txt', 'cpp/tests/CMakeLists.txt') }}
+
+      - name: Configure CMake (Ubuntu)
+        if: runner.os == 'Linux'
+        run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+        shell: pwsh
+
+      - name: Build
+        run: cmake --build cpp/build --config Release
+
+      # 46 Catch2 tests across models, meta, machine, trains, scanner,
+      # ClearBox, binary data, OpcuaConfig, and JSON serialisation.
+      - name: Run Catch2 tests
+        run: ctest --test-dir cpp/build -C Release --output-on-failure
+
+      # -----------------------------------------------------------------------
+      # Smoke test + artifact
+      # -----------------------------------------------------------------------
+      - name: Export reference fixture to JSON
+        shell: bash
+        run: |
+          bin="cpp/build/machine_config_cli"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/machine_config_cli.exe"
+          "$bin" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/cpp_output.json"
+          echo "Exported $(wc -c < "$RUNNER_TEMP/cpp_output.json") bytes"
+
+      - name: Upload JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-output-${{ matrix.os }}
+          path: ${{ runner.temp }}/cpp_output.json
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Verify that Linux and Windows produce bit-identical JSON output so that
+  # any platform-specific number formatting or encoding bugs are caught early.
+  # ---------------------------------------------------------------------------
+  compare:
+    name: Platform parity (Linux vs Windows)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cpp-output-ubuntu-latest
+          path: linux
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cpp-output-windows-latest
+          path: windows
+
+      - name: Diff Linux vs Windows JSON output
+        run: |
+          if diff linux/cpp_output.json windows/cpp_output.json; then
+            echo "Platform outputs are identical."
+          else
+            echo "Platform outputs differ — see diff above."
+            exit 1
+          fi
