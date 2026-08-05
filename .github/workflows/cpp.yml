@@ -57,22 +57,28 @@ jobs:
           cmake --build hdf5-build -j$(nproc)
           cmake --install hdf5-build
 
-      - name: Cache vcpkg HDF5 package (Windows)
+      - name: Cache vcpkg binary archives (Windows)
         if: runner.os == 'Windows'
         uses: actions/cache@v4
-        id: vcpkg-cache
         with:
-          path: |
-            ${{ env.VCPKG_INSTALLATION_ROOT }}\installed
-            ~\AppData\Local\vcpkg\archives
-          # Key includes vcpkg.exe hash so a runner-image update (new vcpkg version)
-          # invalidates the cache rather than silently restoring a stale tree.
-          key: vcpkg-hdf5-x64-windows-${{ hashFiles(format('{0}/vcpkg.exe', env.VCPKG_INSTALLATION_ROOT)) }}
+          path: ~\AppData\Local\vcpkg\archives
+          # vcpkg serves HDF5 from this archive cache (~30s) instead of recompiling (~6.5min).
+          # restore-keys allows a partial hit when the runner image updates (new vcpkg version)
+          # so the old archives are still tried before falling back to a full build.
+          key: vcpkg-archives-x64-windows-${{ hashFiles('C:/vcpkg/vcpkg.exe') }}
+          restore-keys: vcpkg-archives-x64-windows-
 
       - name: Install HDF5 via vcpkg (Windows)
-        if: runner.os == 'Windows' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: runner.os == 'Windows'
         run: vcpkg install hdf5:x64-windows
         shell: pwsh
+
+      - name: Verify HDF5 vcpkg config present (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cfg = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\share\hdf5\hdf5-config.cmake"
+          if (-not (Test-Path $cfg)) { Write-Error "HDF5 cmake config not found: $cfg"; exit 1 }
 
       - name: Add HDF5 DLLs to PATH (Windows)
         if: runner.os == 'Windows'
