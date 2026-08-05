@@ -160,6 +160,70 @@ TEST_CASE("RoundtripWithOpcua") {
     REQUIRE(rb.opcua->triggers_enabled     == orig.opcua->triggers_enabled);
     REQUIRE(rb.opcua->triggers.size()      == orig.opcua->triggers.size());
 
+    // Verify individual trigger field values survive the write→read cycle.
+    const auto& origT = orig.opcua->triggers.at("Chamber Oxygen Level");
+    const auto& rbT   = rb.opcua->triggers.at("Chamber Oxygen Level");
+    REQUIRE(rbT.signal       == origT.signal);
+    REQUIRE(rbT.subsystem    == origT.subsystem);
+    REQUIRE(rbT.rule_enabled == origT.rule_enabled);
+    REQUIRE(rbT.start_value  == origT.start_value);
+    REQUIRE(rbT.stop_value   == origT.stop_value);
+
+    std::filesystem::remove(out);
+}
+
+// ---------------------------------------------------------------------------
+// RoundtripOpcuaFromScratch
+// Build an OpcuaConfig in-memory (not from a fixture), write it, read it back.
+// ---------------------------------------------------------------------------
+TEST_CASE("RoundtripOpcuaFromScratch") {
+    auto out = tmpPath("opcua_scratch");
+    auto cfg = makeMinimalConfig();
+
+    OpcuaConfig opcua;
+    opcua.client.server_url        = "opc.tcp://localhost:4840";
+    opcua.client.auth_mode         = "Anonymous";
+    opcua.client.security_mode     = "None";
+    opcua.client.security_policy   = "None";
+    opcua.client.bfs_max_depth     = 8;
+    opcua.client.publish_interval  = 500;
+    opcua.client.sampling_interval = 500;
+    opcua.client.session_timeout   = 30000;
+    opcua.pipe.pipe_enabled        = true;
+    opcua.pipe.buffer_size         = 32768;
+    opcua.triggers_enabled         = true;
+
+    OpcuaTrigger t;
+    t.id           = "trigger_1";
+    t.signal       = "test_signal";
+    t.subsystem    = "TestSys";
+    t.rule_enabled = true;
+    t.start_value  = "0";
+    t.stop_value   = "100";
+    opcua.triggers["TestTrigger"] = std::move(t);
+    cfg.opcua = std::move(opcua);
+
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
+
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+
+    REQUIRE(rb.opcua.has_value());
+    REQUIRE(rb.opcua->client.server_url      == "opc.tcp://localhost:4840");
+    REQUIRE(rb.opcua->client.session_timeout == 30000);
+    REQUIRE(rb.opcua->client.bfs_max_depth   == 8);
+    REQUIRE(rb.opcua->pipe.buffer_size       == 32768);
+    REQUIRE(rb.opcua->pipe.pipe_enabled      == true);
+    REQUIRE(rb.opcua->triggers_enabled       == std::optional<bool>{true});
+    REQUIRE(rb.opcua->triggers.size()        == 1);
+
+    const auto& rt = rb.opcua->triggers.at("TestTrigger");
+    REQUIRE(rt.signal      == std::optional<std::string>{"test_signal"});
+    REQUIRE(rt.subsystem   == std::optional<std::string>{"TestSys"});
+    REQUIRE(rt.rule_enabled == std::optional<bool>{true});
+    REQUIRE(rt.start_value  == std::optional<std::string>{"0"});
+    REQUIRE(rt.stop_value   == std::optional<std::string>{"100"});
+
     std::filesystem::remove(out);
 }
 
