@@ -131,6 +131,20 @@ jobs:
       - name: Run Catch2 tests
         run: ctest --test-dir cpp/build -C Release --output-on-failure
 
+      - name: Full workflow example (smoke test)
+        shell: bash
+        run: |
+          bin="cpp/build/full_workflow"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/full_workflow.exe"
+          "${bin}"
+
+      - name: Quickstart example (smoke test)
+        shell: bash
+        run: |
+          bin="cpp/build/quickstart"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/quickstart.exe"
+          "${bin}"
+
       # -----------------------------------------------------------------------
       # Smoke test + artifact
       # -----------------------------------------------------------------------

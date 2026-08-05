@@ -2851,7 +2851,7 @@ impl<'a> MachineConfigWriter<'a> {
 
 > **Ready to start.** All prerequisites (Python Phase 1, Rust Phase 3, Node.js Phase 2) are complete and cross-check CI is green for all three languages.
 >
-> **Scaffold done (2026-08-04):** `cpp/CMakeLists.txt`, all stub headers, `tests/CMakeLists.txt`, and placeholder test files created. **§4.7 done (2026-08-05): `models.hpp` fully implemented, 6/6 tests passing. §4.8 done (2026-08-04): `reader.hpp` (root attrs + Machine group), `src/main.cpp` CLI, 8/8 tests. §4.9 done (2026-08-04): optical train loop, 12/12 tests. §4.10 done (2026-08-04): ClearBox scalar attributes, 15/15 tests. §4.11 done (2026-08-04): binary data (correction grids + fc3 bytes), 19/19 tests. §4.12 done (2026-08-04): OpcuaConfig, 23/23 tests passing. Reader complete. §4.13 done (2026-08-05): CI (`cpp.yml`), Windows stdout binary-mode fix in `main.cpp`. Next step: §4.14 — Writer.**
+> **Scaffold done (2026-08-04):** `cpp/CMakeLists.txt`, all stub headers, `tests/CMakeLists.txt`, and placeholder test files created. **§4.7 done (2026-08-05): `models.hpp` fully implemented, 6/6 tests passing. §4.8 done (2026-08-04): `reader.hpp` (root attrs + Machine group), `src/main.cpp` CLI, 8/8 tests. §4.9 done (2026-08-04): optical train loop, 12/12 tests. §4.10 done (2026-08-04): ClearBox scalar attributes, 15/15 tests. §4.11 done (2026-08-04): binary data (correction grids + fc3 bytes), 19/19 tests. §4.12 done (2026-08-04): OpcuaConfig, 23/23 tests passing. Reader complete. §4.13 done (2026-08-05): CI (`cpp.yml`), Windows stdout binary-mode fix in `main.cpp`. §4.14 done (2026-08-04): `writer.hpp` (MachineConfigWriter, `write-hdf5` CLI), 4 writer tests, 50/50 total tests passing. §4.15 done (2026-08-05): `copy-hdf5` CLI subcommand, `parseWithBinary()` in reader, 2 binary roundtrip tests (`BinaryRoundtripCorrectionGridHash`, `BinaryRoundtripFc3Size`), cpp uncommented in `COPIERS`, 52/52 total tests passing. §4.16 done (2026-08-05): `correction-hash` CLI subcommand (picosha2, `--train N`, `--inverse`), cpp added to `BINARIES` in `cross_check.py`, 52/52 tests still passing. §4.17 done (2026-08-05): `examples/full_workflow/cpp/main.cpp`, `full_workflow` CMake target, smoke-test step in `cpp.yml`, exits 0 with PASS. §4.18 done (2026-08-05): `examples/quickstart/cpp/main.cpp`, `quickstart` CMake target, quickstart smoke-test step in `cpp.yml`, USAGE.md C++ quickstart section added, exits 0 with PASS. **Phase 4 core complete. 52/52 tests passing. Next: §4.19 `getRawGroup()`, §4.20 `MockConfigBuilder`, §4.21 schema validation — these complete language independence. §4.19 done (2026-08-05): `getRawGroup()` public method in `reader.hpp`, `GetRawGroupMissingPath` + `GetRawGroupOpcuaClient` tests, 54/54 tests passing. §4.20 done (2026-08-05): `MockConfigBuilder` in `builder.hpp`, 6 tests in `test_builder.cpp`, 60/60 tests passing. §4.21 done (2026-08-05): `validate()` in `schema.hpp` (pboettch/json-schema-validator), 3 tests in `test_schema.cpp`, 63/63 tests passing. **Phase 4 complete.**
 
 **Independence guarantee**: The C++ implementation is a fresh, self-contained implementation against the shared schema and `fixtures/` files — it does not link to, call, or derive from any other language's code. `cross_check.py` compares outputs from independent CLI binaries; a bug in one language cannot mask a bug in another.
 
@@ -3379,7 +3379,383 @@ jobs:
 
 ---
 
-## Phase 5 — Go
+### 4.19 — Step 9: `getRawGroup()`
+
+**Goal**: Add `getRawGroup(const std::string& path) → nlohmann::json` to `MachineConfigReader`. Returns a JSON object containing all HDF5 attributes at the given path. Returns an empty object (never throws) when the path does not exist. This is the last item required for C++ to match the Python/Rust/Node.js API surface and removes the ❌ in the feature matrix for `get_raw_group()`.
+
+**Rationale for independence**: Currently C++ consumers must link HighFive directly to access non-schema HDF5 groups (Scanner/X_Axis tuning params, ad-hoc OPCUA paths, etc.). `getRawGroup()` provides a self-contained escape hatch that mirrors the contract in every other language.
+
+**Files to modify**:
+- `cpp/include/machine_config/reader.hpp` — add one public method to `MachineConfigReader`
+- `cpp/tests/test_reader.cpp` — add 2 Catch2 tests
+- `USAGE.md` — change `get_raw_group()` matrix entry from ❌ to ✅, add code example to C++ use case 8
+
+**Implementation**:
+
+The `collectExtra()` free function already exists in `reader.hpp` and collects all attributes from any HighFive location into an `nlohmann::json` object (it is currently used by `parseInner()` for per-group extra attrs). `getRawGroup()` is a one-liner wrapper:
+
+```cpp
+// Public method on MachineConfigReader (inside the class body):
+nlohmann::json getRawGroup(const std::string& hdf5_path) const {
+    HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+    try {
+        return collectExtra(f.getGroup(hdf5_path), {});
+    } catch (...) {
+        return nlohmann::json::object();
+    }
+}
+```
+
+Place it alongside the existing `parse()` / `parseWithBinary()` / `toJson()` public methods. The `{}` second argument to `collectExtra` means no attribute names are excluded; all attributes on the group are collected.
+
+**Catch2 tests** (add to `cpp/tests/test_reader.cpp`):
+
+```cpp
+// §4.19: GetRawGroupMissingPath — absent path returns empty object, no throw.
+TEST_CASE("GetRawGroupMissingPath") {
+    MachineConfigReader reader{REF};
+    auto result = reader.getRawGroup("does/not/exist");
+    REQUIRE(result.is_object());
+    REQUIRE(result.empty());
+}
+
+// §4.19: GetRawGroupOpcuaClient — OPCUA fixture has Server_URL in Client group.
+TEST_CASE("GetRawGroupOpcuaClient") {
+    MachineConfigReader reader{OPCUA_REF};
+    auto client = reader.getRawGroup("OPCUA/Client");
+    REQUIRE(client.is_object());
+    REQUIRE(client.contains("Server_URL"));
+    REQUIRE_FALSE(client["Server_URL"].get<std::string>().empty());
+}
+```
+
+`REF` and `OPCUA_REF` are already defined in `test_reader.cpp`.
+
+**Acceptance criteria**:
+- `getRawGroup("does/not/exist")` returns `{}`, no exception
+- `getRawGroup("OPCUA/Client")` on `reference_config_opcua.h5` contains `Server_URL`
+- `getRawGroup("OPCUA")` on `reference_config.h5` returns `{}` (no OPCUA group on standard fixture)
+
+**Done when**: 54/54 tests pass. Update feature matrix in USAGE.md.
+
+---
+
+### 4.20 — Step 10: `MockConfigBuilder`
+
+**Goal**: Add a header-only `MockConfigBuilder` class in `cpp/include/machine_config/builder.hpp` that mirrors Python's `MockConfigBuilder` and Rust's `MockConfigBuilder` field-for-field: same defaults, same per-train geometry, same Gaussian correction-grid formula. This removes the last C++ test dependency on Python-generated fixture files — C++ tests can generate synthetic configs inline without reading `fixtures/synthetic_2laser.h5`.
+
+**Rationale for independence**: `fixtures/synthetic_2laser.h5` is a committed binary artifact that only Python can regenerate. When the schema changes, a new synthetic fixture must be generated by Python before C++ tests can run against it. A C++ `MockConfigBuilder` breaks this dependency.
+
+**Files to create/modify**:
+- `cpp/include/machine_config/builder.hpp` — new header, includes `writer.hpp`
+- `cpp/tests/test_builder.cpp` — new test file
+- `cpp/tests/CMakeLists.txt` — add `test_builder.cpp` to `machine_config_tests`
+
+**Defaults** (must be identical to Python and Rust):
+
+| Field | Value |
+|---|---|
+| `laser_count` | 2 |
+| `build_plate_x/y/z` | 250 / 250 / 20 mm |
+| `include_clearbox` | `true` |
+| `machine_name` | `"MockMachine"` |
+| `manufacturer` | `"MockCo"` |
+| `model` | `"MockMIDI+"` |
+| `serial_number` | `"MOCK-001"` |
+| `schema_version` | `"v1"` |
+| `file_version` | `"1.0"` |
+| `export_date` | `"2026-01-01T00:00:00.000Z"` (fixed; not random — ensures reproducibility) |
+| `configuration_hash` | 64 × `"0"` |
+
+**Per-train geometry** (must match Python / Rust exactly):
+
+| Train index | `scan_head_offset_x` | `scan_head_offset_y` | `scan_head_rotation` |
+|---|---|---|---|
+| 0 | −87.5 mm | 23.5 mm | 0.0 ° |
+| 1 | 87.5 mm | −23.5 mm | 180.0 ° |
+
+Formula: `sign = (index % 2 == 0) ? -1 : 1`; `offset_x = sign * 87.5`; `offset_y = sign * -23.5`.
+
+**Correction grid formula** (shared across Python, Rust, C++; the Gaussian peak at the centre is ≈ 2.0):
+
+```cpp
+// Produces a 257×257×2 Grid3D matching Python's _gaussian_correction_grid().
+// channel 0 = warp, channel 1 = warp * 0.8
+// inverse: channel 0 = warp * 0.95, channel 1 = warp * 0.95 * 0.8
+inline Grid3D makeGaussianGrid(double scale = 1.0) {
+    const size_t N = 257, C = 2;
+    Grid3D grid(N, std::vector<std::vector<GridCell>>(N, std::vector<GridCell>(C)));
+    for (size_t i = 0; i < N; ++i) {
+        double x = -1.0 + 2.0 * static_cast<double>(i) / (N - 1.0);
+        for (size_t j = 0; j < N; ++j) {
+            double y = -1.0 + 2.0 * static_cast<double>(j) / (N - 1.0);
+            double warp = 2.0 * std::exp(-(x*x + y*y) / 0.5);
+            grid[i][j][0] = GridCell{scale * warp};
+            grid[i][j][1] = GridCell{scale * warp * 0.8};
+        }
+    }
+    return grid;
+}
+```
+
+- Forward correction grid: `makeGaussianGrid(1.0)`
+- Inverse correction grid: `makeGaussianGrid(0.95)`
+- No NaN cells (all cells are finite; the synthetic grid has no out-of-field points)
+
+**`ScanFieldCorrectionFile`** fields for each train (mirrors Python's `_mock_sfcf`):
+```
+document_name      = "mock_laser_<N>.fc3"          (N = train index + 1)
+file_size          = 1024
+document_type      = "Scan Field Correction File"
+document_id        = "00000000-0000-0000-0000-000000000000"  (fixed UUID)
+valid_as_of_date   = "2026-01-01T00:00:00.000Z"
+```
+`raw_bytes` is left empty (zero-byte dataset) in the builder — correction bytes are only in real fixture files.
+
+**`ClearBox`** scalar fields:
+```
+ip_address             = "192.168.1.<10 + index>"
+serial_number          = "<index+1 zero-padded to 3 digits>"   e.g. "001", "002"
+data_port              = 5001
+server_port            = 20101
+actual_timing_offset   = -8
+commanded_timing_offset = 50
+output_path            = "/recordings/"
+selected_camera        = "Default"
+custom_video_format    = "MP4"
+video_output           = "HDMI"
+show_console           = false
+software_trigger_delay = 3000
+volts_to_watts_algorithm = "LINEAR"
+volts_to_watts_params    = "50.0,100.0"
+```
+
+**Class interface**:
+
+```cpp
+// cpp/include/machine_config/builder.hpp
+#pragma once
+#include "machine_config/models.hpp"
+#include "machine_config/writer.hpp"
+#include <cmath>
+#include <filesystem>
+#include <string>
+
+namespace machine_config {
+
+// Free helper: 257×257×2 Gaussian correction grid (no NaN cells).
+inline Grid3D makeGaussianGrid(double scale = 1.0);
+
+class MockConfigBuilder {
+public:
+    size_t laser_count  = 2;
+    double build_plate_x = 250.0, build_plate_y = 250.0, build_plate_z = 20.0;
+    bool   include_clearbox = true;
+    std::string machine_name  = "MockMachine";
+    std::string manufacturer  = "MockCo";
+    std::string model         = "MockMIDI+";
+    std::string serial_number = "MOCK-001";
+
+    MachineConfig build() const;
+
+    void save(std::filesystem::path path) const {
+        MachineConfigWriter{build()}.write(std::move(path));
+    }
+
+private:
+    static AxisConfig   mockAxis();
+    static ClearBox     mockClearbox(size_t index);
+    static ScanFieldCorrectionFile mockSfcf(size_t index);
+    OpticalTrain        mockTrain(size_t index) const;
+};
+
+} // namespace machine_config
+```
+
+**Catch2 tests** — new file `cpp/tests/test_builder.cpp` (mirrors Rust test names):
+
+```cpp
+TEST_CASE("MockBuilder1LaserRoundtrip") {
+    auto out = tmpBuilderPath("1laser");
+    MockConfigBuilder b; b.laser_count = 1;
+    b.save(out);
+    auto cfg = MachineConfigReader{out}.parse();
+    REQUIRE(cfg.optical_trains.size() == 1);
+    REQUIRE(cfg.meta.machine_name == "MockMachine");
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("MockBuilder2LaserRoundtrip") {
+    auto out = tmpBuilderPath("2laser");
+    MockConfigBuilder{}.save(out);
+    auto cfg = MachineConfigReader{out}.parse();
+    REQUIRE(cfg.optical_trains.size() == 2);
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("MockBuilderPlateDimensions") {
+    auto out = tmpBuilderPath("plate");
+    MockConfigBuilder{}.save(out);
+    auto cfg = MachineConfigReader{out}.parse();
+    REQUIRE(cfg.machine.build_plate_x == 250.0);
+    REQUIRE(cfg.machine.build_plate_y == 250.0);
+    REQUIRE(cfg.machine.build_plate_z == 20.0);
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("MockBuilderCorrectionGridShape") {
+    auto out = tmpBuilderPath("grid_shape");
+    MockConfigBuilder{}.save(out);
+    auto cd = MachineConfigReader{out}.getCorrectionData(0);
+    REQUIRE((cd.shape == std::array<size_t,3>{257, 257, 2}));
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("MockBuilderCorrectionGridNonzero") {
+    auto out = tmpBuilderPath("grid_val");
+    MockConfigBuilder{}.save(out);
+    auto cd = MachineConfigReader{out}.getCorrectionData(0);
+    // Centre cell [128,128,0]: Gaussian peak ≈ 2.0
+    double centre = cd.data[(128 * 257 + 128) * 2 + 0];
+    REQUIRE(centre > 1.9);
+    REQUIRE(centre < 2.1);
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("MockBuilderNoClearbox") {
+    auto out = tmpBuilderPath("no_cb");
+    MockConfigBuilder b; b.include_clearbox = false;
+    b.save(out);
+    auto cfg = MachineConfigReader{out}.parse();
+    REQUIRE_FALSE(cfg.optical_trains[0].optional_components.clearbox.has_value());
+    std::filesystem::remove(out);
+}
+```
+
+The `tmpBuilderPath()` helper follows the same pattern as `tmpPath()` in `test_writer.cpp`, using a different tag prefix.
+
+**`cpp/tests/CMakeLists.txt`** change:
+```cmake
+add_executable(machine_config_tests
+  test_models.cpp
+  test_reader.cpp
+  test_writer.cpp
+  test_builder.cpp          # §4.20
+)
+```
+
+**Done when**: 64/64 (52 existing + 2 from §4.19 + 6 builder + 4 from §4.21 = ~64) tests pass, or whatever the running total is after §4.19 and §4.21. Update feature matrix in USAGE.md.
+
+---
+
+### 4.21 — Step 11: Schema Validation
+
+**Goal**: Add a `validate(const nlohmann::json& doc) → std::vector<std::string>` free function in `cpp/include/machine_config/schema.hpp`. Returns an empty vector when the document is valid against `schema/machine_config_v1.schema.json`; returns a list of human-readable error strings otherwise. This replaces the manual structural spot-checks in `WrittenHdf5ValidatesSchema` with true JSON Schema compliance, and gives C++ consumers a self-contained validation path with no Python dependency.
+
+**Rationale for independence**: `WrittenHdf5ValidatesSchema` already in `test_writer.cpp` checks JSON structure manually (key presence, type). True schema validation requires loading `schema/machine_config_v1.schema.json` and running a JSON Schema engine. The cross_check.py pipeline validates C++ output through Python's `jsonschema`, but that requires Python to be installed and the script to be run — it is not part of the C++ unit test suite.
+
+**Library**: Add [`pboettch/json-schema-validator`](https://github.com/pboettch/json-schema-validator) (also published as `nlohmann/json-schema-validator`) via `FetchContent`. It is header-only, uses nlohmann/json, and supports JSON Schema drafts 4, 6, 7.
+
+```cmake
+# cpp/CMakeLists.txt addition
+FetchContent_Declare(json_schema_validator
+  GIT_REPOSITORY https://github.com/pboettch/json-schema-validator.git
+  GIT_TAG        2.3.0)
+FetchContent_MakeAvailable(json_schema_validator)
+```
+
+The `machine_config_v1.schema.json` uses `"$schema": "https://json-schema.org/draft/2020-12/schema"` but its actual keywords — `type`, `required`, `properties`, `additionalProperties`, `minLength`, `maxLength` — are all fully supported in draft 7. The validator will work in practice; the `$schema` declaration is advisory, not enforced by the library.
+
+**`cpp/include/machine_config/schema.hpp`**:
+
+```cpp
+#pragma once
+#include <nlohmann/json.hpp>
+#include <nlohmann/json-schema.hpp>   // pboettch/json-schema-validator
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
+
+#ifndef SCHEMA_DIR
+#  error "SCHEMA_DIR must be defined by CMakeLists.txt"
+#endif
+
+namespace machine_config {
+
+// Load and cache the schema on first call (thread-safe via static local).
+inline const nlohmann::json& schemaDoc() {
+    static const nlohmann::json s = [] {
+        std::ifstream f(std::string(SCHEMA_DIR) + "/machine_config_v1.schema.json");
+        return nlohmann::json::parse(f);
+    }();
+    return s;
+}
+
+// Returns empty vector if doc validates; one string per violation otherwise.
+inline std::vector<std::string> validate(const nlohmann::json& doc) {
+    nlohmann::json_schema::json_validator validator;
+    validator.set_root_schema(schemaDoc());
+    std::vector<std::string> errors;
+    struct Collector : nlohmann::json_schema::basic_error_handler {
+        std::vector<std::string>& out;
+        explicit Collector(std::vector<std::string>& o) : out(o) {}
+        void error(const nlohmann::json::json_pointer& ptr,
+                   const nlohmann::json& /*instance*/,
+                   const std::string& msg) override {
+            out.push_back(ptr.to_string() + ": " + msg);
+        }
+    } collector{errors};
+    validator.validate(doc, collector);
+    return errors;
+}
+
+} // namespace machine_config
+```
+
+**CMakeLists.txt** additions for targets that use `schema.hpp`:
+
+```cmake
+# Link the validator library and define SCHEMA_DIR for test and CLI targets
+target_link_libraries(machine_config_tests PRIVATE nlohmann_json_schema_validator)
+target_compile_definitions(machine_config_tests PRIVATE
+  SCHEMA_DIR="${CMAKE_SOURCE_DIR}/../schema")
+```
+
+(The `machine_config` interface library does NOT link the validator — schema validation is an optional add-on, not a core dependency. Tests and any consumer that imports `schema.hpp` opt in explicitly.)
+
+**Catch2 tests** — add to `cpp/tests/test_reader.cpp` (or a new `test_schema.cpp`):
+
+```cpp
+// §4.21: ValidateReferenceConfigOutput — reader output validates against schema.
+TEST_CASE("ValidateReferenceConfigOutput") {
+    auto j = nlohmann::json::parse(MachineConfigReader{REF}.toJson());
+    auto errors = machine_config::validate(j);
+    REQUIRE(errors.empty());
+}
+
+// §4.21: ValidateMockBuilderOutput — builder output also validates.
+TEST_CASE("ValidateMockBuilderOutput") {
+    auto out = tmpSchemaPath("schema_mock");
+    machine_config::MockConfigBuilder{}.save(out);
+    auto j = nlohmann::json::parse(MachineConfigReader{out}.toJson());
+    auto errors = machine_config::validate(j);
+    REQUIRE(errors.empty());
+    std::filesystem::remove(out);
+}
+
+// §4.21: ValidateEmptyConfigFails — missing required fields must be detected.
+TEST_CASE("ValidateEmptyConfigFails") {
+    auto errors = machine_config::validate(nlohmann::json::object());
+    REQUIRE_FALSE(errors.empty());
+}
+```
+
+**Replace `WrittenHdf5ValidatesSchema`** in `test_writer.cpp`: the existing manual spot-check can be simplified or replaced entirely once the schema validator is available, or kept as a fast structural smoke-test alongside the slower but authoritative `ValidateReferenceConfigOutput`.
+
+**Done when**: All tests pass including the three schema validation tests. USAGE.md feature matrix updated (schema validation ✅ for C++). The `WrittenHdf5ValidatesSchema` test may be simplified or supplemented.
+
+---
 
 > **Detail deferred.** This section will be fully fleshed out after C++ (Phase 4) is complete. Go is last because CGO + Windows CI is the most complex dependency setup of any language in this project.
 

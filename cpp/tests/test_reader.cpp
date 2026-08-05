@@ -489,3 +489,20 @@ TEST_CASE("SyntheticFixtureParsesCorrectly") {
     REQUIRE_THAT(*cfg.optical_trains[0].scanner.working_distance,
                  Catch::Matchers::WithinRel(670.0));
 }
+
+// §4.19: GetRawGroupMissingPath — absent path returns empty object, no throw.
+TEST_CASE("GetRawGroupMissingPath") {
+    MachineConfigReader reader{REF};
+    auto result = reader.getRawGroup("does/not/exist");
+    REQUIRE(result.is_object());
+    REQUIRE(result.empty());
+}
+
+// §4.19: GetRawGroupOpcuaClient — OPCUA fixture has Server_URL in Client group.
+TEST_CASE("GetRawGroupOpcuaClient") {
+    MachineConfigReader reader{OPCUA_REF};
+    auto client = reader.getRawGroup("OPCUA/Client");
+    REQUIRE(client.is_object());
+    REQUIRE(client.contains("Server_URL"));
+    REQUIRE_FALSE(client["Server_URL"].get<std::string>().empty());
+}

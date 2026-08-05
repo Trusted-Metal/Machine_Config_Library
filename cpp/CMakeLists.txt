@@ -42,6 +42,13 @@ FetchContent_Declare(picosha2
   GIT_TAG        master)
 FetchContent_MakeAvailable(picosha2)
 
+# json-schema-validator — JSON Schema draft 4/6/7 validation (§4.21)
+set(JSON_VALIDATOR_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(json_schema_validator
+  GIT_REPOSITORY https://github.com/pboettch/json-schema-validator.git
+  GIT_TAG        2.3.0)
+FetchContent_MakeAvailable(json_schema_validator)
+
 # HDF5 is found transitively via HighFive; the version gate above catches < 1.12.
 # Ubuntu CI: cmake -DCMAKE_PREFIX_PATH=<hdf5-install> (apt ships 1.10.10, incompatible)
 # Windows:   cmake -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake
@@ -65,6 +72,19 @@ add_subdirectory(tests)
 # CLI executable (§4.8)
 add_executable(machine_config_cli src/main.cpp)
 target_link_libraries(machine_config_cli PRIVATE machine_config CLI11::CLI11)
+target_include_directories(machine_config_cli PRIVATE ${picosha2_SOURCE_DIR})
 
-# Examples — uncomment in §4.17 (full_workflow) and §4.18 (quickstart)
+# §4.17: full_workflow example
+add_executable(full_workflow ${CMAKE_SOURCE_DIR}/../examples/full_workflow/cpp/main.cpp)
+target_link_libraries(full_workflow PRIVATE machine_config)
+target_compile_definitions(full_workflow PRIVATE
+  FIXTURES_DIR="${CMAKE_SOURCE_DIR}/../fixtures")
+
+# §4.18: quickstart example
+add_executable(quickstart ${CMAKE_SOURCE_DIR}/../examples/quickstart/cpp/main.cpp)
+target_link_libraries(quickstart PRIVATE machine_config)
+target_compile_definitions(quickstart PRIVATE
+  FIXTURES_DIR="${CMAKE_SOURCE_DIR}/../fixtures")
+
+# Examples — uncomment in §4.18 (quickstart)
 # add_subdirectory(examples)

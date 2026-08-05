@@ -7,6 +7,7 @@
 #include <highfive/H5File.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -208,10 +209,51 @@ public:
         return parseInner(f);
     }
 
+    // Parse including full binary data — correction grids and raw fc3 bytes.
+    // Required for copy-hdf5 (§4.15) and any caller needing complete fidelity.
+    MachineConfig parseWithBinary() const {
+        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+        checkFileVersion(f);
+        auto cfg = parseInner(f);
+        for (size_t i = 0; i < cfg.optical_trains.size(); ++i) {
+            auto& ot  = cfg.optical_trains[i];
+            auto  tid = trainIdAt(f, i);
+            if (ot.optional_components.clearbox) {
+                auto cd  = readCorrectionGrid(f,
+                    "Machine/Optical_Trains/" + tid +
+                    "/Optional_Components/ClearBox/Correction_Data");
+                auto icd = readCorrectionGrid(f,
+                    "Machine/Optical_Trains/" + tid +
+                    "/Optional_Components/ClearBox/Inverse_Correction_Data");
+                ot.optional_components.clearbox->correction_data         = correctionDataToGrid3D(cd);
+                ot.optional_components.clearbox->inverse_correction_data = correctionDataToGrid3D(icd);
+            }
+            if (ot.scan_field_correction_file) {
+                auto ds   = f.getDataSet("Machine/Optical_Trains/" + tid + "/scan_field_correction_file");
+                auto dims = ds.getSpace().getDimensions();
+                std::vector<uint8_t> bytes(dims[0]);
+                H5Dread(ds.getId(), H5T_NATIVE_UINT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, bytes.data());
+                ot.scan_field_correction_file->raw_bytes = std::move(bytes);
+            }
+        }
+        return cfg;
+    }
+
     // Serialise to canonical JSON.  Correction grids excluded unless include_binary=true.
     std::string toJson(int indent = 2, bool /*include_binary*/ = false) const {
         nlohmann::json j = parse();
         return j.dump(indent);
+    }
+
+    // Returns all HDF5 attributes at hdf5_path as a JSON object.
+    // Returns an empty object (never throws) when the path does not exist.
+    nlohmann::json getRawGroup(const std::string& hdf5_path) const {
+        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+        try {
+            return collectExtra(f.getGroup(hdf5_path), {});
+        } catch (...) {
+            return nlohmann::json::object();
+        }
     }
 
     // §4.11 — flat (d0×d1×d2) float64 correction grid for a 0-based train index.
@@ -557,6 +599,19 @@ private:
         H5Dread(ds.getId(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT,
                 cd.data.data());
         return cd;
+    }
+
+    // Convert a flat CorrectionData buffer to a nested Grid3D; NaN → nullopt.
+    static Grid3D correctionDataToGrid3D(const CorrectionData& cd) {
+        auto d0 = cd.shape[0], d1 = cd.shape[1], d2 = cd.shape[2];
+        Grid3D grid(d0, std::vector<std::vector<GridCell>>(d1, std::vector<GridCell>(d2)));
+        for (size_t i = 0; i < d0; ++i)
+            for (size_t j = 0; j < d1; ++j)
+                for (size_t k = 0; k < d2; ++k) {
+                    double v = cd.data[i * d1 * d2 + j * d2 + k];
+                    grid[i][j][k] = std::isnan(v) ? GridCell{} : GridCell{v};
+                }
+        return grid;
     }};
 
 } // namespace machine_config

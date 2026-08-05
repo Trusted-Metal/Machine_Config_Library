@@ -15,8 +15,7 @@ This document covers *how to use it once built*.
 
 - [Shared Concepts](#shared-concepts)
 - [Python](#python)
-  - [Quickstart example](#quickstart-example)
-  - [Full workflow example](#full-workflow-example)(#use-case-1--parse-a-machine-config-file)
+  - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file)
   - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json)
   - [Use case 3 — Reconstruct a config from JSON](#use-case-3--reconstruct-a-config-from-json)
   - [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5)
@@ -27,6 +26,9 @@ This document covers *how to use it once built*.
   - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays)
   - [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema)
   - [CLI reference](#cli-reference-python)
+  - [Quickstart example](#quickstart-example)
+  - [Full workflow example](#full-workflow-example)
+  - [Running the Python test suite](#running-the-python-test-suite)
 - [Node.js](#nodejs) ← *Phase 2 complete*
   - [Installation](#installation-1)
   - [What's usable today](#whats-usable-today)
@@ -35,11 +37,13 @@ This document covers *how to use it once built*.
   - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json-1)
   - [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5-1)
   - [Use case 6 — Generate a synthetic test config](#use-case-6--generate-a-synthetic-test-config-1)
+  - [Use case 8 — Read OPCUA telemetry configuration](#use-case-8--read-opcua-telemetry-configuration-1)
   - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays-1)
   - [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema-1)
   - [CLI reference](#cli-reference)
   - [Quickstart example](#quickstart-example-1)
-  - [Full workflow example](#full-workflow-example-1)(#running-the-nodejs-test-suite)
+  - [Full workflow example](#full-workflow-example-1)
+  - [Running the Node.js test suite](#running-the-nodejs-test-suite)
 - [Rust](#rust) ← *Phase 3 complete*
   - [What's usable today](#whats-usable-today-1)
   - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file-2)
@@ -48,10 +52,25 @@ This document covers *how to use it once built*.
   - [Use case 6 — Generate a synthetic test config](#use-case-6--generate-a-synthetic-test-config-2)
   - [Use case 8 — Read OPCUA telemetry configuration](#use-case-8--read-opcua-telemetry-configuration-1)
   - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays-2)
+  - [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema-2)
   - [CLI reference](#cli-reference-1)
   - [Quickstart example](#quickstart-example-2)
-  - [Full workflow example](#full-workflow-example-2)(#running-the-rust-test-suite)
-- [C++](#c) ← *coming in Phase 4*
+  - [Full workflow example](#full-workflow-example-2)
+  - [Running the Rust test suite](#running-the-rust-test-suite)
+- [C++](#c) ← *Phase 4 complete*
+  - [What's usable today](#whats-usable-today-2)
+  - [Build and install](#build-and-install)
+  - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file-3)
+  - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json-3)
+  - [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5-3)
+  - [Use case 6 — Generate a synthetic test config](#use-case-6--generate-a-synthetic-test-config-3)
+  - [Use case 8 — Read OPCUA telemetry configuration](#use-case-8--read-opcua-telemetry-configuration-2)
+  - [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays-3)
+  - [Use case 10 — Validate a config against the JSON schema](#use-case-10--validate-a-config-against-the-json-schema)
+  - [CLI reference](#cli-reference-cpp)
+  - [Quickstart example](#quickstart-example-3)
+  - [Full workflow example](#full-workflow-example-3)
+  - [Running the C++ test suite](#running-the-c-test-suite)
 - [Contributor Workflows](#contributor-workflows)
 
 ---
@@ -91,22 +110,24 @@ intended as integration-layer libraries. The Python-only items (`YamlConfigBuild
 `ConfigEditor`, `config_from_dict`) are workflow conveniences that have no equivalent in the
 other language SDKs.
 
-| Feature | Python | Rust | Node.js |
-|---|:---:|:---:|:---:|
-| HDF5 reader (`parse`) | ✅ | ✅ | ✅ |
-| HDF5 writer (`write`) | ✅ | ✅ | ✅ |
-| `MockConfigBuilder` | ✅ | ✅ | ✅ |
-| Schema validation | ✅ | ✅ *(serde)* | ✅ *(Ajv)* |
-| CLI: `export-json` | ✅ | ✅ | ✅ |
-| CLI: `write-hdf5` | ✅ | ✅ | ✅ |
-| CLI: `correction-hash` | ✅ | ✅ | ✅ |
-| OPC-UA config in model | ✅ | ✅ | ✅ |
-| `get_raw_group()` | ✅ | ✅ | ✅ |
-| Binary data accessors | ✅ *(numpy)* | ✅ *(ndarray)* | ✅ *(Float64Array)* |
-| `YamlConfigBuilder` | ✅ | ❌ | ❌ |
-| `ConfigEditor` | ✅ | ❌ | ❌ |
-| `config_from_dict` | ✅ | ❌ | ❌ |
-| CLI: `inspect` / `validate` / `demo` | ✅ | ❌ | ❌ |
+| Feature | Python | Rust | Node.js | C++ |
+|---|:---:|:---:|:---:|:---:|
+| HDF5 reader (`parse`) | ✅ | ✅ | ✅ | ✅ |
+| HDF5 writer (`write`) | ✅ | ✅ | ✅ | ✅ |
+| `MockConfigBuilder` | ✅ | ✅ | ✅ | ✅ |
+| Schema validation | ✅ | ✅ *(serde)* | ✅ *(Ajv)* | ✅ *(pboettch)* |
+| CLI: `export-json` | ✅ | ✅ | ✅ | ✅ |
+| CLI: `write-hdf5` | ✅ | ✅ | ✅ | ✅ |
+| CLI: `correction-hash` | ✅ | ✅ | ✅ | ✅ |
+| CLI: `copy-hdf5` | ✅ | ✅ | ✅ | ✅ |
+| OPC-UA config in model | ✅ | ✅ | ✅ | ✅ |
+| `get_raw_group()` | ✅ | ✅ | ✅ | ✅ |
+| Binary data accessors | ✅ *(numpy)* | ✅ *(ndarray)* | ✅ *(Float64Array)* | ✅ *(vector<double>)* |
+| `parseWithBinary()` | ✅ | ✅ | ❌ | ✅ |
+| `YamlConfigBuilder` | ✅ | ❌ | ❌ | ❌ |
+| `ConfigEditor` | ✅ | ❌ | ❌ | ❌ |
+| `config_from_dict` | ✅ | ❌ | ❌ | ❌ |
+| CLI: `inspect` / `validate` / `demo` | ✅ | ❌ | ❌ | ❌ |
 
 ---
 
@@ -1135,6 +1156,38 @@ println!("Non-finite cells: {}", arr.iter().filter(|v| !v.is_finite()).count());
 
 ---
 
+### Use case 10 — Validate a config against the schema
+
+Rust has no standalone `validate()` function. Schema compliance is enforced implicitly by
+`serde_json` at parse time: `parse()` returns `Err` if a required field is missing or has the
+wrong type. All fields that can be absent are modelled as `Option<T>`; a present value of the
+wrong type is a deserialization error.
+
+```rust
+use machine_config::reader::MachineConfigReader;
+use machine_config::writer::MachineConfigWriter;
+use machine_config::builder::MockConfigBuilder;
+
+// A well-formed file always parses without error.
+let config = MachineConfigReader::open("fixtures/reference_config.h5")?.parse()?;
+assert_eq!(config.meta.schema_version, "v1");
+assert_eq!(config.meta.configuration_hash.len(), 64);
+
+// MockConfigBuilder output satisfies every structural constraint.
+let mock = MockConfigBuilder::new(2).build();
+assert_eq!(mock.meta.schema_version, "v1");
+assert!(mock.meta.configuration_hash.chars().all(|c| c == '0'));
+
+// For explicit JSON Schema validation of export-json output, use Python or Node.js:
+// python tools/cross_check.py --langs rust  (validates Rust output in CI)
+```
+
+> `tools/cross_check.py` (Phase 1) runs Python's `jsonschema` against every language's
+> `export-json` output for every fixture in CI. This is the authoritative schema compliance
+> gate for Rust. For a runtime `validate()` function, see the Python or C++ implementations.
+
+---
+
 ### CLI reference
 
 `machine-config-cli` exposes the same three subcommands as the Python and Node.js CLIs:
@@ -1173,9 +1226,7 @@ cargo build --release --manifest-path rust/Cargo.toml
 > `write-hdf5` / `correction-hash`) on success. `correction-hash` output is byte-identical to
 > Python's and Node.js's for the same file/train/direction — verified in CI.
 >
-> Use cases 3, 5, 7, and 10 (reconstruct-from-JSON, `ConfigEditor`, YAML-spec builder, schema
-> validation) have no Rust port; `ConfigEditor` and `YamlConfigBuilder` are Python-only
-> conveniences, not part of the crate.
+> Use cases 3, 5, and 7 (`ConfigEditor`, YAML-spec builder, reconstruct-from-JSON) have no Rust port; `ConfigEditor` and `YamlConfigBuilder` are Python-only conveniences, not part of the crate.
 
 ---
 
@@ -1279,14 +1330,468 @@ cargo build --all-targets
 
 ## C++
 
-*Coming in Phase 4.*
+*Phase 4 complete — header-only reader/writer/builder/schema, four CLI subcommands, 63 Catch2 tests, and example programs all implemented and verified.*
 
-Section will cover:
-- CMake `FetchContent` / vcpkg integration
-- Parsing `.h5` with HighFive
-- `nlohmann/json` serialisation
-- Equivalent use cases to the Python section above
-- CLI usage
+The library lives in `cpp/include/machine_config/` and is **header-only**. Any C++17 project
+that links HighFive (HDF5 wrapper), nlohmann/json, and HDF5 itself can include the headers
+directly with no compilation step.
+
+### What's usable today
+
+`cpp/include/machine_config/models.hpp` defines the full data model with `nlohmann/json`
+ADL pairs: `MachineConfig`, `OpticalTrain`, `Scanner`, `AxisConfig`, `LightSource`,
+`Collimator`, `ScannerCard`, `ClearBox`, `ScanFieldCorrectionFile`, `OpcuaConfig` and all
+sub-types. All fields use `std::optional<T>` to represent nullable values; correction
+grids use `Grid3D` (nested `optional<double>`).
+
+`cpp/include/machine_config/reader.hpp` implements `MachineConfigReader`. `parse()` returns a
+`MachineConfig` with scalars and metadata; `parseWithBinary()` also populates correction grids
+and raw `.fc3` bytes. `toJson()` produces canonical JSON identical to every other language.
+Separate accessors — `getCorrectionData()`, `getInverseCorrectionData()`,
+`getScanFieldCorrectionBytes()` — read binary data directly from HDF5.
+
+`cpp/include/machine_config/writer.hpp` implements `MachineConfigWriter`, the exact inverse of
+the reader. All scalar fields, correction grids, raw `.fc3` bytes, and OPCUA attributes are
+written back verbatim. JSON output from a write-then-read roundtrip is verified identical to the
+original by the cross-language test suite.
+
+`cpp/src/main.cpp` is the `machine_config_cli` binary. It exposes four subcommands —
+`export-json`, `write-hdf5`, `copy-hdf5`, and `correction-hash` — all cross-checked against
+Python, Rust, and Node.js.
+
+### Build and install
+
+**Prerequisites**: CMake ≥ 3.20, a C++17 compiler (MSVC 19+, GCC 11+, Clang 14+), and HDF5
+≥ 1.12 (vcpkg on Windows, build from source on Linux — see [cpp.yml](.github/workflows/cpp.yml)).
+
+```powershell
+# PowerShell — Windows (vcpkg provides HDF5)
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release `
+  "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+cmake --build cpp/build --config Release
+```
+
+```bash
+# Linux — build HDF5 1.14.6 from source first (see cpp.yml), or:
+apt-get install -y cmake ninja-build  # Ubuntu 24.04+, HDF5 via source build
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/usr/local/hdf5
+cmake --build cpp/build
+```
+
+After building, the CLI is at:
+- Windows: `cpp/build/Release/machine_config_cli.exe`
+- Linux:   `cpp/build/machine_config_cli`
+
+To use the library in your own CMake project, add `cpp/include` to your include path and link
+HighFive and HDF5. All types live in the `machine_config` namespace.
+
+---
+
+### Use case 1 — Parse a machine config file
+
+```cpp
+#include "machine_config/reader.hpp"
+using namespace machine_config;
+
+MachineConfigReader reader{"fixtures/reference_config.h5"};
+auto config = reader.parse();   // scalars + metadata only
+
+std::cout << config.meta.machine_name << "\n";        // TM-LPBF-02: AconityMIDI+_OG
+std::cout << config.meta.configuration_hash << "\n"; // 64-char hex
+std::cout << config.optical_trains.size() << "\n";   // 2
+
+for (size_t i = 0; i < config.optical_trains.size(); ++i) {
+    const auto& s = config.optical_trains[i].scanner;
+    std::cout << "Train " << (i + 1)
+              << ": WD=" << s.working_distance.value_or(0.0)
+              << " " << s.working_distance_unit.value_or("")
+              << "  offset=(" << s.scan_head_offset_x.value_or(0.0)
+              << ", " << s.scan_head_offset_y.value_or(0.0) << ")\n";
+}
+
+// OPCUA — populated only when the file has an OPCUA group
+if (config.opcua) {
+    std::cout << config.opcua->client.server_url << "\n";
+}
+```
+
+---
+
+### Use case 2 — Export to canonical JSON
+
+```cpp
+#include "machine_config/reader.hpp"
+using namespace machine_config;
+
+MachineConfigReader reader{"fixtures/reference_config.h5"};
+
+// Scalar + metadata only (default), 2-space indent
+std::string json = reader.toJson();
+std::cout << json << "\n";
+
+// Write to a file
+std::ofstream{"output.json"} << json;
+
+// Compact (no indentation)
+std::string compact = reader.toJson(/*indent=*/0);
+```
+
+> **Binary data in JSON**: `toJson()` does not include correction grids or raw `.fc3` bytes
+> in the JSON output (the parameter exists as a placeholder for a future release). Use the
+> dedicated accessors — `getCorrectionData()` / `getInverseCorrectionData()` /
+> `getScanFieldCorrectionBytes()` — for binary data.
+
+---
+
+### Use case 4 — Write a config back to HDF5
+
+```cpp
+#include "machine_config/reader.hpp"
+#include "machine_config/writer.hpp"
+using namespace machine_config;
+
+// Round-trip: read, mutate a scalar, write, re-read
+MachineConfigReader reader{"fixtures/reference_config.h5"};
+auto config = reader.parse();
+
+// Directly mutate any field (all fields are plain value types)
+config.optical_trains[0].scanner.scan_head_offset_x = -91.5;
+config.optical_trains[0].scanner.scan_head_offset_y =  24.0;
+
+MachineConfigWriter{config}.write("output.h5");
+
+// Verify the roundtrip
+auto reread = MachineConfigReader{"output.h5"}.parse();
+assert(config.meta.machine_name == reread.meta.machine_name);
+assert(reread.optical_trains[0].scanner.scan_head_offset_x == -91.5);
+```
+
+> **Binary data in the writer**: if `correction_data` / `inverse_correction_data` are `nullopt`
+> (i.e. the config was parsed with `parse()`, not `parseWithBinary()`), the writer writes
+> zero-filled `(257, 257, 2)` float64 datasets in their place — identical behaviour to Python
+> and Rust. Use `parseWithBinary()` before writing to preserve the original correction grids.
+
+---
+
+### Use case 6 — Generate a synthetic test config
+
+`MockConfigBuilder` creates structurally valid `.h5` files for testing without requiring access
+to real machine hardware. It mirrors Python's and Rust's `MockConfigBuilder` — same defaults,
+same per-train geometry, same Gaussian correction grids.
+
+```cpp
+#include "machine_config/builder.hpp"
+#include "machine_config/reader.hpp"
+using namespace machine_config;
+
+// 2-laser config with ClearBox (default)
+MockConfigBuilder{}.save("test_config.h5");
+
+// Customise before saving
+MockConfigBuilder b;
+b.laser_count     = 1;
+b.machine_name    = "TestMachine";
+b.build_plate_x   = 400.0;
+b.include_clearbox = false;
+b.save("custom_config.h5");
+
+// Build into memory without writing
+auto config = MockConfigBuilder{}.build();
+assert(config.optical_trains.size() == 2);
+assert(config.meta.machine_name == "MockMachine");
+
+// Verify the correction grid that was written
+auto cd = MachineConfigReader{"test_config.h5"}.getCorrectionData(0);
+assert((cd.shape == std::array<size_t,3>{257, 257, 2}));
+double peak = cd.data[(128 * 257 + 128) * 2 + 0]; // Gaussian peak ≈ 2.0
+assert(peak > 1.9 && peak < 2.1);
+```
+
+> The Gaussian grid formula, per-train offsets, and scalar defaults are identical to Python's
+> `MockConfigBuilder` and Rust's `MockConfigBuilder` — cross-language fixture equivalence is
+> verified in CI via `tools/cross_check.py`.
+
+OPCUA data is outside the canonical model. `parse()` returns `config.opcua` as
+`std::optional<OpcuaConfig>` (populated only when the file has an `OPCUA` group):
+
+```cpp
+#include "machine_config/reader.hpp"
+using namespace machine_config;
+
+MachineConfigReader reader{"fixtures/reference_config_opcua.h5"};
+auto config = reader.parse();
+
+if (config.opcua) {
+    const auto& opc = *config.opcua;
+    std::cout << opc.client.server_url << "\n";       // opc.tcp://...
+    std::cout << opc.client.auth_mode << "\n";        // UsernamePassword
+    std::cout << opc.pipe.pipe_enabled.value_or(false) << "\n"; // 1
+    for (const auto& [name, trigger] : opc.triggers) {
+        std::cout << name << ": signal=" << trigger.signal.value_or("") << "\n";
+    }
+    if (opc.triggers_enabled)
+        std::cout << "Triggers enabled: " << *opc.triggers_enabled << "\n";
+}
+
+// Standard fixture has no OPCUA group:
+auto cfg2 = MachineConfigReader{"fixtures/reference_config.h5"}.parse();
+assert(!cfg2.opcua.has_value());
+
+// getRawGroup() — escape hatch for any HDF5 path, mirrors Python/Rust/Node.js
+MachineConfigReader reader2{"fixtures/reference_config_opcua.h5"};
+auto client_attrs = reader2.getRawGroup("OPCUA/Client");
+std::cout << client_attrs["Server_URL"].get<std::string>() << "\n"; // opc.tcp://...
+
+// Returns an empty object (not an error) when the path is absent:
+auto missing = reader2.getRawGroup("does/not/exist");  // {}
+assert(missing.empty());
+```
+
+> `getRawGroup(path)` returns a `nlohmann::json` object of all attributes at the given HDF5
+> path. Returns an empty object (never throws) when the path does not exist. Mirrors the same
+> contract as Python's `get_raw_group()`, Rust's `get_raw_group()`, and Node.js's `getRawGroup()`.
+
+---
+
+### Use case 10 — Validate a config against the JSON schema
+
+`machine_config/schema.hpp` exposes a `validate()` free function backed by
+[pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator). It
+validates against `schema/machine_config_v1.schema.json` (draft 7 keywords).
+
+```cpp
+#include "machine_config/reader.hpp"
+#include "machine_config/schema.hpp"  // requires SCHEMA_DIR compile definition
+using namespace machine_config;
+
+// Validate reader output for a real fixture
+auto j = nlohmann::json::parse(MachineConfigReader{"fixtures/reference_config.h5"}.toJson());
+auto errors = validate(j);
+if (errors.empty()) {
+    std::cout << "Valid\n";
+} else {
+    for (const auto& e : errors)
+        std::cerr << e << "\n";
+}
+
+// Validate MockConfigBuilder output
+MockConfigBuilder{}.save("test.h5");
+auto j2 = nlohmann::json::parse(MachineConfigReader{"test.h5"}.toJson());
+assert(validate(j2).empty());
+
+// An empty object fails (missing meta/machine/optical_trains)
+assert(!validate(nlohmann::json::object()).empty());
+```
+
+> `schema.hpp` requires `SCHEMA_DIR` to be defined as a compile-time string pointing to the
+> directory containing `machine_config_v1.schema.json`. In the CMake build this is set
+> automatically for the test executable; consumers must define it in their own build.
+
+`CorrectionData` holds a flat row-major `std::vector<double>` buffer and a
+`std::array<size_t, 3> shape`. NaN values indicate out-of-field cells (the JSON path maps
+these to `null`; here they are preserved for exact byte hashing).
+
+```cpp
+#include "machine_config/reader.hpp"
+using namespace machine_config;
+
+MachineConfigReader reader{"fixtures/reference_config.h5"};
+
+// Forward grid, train 0 — flat buffer + shape, NaN preserved
+CorrectionData cd = reader.getCorrectionData(0);
+assert((cd.shape == std::array<size_t,3>{257, 257, 2}));
+
+// Inverse grid, train 0
+CorrectionData icd = reader.getInverseCorrectionData(0);
+
+// Row-major indexing: offset = (i * shape[1] + j) * shape[2] + k
+size_t d1 = cd.shape[1], d2 = cd.shape[2];
+double centre_x = cd.data[(128 * d1 + 128) * d2 + 0]; // X-channel at centre
+double centre_y = cd.data[(128 * d1 + 128) * d2 + 1]; // Y-channel at centre
+// NaN means the point is outside the correction field
+if (!std::isnan(centre_x))
+    std::cout << "Centre correction x=" << centre_x << "\n";
+
+// Raw .fc3 bytes (scan field correction file)
+auto bytes = reader.getScanFieldCorrectionBytes(0);  // std::vector<uint8_t>
+std::cout << "fc3 size: " << bytes.size() << " bytes\n"; // 1138799 for train 0
+
+// parseWithBinary() populates Grid3D (nested optional<double>) in the model
+auto full = reader.parseWithBinary();
+auto& cb = *full.optical_trains[0].optional_components.clearbox;
+assert(cb.correction_data.has_value());
+assert((*cb.correction_data).size() == 257);  // outer dimension
+```
+
+---
+
+### CLI reference (C++)
+
+Build first (see [Build and install](#build-and-install) above).
+
+```powershell
+# PowerShell — Windows Release build
+$cli = ".\cpp\build\Release\machine_config_cli.exe"
+
+# Export HDF5 → JSON to stdout
+& $cli export-json fixtures/reference_config.h5
+
+# Export to a file
+& $cli export-json fixtures/reference_config.h5 > output.json
+
+# Write HDF5 from canonical JSON
+& $cli write-hdf5 output.json reconstructed.h5
+
+# Binary round-trip copy (preserves correction grids and .fc3 bytes verbatim)
+& $cli copy-hdf5 fixtures/reference_config.h5 copy.h5
+
+# SHA-256 of the forward correction grid, train 0
+& $cli correction-hash fixtures/reference_config.h5 --train 0
+
+# SHA-256 of the inverse correction grid, train 1
+& $cli correction-hash fixtures/reference_config.h5 --train 1 --inverse
+```
+
+```bash
+# Linux
+cli="cpp/build/machine_config_cli"
+
+# Export HDF5 → JSON to stdout
+"$cli" export-json fixtures/reference_config.h5
+
+# Write HDF5 from canonical JSON
+"$cli" write-hdf5 output.json reconstructed.h5
+
+# Binary round-trip copy
+"$cli" copy-hdf5 fixtures/reference_config.h5 copy.h5
+
+# SHA-256 of a correction grid
+"$cli" correction-hash fixtures/reference_config.h5 --train 0
+"$cli" correction-hash fixtures/reference_config.h5 --train 0 --inverse
+```
+
+> `correction-hash` hashes the grid as flat little-endian float64 bytes, identical in output to
+> the Python, Rust, and Node.js implementations for the same file/train/direction.
+
+---
+
+### Quickstart example
+
+Build first, then run from the repo root:
+
+```powershell
+# PowerShell
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build cpp/build --config Release
+.\cpp\build\Release\quickstart.exe
+```
+
+```bash
+# Linux
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build cpp/build
+cpp/build/quickstart
+
+# Windows (Git Bash) — use the Debug build already present
+cpp/build/Debug/quickstart.exe
+```
+
+Expected output:
+```
+=== Machine Config Quickstart ===
+
+Machine name   : TM-LPBF-02: AconityMIDI+_OG
+Optical trains : 2
+Working dist   : 670 mm   (train 0)
+Correction grid: [257, 257, 2]   (train 0)
+
+Written to     : mc_quickstart_tmp.h5
+
+PASS
+```
+
+The source lives at [examples/quickstart/cpp/main.cpp](examples/quickstart/cpp/main.cpp).
+
+---
+
+### Full workflow example
+
+**Scenario:** same calibration adjustment as Python, Rust, and Node.js — load config, apply new
+scanner offsets via direct struct mutation, write, and verify the changes persisted alongside
+the binary correction data.
+
+```powershell
+# PowerShell
+.\cpp\build\Release\full_workflow.exe
+```
+
+```bash
+# Linux
+cpp/build/full_workflow
+
+# Windows (Git Bash)
+cpp/build/Debug/full_workflow.exe
+```
+
+Expected output:
+```
+=== Full Workflow: Calibration Adjustment ===
+
+Machine : TM-LPBF-02: AconityMIDI+_OG
+Trains  : 2
+
+Before calibration:
+  Train 1  offset x=-87.5, y=23.5
+           correction grid 257x257x2
+  Train 2  offset x=86.074, y=-21.695
+           correction grid 257x257x2
+
+Written to : mc_full_workflow_tmp.h5
+
+After calibration:
+  Train 1  offset x=-91.5, y=24
+  Train 2  offset x=91.5, y=-24
+
+PASS
+```
+
+The source lives at [examples/full_workflow/cpp/main.cpp](examples/full_workflow/cpp/main.cpp).
+
+---
+
+### Running the C++ test suite
+
+```powershell
+# PowerShell — from repo root
+cmake --build cpp/build --config Debug
+ctest --test-dir cpp/build -C Debug --output-on-failure
+```
+
+```bash
+# Linux — from repo root
+cmake --build cpp/build
+ctest --test-dir cpp/build --output-on-failure
+
+# Windows (Git Bash) — Debug build already present
+cmake --build cpp/build --config Debug
+ctest --test-dir cpp/build -C Debug --output-on-failure
+```
+
+Expected output (52 tests across 3 test files):
+```
+100% tests passed, 0 tests failed out of 63
+```
+
+Test breakdown:
+
+| File | Tests | Coverage |
+|---|---|---|
+| `test_models.cpp` | 6 | JSON serialisation, `nlohmann` ADL round-trips |
+| `test_reader.cpp` | 44 | Root attrs, machine, optical trains, scanner, ClearBox scalars, binary data (hash + fc3 size), OPCUA, synthetic fixture, `getRawGroup()` |
+| `test_writer.cpp` | 6 | Scalar roundtrip, OPCUA roundtrip, schema spot-check, binary roundtrip hash + fc3 size |
+| `test_builder.cpp` | 6 | 1/2-laser roundtrip, plate dims, correction grid shape + value, no-clearbox |
+| `test_schema.cpp` | 3 | Reference fixture validates, MockBuilder output validates, empty object fails |
 
 ---
 

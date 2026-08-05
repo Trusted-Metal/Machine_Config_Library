@@ -5,6 +5,8 @@ name: Cross-Language Check
 # fixtures, schema, or the cross-check script itself.
 #
 # Languages active now: python, rust, nodejs
+# C++ is registered in RUNNERS/WRITERS/BINARIES/COPIERS but is not built in this
+# workflow; cross_check.py skips it gracefully when the binary is absent.
 # All four phases (schema, read parity, write interop, correction hash) run
 # for all three languages.
 
