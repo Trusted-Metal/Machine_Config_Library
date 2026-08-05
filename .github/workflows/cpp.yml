@@ -60,12 +60,17 @@ jobs:
       - name: Cache vcpkg HDF5 package (Windows)
         if: runner.os == 'Windows'
         uses: actions/cache@v4
+        id: vcpkg-cache
         with:
-          path: ${{ env.VCPKG_INSTALLATION_ROOT }}\installed
-          key: vcpkg-hdf5-x64-windows-v1
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}\installed
+            ~\AppData\Local\vcpkg\archives
+          # Key includes vcpkg.exe hash so a runner-image update (new vcpkg version)
+          # invalidates the cache rather than silently restoring a stale tree.
+          key: vcpkg-hdf5-x64-windows-${{ hashFiles(format('{0}/vcpkg.exe', env.VCPKG_INSTALLATION_ROOT)) }}
 
       - name: Install HDF5 via vcpkg (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && steps.vcpkg-cache.outputs.cache-hit != 'true'
         run: vcpkg install hdf5:x64-windows
         shell: pwsh
 
