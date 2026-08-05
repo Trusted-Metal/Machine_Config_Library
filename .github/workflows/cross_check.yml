@@ -4,11 +4,8 @@ name: Cross-Language Check
 # implementations: Python source, Rust source, Node.js source, shared
 # fixtures, schema, or the cross-check script itself.
 #
-# Languages active now: python, rust, nodejs
-# C++ is registered in RUNNERS/WRITERS/BINARIES/COPIERS but is not built in this
-# workflow; cross_check.py skips it gracefully when the binary is absent.
-# All four phases (schema, read parity, write interop, correction hash) run
-# for all three languages.
+# Languages active now: python, rust, nodejs, cpp
+# All five phases run for all four languages.
 
 on:
   workflow_dispatch:
@@ -76,22 +73,112 @@ jobs:
         working-directory: nodejs
 
       # -----------------------------------------------------------------------
+      # C++
+      # Ubuntu: HDF5 1.14.6 built from source (cached); Windows: vcpkg archives.
+      # Only the CLI binary is needed here — Catch2 tests are run in cpp.yml.
+      # -----------------------------------------------------------------------
+      - name: Cache HDF5 1.14.6 install (Ubuntu, C++)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        id: hdf5-cache-cpp
+        with:
+          path: ${{ github.workspace }}/hdf5-install
+          key: hdf5-1.14.6-no-zlib-${{ matrix.os }}
+
+      - name: Set HDF5_INSTALL env var (Ubuntu, C++)
+        if: runner.os == 'Linux'
+        run: echo "HDF5_INSTALL=${{ github.workspace }}/hdf5-install" >> $GITHUB_ENV
+
+      - name: Build and install HDF5 1.14.6 (Ubuntu, C++)
+        if: runner.os == 'Linux' && steps.hdf5-cache-cpp.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch hdf5_1.14.6 \
+            https://github.com/HDFGroup/hdf5.git hdf5-src
+          cmake -S hdf5-src -B hdf5-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/hdf5-install \
+            -DHDF5_BUILD_EXAMPLES=OFF \
+            -DHDF5_BUILD_TOOLS=OFF \
+            -DHDF5_BUILD_TESTS=OFF \
+            -DHDF5_BUILD_HL_LIB=OFF \
+            -DHDF5_ENABLE_Z_LIB_SUPPORT=OFF
+          cmake --build hdf5-build -j$(nproc)
+          cmake --install hdf5-build
+
+      - name: Cache vcpkg binary archives (Windows, C++)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-archives-x64-windows-${{ hashFiles('C:/vcpkg/vcpkg.exe') }}
+          restore-keys: vcpkg-archives-x64-windows-
+
+      - name: Install HDF5 via vcpkg (Windows, C++)
+        if: runner.os == 'Windows'
+        run: vcpkg install hdf5:x64-windows
+        shell: pwsh
+
+      - name: Verify HDF5 vcpkg config present (Windows, C++)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cfg = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\share\hdf5\hdf5-config.cmake"
+          if (-not (Test-Path $cfg)) { Write-Error "HDF5 cmake config not found: $cfg"; exit 1 }
+
+      - name: Add HDF5 DLLs to PATH (Windows, C++)
+        if: runner.os == 'Windows'
+        run: |
+          "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin" |
+            Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: Cache CMake FetchContent dependencies (C++)
+        uses: actions/cache@v4
+        with:
+          path: cpp/build/_deps
+          key: cmake-deps-v3-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt', 'cpp/tests/CMakeLists.txt') }}
+
+      - name: Configure CMake (Ubuntu, C++)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH=$HDF5_INSTALL \
+            -DHDF5_ROOT=$HDF5_INSTALL \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Configure CMake (Windows, C++)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cmakeArgs = @(
+            '-S', 'cpp',
+            '-B', 'cpp/build',
+            '-DCMAKE_BUILD_TYPE=Release',
+            '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+          )
+          cmake @cmakeArgs
+
+      - name: Build C++ CLI binary
+        run: cmake --build cpp/build --config Release --target machine_config_cli
+
+      # -----------------------------------------------------------------------
       # Cross-check
       # -----------------------------------------------------------------------
-      - name: Phase 1 — Schema validation (python, rust, nodejs)
-        run: python tools/cross_check.py --langs python,rust,nodejs --skip-read-parity --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
+      - name: Phase 1 — Schema validation (all languages)
+        run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-read-parity --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
 
-      - name: Phase 2 — Read parity (all fixtures, python, rust, nodejs)
-        run: python tools/cross_check.py --langs python,rust,nodejs --skip-schema --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
+      - name: Phase 2 — Read parity (all fixtures, all languages)
+        run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
 
-      - name: Phase 3 — Write interoperability (python, rust, nodejs)
-        run: python tools/cross_check.py --langs python,rust,nodejs --skip-schema --skip-read-parity --skip-binary-copy --skip-correction-hash --verbose
+      - name: Phase 3 — Write interoperability (all languages)
+        run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-binary-copy --skip-correction-hash --verbose
 
-      - name: Phase 3.5 — Binary copy round-trip (python, rust, nodejs)
-        run: python tools/cross_check.py --langs python,rust,nodejs --skip-schema --skip-read-parity --skip-write-interop --skip-correction-hash --verbose
+      - name: Phase 3.5 — Binary copy round-trip (all languages)
+        run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-write-interop --skip-correction-hash --verbose
 
-      - name: Phase 4 — Correction data hash parity (python, rust, nodejs)
-        run: python tools/cross_check.py --langs python,rust,nodejs --skip-schema --skip-read-parity --skip-write-interop --skip-binary-copy --verbose
+      - name: Phase 4 — Correction data hash parity (all languages)
+        run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-write-interop --skip-binary-copy --verbose
 
       # Upload both outputs so developers can diff them manually if a check fails.
       - name: Export Python JSON artifact
@@ -114,6 +201,14 @@ jobs:
           node nodejs/dist/cli.js export-json fixtures/reference_config.h5 \
             > "$RUNNER_TEMP/nodejs_output_xcheck.json"
 
+      - name: Export C++ JSON artifact
+        if: always()
+        shell: bash
+        run: |
+          bin="cpp/build/machine_config_cli"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/machine_config_cli.exe"
+          "$bin" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/cpp_output_xcheck.json"
+
       - name: Upload language outputs for manual inspection
         if: always()
         uses: actions/upload-artifact@v4
@@ -123,4 +218,5 @@ jobs:
             ${{ runner.temp }}/python_output.json
             ${{ runner.temp }}/rust_output_xcheck.json
             ${{ runner.temp }}/nodejs_output_xcheck.json
+            ${{ runner.temp }}/cpp_output_xcheck.json
           retention-days: 14
