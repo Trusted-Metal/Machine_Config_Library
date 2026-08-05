@@ -172,6 +172,23 @@ describe('MachineConfigWriter — OPC-UA roundtrip', () => {
     expect(rt.opcua!.triggers[firstName]?.signal)
       .toBe(origTriggers[firstName]?.signal);
   });
+
+  it('"Chamber Oxygen Level" trigger subsystem survives roundtrip', () => {
+    expect(rt.opcua!.triggers['Chamber Oxygen Level']?.subsystem)
+      .toBe(referenceOpcua.opcua!.triggers['Chamber Oxygen Level']?.subsystem);
+  });
+
+  it('"Chamber Oxygen Level" trigger rule_enabled survives roundtrip', () => {
+    expect(rt.opcua!.triggers['Chamber Oxygen Level']?.rule_enabled)
+      .toBe(referenceOpcua.opcua!.triggers['Chamber Oxygen Level']?.rule_enabled);
+  });
+
+  it('"Chamber Oxygen Level" trigger start_value and stop_value survive roundtrip', () => {
+    const orig = referenceOpcua.opcua!.triggers['Chamber Oxygen Level']!;
+    const rtT  = rt.opcua!.triggers['Chamber Oxygen Level']!;
+    expect(rtT.start_value).toBe(orig.start_value);
+    expect(rtT.stop_value).toBe(orig.stop_value);
+  });
 });
 
 // ---------------------------------------------------------------------------

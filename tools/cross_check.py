@@ -75,6 +75,18 @@ def _rust_bin() -> Path:
     return release if release.exists() else debug
 
 
+def _cpp_bin() -> Path:
+    # MSVC multi-config puts the binary in Debug/ or Release/ subdirectory.
+    release = REPO / "cpp" / "build" / "Release" / f"machine_config_cli{_EXT}"
+    debug   = REPO / "cpp" / "build" / "Debug"   / f"machine_config_cli{_EXT}"
+    flat    = REPO / "cpp" / "build"              / f"machine_config_cli{_EXT}"
+    if release.exists():
+        return release
+    if debug.exists():
+        return debug
+    return flat
+
+
 def _python_cli() -> str:
     """Find the machine-config CLI entry point.
 
@@ -102,7 +114,7 @@ RUNNERS: dict[str, Callable[[Path], list[str]]] = {
     "python": lambda fix: [_python_cli(), "export-json", str(fix)],
     "rust":   lambda fix: [str(_rust_bin()), "export-json", str(fix)],
     "nodejs": lambda fix: ["node", str(REPO / "nodejs/dist/cli.js"), "export-json", str(fix)],
-    # "cpp":    lambda fix: [str(REPO / f"cpp/build/machine_config_cli{_EXT}"), "export-json", str(fix)],
+    "cpp":    lambda fix: [str(_cpp_bin()), "export-json", str(fix)],
 }
 
 # Argv *prefix* for subcommands other than export-json (e.g. correction-hash).
@@ -111,6 +123,7 @@ BINARIES: dict[str, Callable[[], list[str]]] = {
     "python": lambda: [_python_cli()],
     "rust":   lambda: [str(_rust_bin())],
     "nodejs": lambda: ["node", str(REPO / "nodejs/dist/cli.js")],
+    "cpp":    lambda: [str(_cpp_bin())],
 }
 
 # Each entry is a callable(json_path: Path, h5_path: Path) -> list[str] that
@@ -122,7 +135,7 @@ WRITERS: dict[str, Callable[[Path, Path], list[str]]] = {
     "python": lambda j, h: [_python_cli(), "write", str(j), "--output", str(h)],
     "rust":   lambda j, h: [str(_rust_bin()), "write-hdf5", str(j), str(h)],
     "nodejs": lambda j, h: ["node", str(REPO / "nodejs/dist/cli.js"), "write-hdf5", str(j), str(h)],
-    # "cpp": lambda j, h: [str(REPO / f"cpp/build/machine_config_cli{_EXT}"), "write-hdf5", str(j), str(h)],
+    "cpp":    lambda j, h: [str(_cpp_bin()), "write-hdf5", str(j), str(h)],
 }
 
 # Each entry is a callable(input: Path, output: Path) -> list[str] that returns
@@ -132,7 +145,7 @@ COPIERS: dict[str, Callable[[Path, Path], list[str]]] = {
     "python": lambda i, o: [_python_cli(), "copy-hdf5", str(i), "--output", str(o)],
     "rust":   lambda i, o: [str(_rust_bin()), "copy-hdf5", str(i), str(o)],
     "nodejs": lambda i, o: ["node", str(REPO / "nodejs/dist/cli.js"), "copy-hdf5", str(i), str(o)],
-    # "cpp":    lambda i, o: [str(REPO / f"cpp/build/machine_config_cli{_EXT}"), "copy-hdf5", str(i), str(o)],
+    "cpp":    lambda i, o: [str(_cpp_bin()), "copy-hdf5", str(i), str(o)],
     # "go":     lambda i, o: [str(REPO / f"go/machine-config-cli{_EXT}"), "copy-hdf5", str(i), str(o)],
 }
 

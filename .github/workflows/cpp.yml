@@ -1,0 +1,205 @@
+name: C++
+
+# Builds and tests the C++ library on Ubuntu and Windows, then verifies that
+# both platforms produce bit-identical JSON output from the reference fixture.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "release"]
+  pull_request:
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # HDF5
+      # Ubuntu apt ships 1.10.10 on all current runner images; HighFive 2.10
+      # requires >= 1.12.  Build 1.14.6 from source and cache the install
+      # tree — the 8-10 min compile only runs on a cache miss.
+      # Windows: vcpkg provides a compatible pre-built HDF5.
+      # -----------------------------------------------------------------------
+      - name: Cache HDF5 1.14.6 install (Ubuntu)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        id: hdf5-cache
+        with:
+          path: ${{ github.workspace }}/hdf5-install
+          # bump suffix if build flags change
+          key: hdf5-1.14.6-no-zlib-${{ matrix.os }}
+
+      - name: Set HDF5_INSTALL env var (Ubuntu)
+        if: runner.os == 'Linux'
+        run: echo "HDF5_INSTALL=${{ github.workspace }}/hdf5-install" >> $GITHUB_ENV
+
+      - name: Build and install HDF5 1.14.6 (Ubuntu)
+        if: runner.os == 'Linux' && steps.hdf5-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch hdf5_1.14.6 \
+            https://github.com/HDFGroup/hdf5.git hdf5-src
+          cmake -S hdf5-src -B hdf5-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/hdf5-install \
+            -DHDF5_BUILD_EXAMPLES=OFF \
+            -DHDF5_BUILD_TOOLS=OFF \
+            -DHDF5_BUILD_TESTS=OFF \
+            -DHDF5_BUILD_HL_LIB=OFF \
+            -DHDF5_ENABLE_Z_LIB_SUPPORT=OFF
+          cmake --build hdf5-build -j$(nproc)
+          cmake --install hdf5-build
+
+      - name: Cache vcpkg binary archives (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          # vcpkg serves HDF5 from this archive cache (~30s) instead of recompiling (~6.5min).
+          # restore-keys allows a partial hit when the runner image updates (new vcpkg version)
+          # so the old archives are still tried before falling back to a full build.
+          key: vcpkg-archives-x64-windows-${{ hashFiles('C:/vcpkg/vcpkg.exe') }}
+          restore-keys: vcpkg-archives-x64-windows-
+
+      - name: Install HDF5 via vcpkg (Windows)
+        if: runner.os == 'Windows'
+        run: vcpkg install hdf5:x64-windows
+        shell: pwsh
+
+      - name: Verify HDF5 vcpkg config present (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cfg = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\share\hdf5\hdf5-config.cmake"
+          if (-not (Test-Path $cfg)) { Write-Error "HDF5 cmake config not found: $cfg"; exit 1 }
+
+      - name: Add HDF5 DLLs to PATH (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin" |
+            Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_PATH
+        shell: pwsh
+
+      # -----------------------------------------------------------------------
+      # CMake — configure, build, test
+      # -----------------------------------------------------------------------
+
+      # Cache the FetchContent download/build tree to avoid re-fetching
+      # HighFive, nlohmann_json, CLI11, Catch2, and picosha2 on every run.
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: cpp/build/_deps
+          key: cmake-deps-v3-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt', 'cpp/tests/CMakeLists.txt') }}
+
+      - name: Show CMake version
+        run: cmake --version
+
+      - name: Configure CMake (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH=$HDF5_INSTALL \
+            -DHDF5_ROOT=$HDF5_INSTALL \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Confirm HDF5 version found by CMake (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          hdf5_dir=$(grep "^HDF5_DIR:" cpp/build/CMakeCache.txt | cut -d= -f2)
+          echo "HDF5_DIR=$hdf5_dir"
+          if [[ "$hdf5_dir" != "$HDF5_INSTALL"* ]]; then
+            echo "::error::CMake resolved HDF5 from '$hdf5_dir' not from '$HDF5_INSTALL'"
+            exit 1
+          fi
+          echo "HDF5 resolved from expected install."
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cmakeArgs = @(
+            '-S', 'cpp',
+            '-B', 'cpp/build',
+            '-DCMAKE_BUILD_TYPE=Release',
+            '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+          )
+          cmake @cmakeArgs
+
+      - name: Build
+        run: cmake --build cpp/build --config Release
+
+      # 46 Catch2 tests across models, meta, machine, trains, scanner,
+      # ClearBox, binary data, OpcuaConfig, and JSON serialisation.
+      - name: Run Catch2 tests
+        run: ctest --test-dir cpp/build -C Release --output-on-failure
+
+      - name: Full workflow example (smoke test)
+        shell: bash
+        run: |
+          bin="cpp/build/full_workflow"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/full_workflow.exe"
+          "${bin}"
+
+      - name: Quickstart example (smoke test)
+        shell: bash
+        run: |
+          bin="cpp/build/quickstart"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/quickstart.exe"
+          "${bin}"
+
+      # -----------------------------------------------------------------------
+      # Smoke test + artifact
+      # -----------------------------------------------------------------------
+      - name: Export reference fixture to JSON
+        shell: bash
+        run: |
+          bin="cpp/build/machine_config_cli"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/machine_config_cli.exe"
+          "$bin" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/cpp_output.json"
+          echo "Exported $(wc -c < "$RUNNER_TEMP/cpp_output.json") bytes"
+
+      - name: Upload JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-output-${{ matrix.os }}
+          path: ${{ runner.temp }}/cpp_output.json
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Verify that Linux and Windows produce bit-identical JSON output so that
+  # any platform-specific number formatting or encoding bugs are caught early.
+  # ---------------------------------------------------------------------------
+  compare:
+    name: Platform parity (Linux vs Windows)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cpp-output-ubuntu-24.04
+          path: linux
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cpp-output-windows-latest
+          path: windows
+
+      - name: Diff Linux vs Windows JSON output
+        run: |
+          if diff linux/cpp_output.json windows/cpp_output.json; then
+            echo "Platform outputs are identical."
+          else
+            echo "Platform outputs differ — see diff above."
+            exit 1
+          fi
