@@ -15,8 +15,14 @@
   "bin": {
     "machine-config": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "schema"
+  ],
   "scripts": {
+    "prebuild": "node scripts/copy-schema.mjs",
     "build": "tsc",
+    "prepack": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

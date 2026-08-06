@@ -9,13 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# schema/ lives four directories above this file:
-#   python/src/machine_config/schema.py  →  ../../../..  →  repo root
-_SCHEMA_PATH = (
-    Path(__file__).parent.parent.parent.parent
-    / "schema"
-    / "machine_config_v1.schema.json"
-)
+# schema JSON is bundled alongside this file for wheel compatibility
+_SCHEMA_PATH = Path(__file__).parent / "machine_config_v1.schema.json"
 
 SCHEMA: dict = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 

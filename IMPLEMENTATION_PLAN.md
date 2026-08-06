@@ -3757,23 +3757,857 @@ TEST_CASE("ValidateEmptyConfigFails") {
 
 ---
 
-> **Detail deferred.** This section will be fully fleshed out after C++ (Phase 4) is complete. Go is last because CGO + Windows CI is the most complex dependency setup of any language in this project.
+## Phase 5 — Go
 
-**Independence guarantee**: The Go implementation is a fresh, self-contained implementation against the shared schema and `fixtures/` files — it does not link to, call, or derive from C++ or any other language's code. It is sequenced after C++ only because CGO + Windows CI is the most environment-sensitive setup; the sequencing avoids debugging two difficult environments simultaneously. `cross_check.py` verifies Go independently alongside the other languages.
+**Start condition**: Phase 4 (C++) complete and cross-check CI green for `python,rust,nodejs,cpp`. Go is sequenced last because CGo + HDF5 on CI is the most environment-sensitive setup of any language in this project; sequencing avoids debugging two difficult environments simultaneously.
 
-**Library choices** (decided):
-- **HDF5 wrapper**: `gonum/hdf5` (CGO wrapper around the HDF5 C library)
-- **CLI**: `cobra`
-- **Tests**: standard `go test`
+**Independence guarantee**: The Go implementation is a fresh, self-contained implementation against the shared schema and `fixtures/` files — no shared code with any other language. `cross_check.py` verifies it independently.
+
+**Library choices**:
+- **HDF5**: `github.com/scigolib/hdf5` (CGo bindings to HDF5 C library). **Note**: scigolib/hdf5 is ~12 months old and had write-correctness bugs fixed progressively through v0.13.x. The prototype validation in §5.0 is mandatory before proceeding with any library code — it confirms the pinned version handles 3D float64 writes and NaN correctly.
+- **CLI**: `github.com/spf13/cobra` v1.8+
 - **JSON Schema**: `github.com/santhosh-tekuri/jsonschema/v6`
+- **Tests**: standard `go test` (no external framework)
 
-**Implementation order**: same vertical slice as all other languages (models → reader → CI → writer → correction-hash → copy-hdf5 → hello world).
+**Ubuntu CI**: `apt-get install -y libhdf5-dev` (HDF5 1.10.x — sufficient for scigolib/hdf5).  
+**Windows CI**: deferred to a follow-on PR. CGo on Windows requires MinGW-w64 GCC + HDF5 headers; Ubuntu is added first and Windows follows once the pattern is validated (see §5.14).
 
-**Windows CI**: deferred. CGO on Windows requires MinGW-w64 + libhdf5, which is non-trivial. Ubuntu CI is added first; Windows CI added after the pattern is validated.
+**Module path**: `machine-config-go` module inside `go/` with its own `go.mod`.  
+**CLI binary name**: `machine-config-go` — avoids collision with `machine-config-cli` from Rust.
 
-**Scheduling note**: C++ (Phase 4) is completed first; Go can begin at any point after cross-check CI is green for C++. There is no code-level dependency between the two.
+**Implementation order** (same vertical slice as all other languages):
+1. §5.0 scigolib/hdf5 prototype validation (**mandatory first step**)
+2. §5.1 Package structure
+3. §5.2 `go.mod` and dependency pins
+4. §5.3 `models.go` + attribute-reading helpers
+5. §5.4a–e Reader (incremental sub-steps)
+6. §5.5 `GetRawGroup()` + `ToJson()`
+7. §5.6 CI: `go.yml` (Ubuntu; proto programs run in CI)
+8. §5.7 Writer + `write-hdf5` CLI
+9. §5.8 `copy-hdf5` CLI
+10. §5.9 `correction-hash` CLI
+11. §5.10 `MockConfigBuilder`
+12. §5.11 Schema validation
+13. §5.12 Quickstart
+14. §5.13 cross_check integration (all 4 phases, 5 languages)
+15. §5.14 Windows CI (follow-on PR)
 
-> Full directory structure, test patterns, and cross_check integration details to be added when Phase 4 (C++) is complete.
+---
+
+### §5.0 — scigolib/hdf5 Prototype Validation (**do before §5.1**)
+
+scigolib/hdf5 has had write-correctness bugs, fixed incrementally across versions. Before writing any library code, run four standalone programs in `go/proto/`. **All four must pass.** Do not skip this step.
+
+Each proto lives in `go/proto/<name>/main.go`, runs with `go run .` inside its directory, and exits 0 on success, non-zero with a descriptive message on failure. Commit the passing programs — they serve as permanent regression sentinels if a future library version reintroduces a bug.
+
+#### Proto 1 — Read root string attributes
+
+**Confirms**: basic file open + string attribute read.
+
+```go
+// go/proto/proto1_read_root_attrs/main.go
+package main
+
+import (
+    "fmt"
+    "log"
+    "os"
+    h5 "github.com/scigolib/hdf5"
+)
+
+func main() {
+    f, err := h5.OpenFile("../../../../fixtures/reference_config.h5", h5.F_ACC_RDONLY)
+    if err != nil {
+        log.Fatalf("open: %v", err)
+    }
+    defer f.Close()
+    attr, err := f.OpenAttribute("machine_name")
+    if err != nil {
+        log.Fatalf("read machine_name attr: %v", err)
+    }
+    defer attr.Close()
+    var machineName string
+    if err := attr.Read(&machineName, attr.Type()); err != nil {
+        log.Fatalf("decode machine_name: %v", err)
+    }
+    if machineName == "" {
+        fmt.Fprintln(os.Stderr, "FAIL: machine_name is empty")
+        os.Exit(1)
+    }
+    fmt.Printf("PASS: machine_name = %q\n", machineName)
+}
+```
+
+**If it fails**: Likely a CGo linking issue — verify `libhdf5-dev` is installed and `CGO_ENABLED=1`. On Windows, verify MinGW-w64 GCC is on PATH.
+
+---
+
+#### Proto 2 — Read a 3D float64 dataset with NaN
+
+**Confirms**: 3D dataset read, correct shape, NaN values preserved.
+
+```go
+// go/proto/proto2_read_3d_nan_dataset/main.go
+package main
+
+import (
+    "fmt"
+    "log"
+    "math"
+    "os"
+    h5 "github.com/scigolib/hdf5"
+)
+
+func main() {
+    f, err := h5.OpenFile("../../../../fixtures/reference_config.h5", h5.F_ACC_RDONLY)
+    if err != nil { log.Fatalf("open: %v", err) }
+    defer f.Close()
+
+    ds, err := f.OpenDataset("Machine/Optical_Trains/Optical_Train_01/Optional_Components/ClearBox/Correction_Data")
+    if err != nil { log.Fatalf("open dataset: %v", err) }
+    defer ds.Close()
+
+    dims, _, err := ds.Space().SimpleExtentDims()
+    if err != nil { log.Fatalf("dims: %v", err) }
+    if len(dims) != 3 || dims[0] != 257 || dims[1] != 257 || dims[2] != 2 {
+        fmt.Fprintf(os.Stderr, "FAIL: expected shape [257 257 2], got %v\n", dims)
+        os.Exit(1)
+    }
+    data := make([]float64, 257*257*2)
+    if err := ds.Read(&data); err != nil { log.Fatalf("read: %v", err) }
+
+    nanCount := 0
+    for _, v := range data {
+        if math.IsNaN(v) { nanCount++ }
+    }
+    if nanCount == 0 {
+        fmt.Fprintln(os.Stderr, "FAIL: expected NaN values in correction grid, found none")
+        os.Exit(1)
+    }
+    fmt.Printf("PASS: shape [257 257 2], NaN count = %d\n", nanCount)
+}
+```
+
+**If NaN count is 0**: The library may be silently converting NaN → 0. This is a known category of bug. Check the scigolib/hdf5 changelog; update the version pin.
+
+---
+
+#### Proto 3 — Write and read back a 3D float64 dataset with NaN (**the critical test**)
+
+**Confirms**: the specific write bug that was present in older versions is fixed. Write [3,3,2] = 18 float64 values with NaN at indices [0] and [17], close, reopen, verify NaN is preserved.
+
+```go
+// go/proto/proto3_write_3d_nan_roundtrip/main.go
+package main
+
+import (
+    "fmt"
+    "log"
+    "math"
+    "os"
+    h5 "github.com/scigolib/hdf5"
+)
+
+func main() {
+    tmp := os.TempDir() + "/proto3_test.h5"
+    defer os.Remove(tmp)
+
+    // --- write ---
+    {
+        f, err := h5.CreateFile(tmp, h5.F_ACC_TRUNC)
+        if err != nil { log.Fatalf("create: %v", err) }
+
+        data := make([]float64, 18)
+        for i := range data { data[i] = float64(i) * 0.5 }
+        data[0] = math.NaN()
+        data[17] = math.NaN()
+
+        dims := []uint{3, 3, 2}
+        space, _ := h5.CreateSimpleDataspace(dims, nil)
+        ds, err := f.CreateDataset("grid", h5.T_NATIVE_DOUBLE, space)
+        if err != nil { log.Fatalf("create dataset: %v", err) }
+        if err := ds.Write(&data); err != nil { log.Fatalf("write: %v", err) }
+        ds.Close()
+        f.Close()
+    }
+
+    // --- read back ---
+    {
+        f, err := h5.OpenFile(tmp, h5.F_ACC_RDONLY)
+        if err != nil { log.Fatalf("reopen: %v", err) }
+        defer f.Close()
+
+        ds, err := f.OpenDataset("grid")
+        if err != nil { log.Fatalf("open dataset: %v", err) }
+        defer ds.Close()
+
+        result := make([]float64, 18)
+        if err := ds.Read(&result); err != nil { log.Fatalf("read back: %v", err) }
+
+        fail := false
+        if !math.IsNaN(result[0]) {
+            fmt.Fprintf(os.Stderr, "FAIL: result[0] expected NaN, got %v\n", result[0])
+            fail = true
+        }
+        if !math.IsNaN(result[17]) {
+            fmt.Fprintf(os.Stderr, "FAIL: result[17] expected NaN, got %v\n", result[17])
+            fail = true
+        }
+        if math.Abs(result[2]-1.0) > 1e-12 {
+            fmt.Fprintf(os.Stderr, "FAIL: result[2] expected 1.0, got %v\n", result[2])
+            fail = true
+        }
+        if fail { os.Exit(1) }
+        fmt.Println("PASS: NaN preserved in 3D float64 write+read roundtrip")
+    }
+}
+```
+
+**If it fails**: This is the exact class of bug reported in scigolib/hdf5 issues. Check the CHANGELOG for NaN or float64 write fixes. Pin to a version ≥ the fix. If no released version fixes this, evaluate `gonum/hdf5` as an alternative before proceeding — do not work around a broken write path.
+
+---
+
+#### Proto 4 — Write and read string, int64, float64 attributes
+
+**Confirms**: attribute type fidelity. Silent type coercion (e.g. float64 attr read as string) would cause silent incorrect output in the reader.
+
+```go
+// go/proto/proto4_attribute_types/main.go
+// Write string/"hello", int64/42, float64/3.14159 attrs to a temp HDF5 group.
+// Read back each; assert exact value match. Exit 0 on PASS.
+```
+
+(Full implementation follows the same create/write/close/reopen/read pattern as Proto 3; abbreviated here for conciseness — the proto file contains the complete working program.)
+
+**If it fails**: The attribute API has type-specific quirks. Adjust the reader helper signatures accordingly before proceeding to §5.3.
+
+---
+
+**Proto validation gate**: All 4 proto programs exit 0. Commit them to `go/proto/`. Note the confirmed-working scigolib/hdf5 version in `go/go.mod` and in a comment at the top of `go/reader.go`.
+
+---
+
+### §5.1 — Package Structure
+
+```
+go/
+├── go.mod
+├── go.sum
+├── models.go                           ← MachineConfig and all sub-structs
+├── reader.go                           ← MachineConfigReader
+├── reader_helpers.go                   ← readStrAttr, readFloatAttr, readIntAttr, readBoolFromIntAttr
+├── writer.go                           ← MachineConfigWriter
+├── builder.go                          ← MockConfigBuilder
+├── schema.go                           ← Validate() via santhosh-tekuri/jsonschema
+├── adapters/
+│   ├── registry.go                     ← empty adapter registry (populated on first schema bump)
+│   └── base.go                         ← Adapter interface
+├── cmd/
+│   └── machine-config-go/
+│       └── main.go                     ← cobra CLI
+├── proto/
+│   ├── proto1_read_root_attrs/main.go
+│   ├── proto2_read_3d_nan_dataset/main.go
+│   ├── proto3_write_3d_nan_roundtrip/main.go
+│   └── proto4_attribute_types/main.go
+└── tests/
+    ├── reader_helpers_test.go
+    ├── reader_test.go
+    ├── writer_test.go
+    ├── builder_test.go
+    └── schema_test.go
+```
+
+Package name for all non-cmd files: `machineconfig`.
+
+---
+
+### §5.2 — `go.mod` and Dependency Pins
+
+```go
+// go/go.mod
+module machine-config-go
+
+go 1.22
+
+require (
+    github.com/scigolib/hdf5                    v0.14.0  // pin to version validated by §5.0 protos
+    github.com/spf13/cobra                      v1.8.0
+    github.com/santhosh-tekuri/jsonschema/v6    v6.0.1
+)
+```
+
+> **Do not use a floating version for scigolib/hdf5.** Pin to the exact version validated by the proto tests. Update the pin only after re-running all four proto programs and the full test suite. Document the version confirmation in a comment in `go.mod`.
+
+**CGo build requirements** (documented in `go/README.md`):
+- Ubuntu/Debian: `sudo apt-get install -y libhdf5-dev gcc`
+- macOS: `brew install hdf5`
+- Windows: MinGW-w64 GCC + HDF5 1.12+ headers/libs via vcpkg (see §5.14)
+
+---
+
+### §5.3 — `models.go` and Attribute-Reading Helpers
+
+#### `models.go`
+
+All structs mirror `python/src/machine_config/models.py` field-for-field. Every optional field is a pointer (`*float64`, `*string`, `*bool`, `*int`) — never a zero value. JSON tags must match the canonical snake_case field names exactly, since `cross_check.py` compares JSON output byte-for-byte.
+
+```go
+// go/models.go
+package machineconfig
+
+type MachineConfig struct {
+    Meta          MachineConfigMeta `json:"meta"`
+    Machine       Machine           `json:"machine"`
+    OpticalTrains []OpticalTrain    `json:"optical_trains"`
+    Opcua         *OpcuaConfig      `json:"opcua,omitempty"`
+}
+
+type MachineConfigMeta struct {
+    MachineName       string `json:"machine_name"`
+    Manufacturer      string `json:"manufacturer"`
+    Model             string `json:"model"`
+    SerialNumber      string `json:"serial_number"`
+    FileVersion       string `json:"file_version"`
+    ExportDate        string `json:"export_date"`
+    ConfigurationHash string `json:"configuration_hash"`
+}
+
+// CorrectionData holds a raw flat float64 correction grid + its shape.
+// NaN values represent out-of-field cells (identical convention to Python/Rust/Node.js/C++).
+type CorrectionData struct {
+    Data  []float64
+    Shape [3]int
+}
+
+// Machine, OpticalTrain, Scanner, LightSource, Collimator, ScannerCard, ClearBox,
+// ScanFieldCorrectionFile, OpcuaClientConfig, OpcuaPipeConfig, OpcuaTrigger, OpcuaConfig
+// all follow the same pattern: optional numerics/strings/bools as pointer types;
+// required strings (manufacturer, model, serial_number) as value types.
+```
+
+Helper functions `strPtr(s string) *string`, `floatPtr(f float64) *float64`, `intPtr(i int) *int`, `boolPtr(b bool) *bool` are defined in `models.go` for use in tests and `builder.go`.
+
+#### `reader_helpers.go`
+
+Define the four attribute-reading helpers that enforce Rules 3–4 from §0.5. All HDF5 attribute access in `reader.go` goes through these — never inline.
+
+```go
+// go/reader_helpers.go
+package machineconfig
+
+// readStrAttr returns nil for absent or empty-string attributes. Rule 3.
+func readStrAttr(obj h5AttrOpener, key string) *string { ... }
+
+// readFloatAttr returns nil for absent or empty-string attributes.
+// Returns an error if the attribute is present, non-empty, and non-numeric.
+func readFloatAttr(obj h5AttrOpener, key string) (*float64, error) { ... }
+
+// readIntAttr returns nil for absent or empty-string attributes.
+func readIntAttr(obj h5AttrOpener, key string) (*int, error) { ... }
+
+// readBoolFromIntAttr implements Rule 4: HDF5 int 0/1 → *bool.
+// Returns nil if absent; returns error if present but not 0 or 1.
+func readBoolFromIntAttr(obj h5AttrOpener, key string) (*bool, error) { ... }
+```
+
+**Tests for helpers** (`go/tests/reader_helpers_test.go`, 9 tests — each creates a real temp HDF5 file using scigolib/hdf5):
+
+| Test | What it verifies |
+|---|---|
+| `TestReadStrAttr_present` | Returns the correct string |
+| `TestReadStrAttr_absent` | Returns nil (not an error, not `""`) |
+| `TestReadStrAttr_empty` | `""` stored as attr → returns nil |
+| `TestReadFloatAttr_numeric` | Float64 attr → correct `*float64` |
+| `TestReadFloatAttr_emptyString` | `""` string attr → nil |
+| `TestReadFloatAttr_nonNumericString` | `"invalid"` string attr → non-nil error |
+| `TestReadBoolFromIntAttr_zero` | int32 `0` → `&false` |
+| `TestReadBoolFromIntAttr_one` | int32 `1` → `&true` |
+| `TestReadBoolFromIntAttr_invalid` | int32 `2` → non-nil error |
+
+> These 9 tests each write HDF5 attribute(s) using scigolib/hdf5, then read them back via the helpers. This doubles as an additional write-path integration test on top of Proto 4. If a helper silently coerces a non-numeric value to 0.0 instead of returning an error, downstream reader tests would give a false pass. Establish helper correctness first.
+
+---
+
+### §5.4a — Reader: Root Attrs + Machine Group
+
+```go
+// go/reader.go (partial)
+package machineconfig
+
+type MachineConfigReader struct{ path string }
+
+func NewReader(path string) *MachineConfigReader { return &MachineConfigReader{path: path} }
+
+func (r *MachineConfigReader) Parse() (*MachineConfig, error) {
+    f, err := h5.OpenFile(r.path, h5.F_ACC_RDONLY)
+    if err != nil { return nil, fmt.Errorf("open %q: %w", r.path, err) }
+    defer f.Close()
+    return r.parse(f)
+}
+```
+
+`checkFileVersion` reads `File_Version`; emits a `log.Printf` warning (not an error) if not `"1.0"` — Rule 6.  
+`parseMeta` reads the 7 root attrs.  
+`parseMachine` reads `Machine/` group attrs + `Machine/Build_Plate/` subgroup.
+
+**Tests** (reader_test.go):
+
+| Test | Expected value |
+|---|---|
+| `TestReadMetaMachineName` | `"TM-LPBF-02: AconityMIDI+_OG"` |
+| `TestReadMetaConfigHashLength` | `len == 64` |
+| `TestReadMachineBuildPlateX` | `250.0` |
+| `TestReadMachineBuildPlateY` | `250.0` |
+| `TestReadFileVersionWarning` | Synthetic file with `File_Version="2.0"` → no fatal error |
+
+---
+
+### §5.4b — Reader: Optical Train Loop
+
+Iterate `Optical_Train_01`, `Optical_Train_02`, … in order. Loop breaks when the next numbered group is absent — do not assume a fixed count.
+
+Each train: read Scanner, LightSource, Collimator (required — Rule 7 error if absent), ScannerCard (required), ClearBox scalar attrs (optional), ScanFieldCorrectionFile attrs (optional). OPCUA and binary datasets are in separate sub-steps.
+
+**Tests** (add to reader_test.go):
+
+| Test | Expected value |
+|---|---|
+| `TestOpticalTrainCount` | 2 trains in reference fixture |
+| `TestTrain0WorkingDistance` | `670.0` |
+| `TestTrain0ScanHeadOffsetX` | `-87.5` |
+| `TestTrain0ScanHeadOffsetY` | `23.5` |
+| `TestTrain1ScanHeadOffsetX` | `86.074…` |
+| `TestTrain1ScanHeadOffsetY` | `-21.695…` |
+| `TestTrain1ScanHeadRotation` | `180.0` |
+| `TestThermalLensingTrain0` | `false` (HDF5 int `0`) |
+| `TestThermalLensingTrain1` | `true` (HDF5 int `1`) |
+| `TestCollimatorFocalLength` | `120.0` |
+| `TestScannerCardModel` | `"SP-ICE-3"` |
+| `TestEmptyStringFieldIsNil` | `trains[0].Scanner.AxisConfiguration == nil` or non-empty string — never `""` |
+| `TestMissingCollimatorError` | Synthetic HDF5 with no Collimator group → `Parse()` returns non-nil error |
+
+After these tests pass: uncomment `"go"` in `RUNNERS` in `cross_check.py` and run cross-check Phases 1+2 locally.
+
+---
+
+### §5.4c — Reader: ClearBox Scalar Attrs
+
+Read all scalar attributes from `Optional_Components/ClearBox/`. Binary datasets (correction grids) are deferred to §5.4d.
+
+**Tests** (add to reader_test.go):
+
+| Test | What it verifies |
+|---|---|
+| `TestClearBoxPresent` | Reference fixture: `trains[0].Clearbox != nil` |
+| `TestClearBoxIPAddress` | Correct IP address value |
+| `TestClearBoxDataPort` | Correct `*int` value |
+| `TestClearBoxCommandedTimingOffset` | Correct int value |
+| `TestClearBoxAbsentIsNil` | Synthetic no-ClearBox fixture (built with Python builder) → `Clearbox == nil` |
+
+---
+
+### §5.4d — Reader: Binary Data (Correction Grids + fc3 Bytes)
+
+`GetCorrectionData(trainIndex int)` and `GetInverseCorrectionData(trainIndex int)` open the file, read the named dataset as `[]float64`, return `CorrectionData{Data, Shape}`. NaN values are preserved as-is — not converted to any sentinel. `GetScanFieldCorrectionBytes(trainIndex int)` reads the `uint8` dataset as `[]byte`.
+
+```go
+func (r *MachineConfigReader) GetCorrectionData(idx int) (*CorrectionData, error) {
+    f, err := h5.OpenFile(r.path, h5.F_ACC_RDONLY)
+    if err != nil { return nil, err }
+    defer f.Close()
+    path := fmt.Sprintf("Machine/Optical_Trains/Optical_Train_%02d/Optional_Components/ClearBox/Correction_Data", idx+1)
+    return readFloat64Dataset(f, path)
+}
+```
+
+**Tests** (add to reader_test.go):
+
+| Test | What it verifies |
+|---|---|
+| `TestCorrectionDataShape` | `cd.Shape == [3]int{257, 257, 2}` |
+| `TestCorrectionDataNaNPresent` | At least one NaN in `cd.Data` |
+| `TestInverseCorrectionDataShape` | Same shape for inverse grid |
+| `TestCorrectionDataForwardNeInverse` | Forward ≠ inverse (not identical arrays) |
+| `TestCorrectionDataTrain0NeTrain1` | Train 0 and train 1 grids differ |
+| `TestScanFieldCorrectionFileSize` | `len(bytes) == trains[0].ScanFieldCorrectionFile.FileSize` |
+
+---
+
+### §5.4e — Reader: OPCUA Group
+
+```go
+func (r *MachineConfigReader) parseOpcua(f *h5.File) (*OpcuaConfig, error) {
+    grp, err := f.OpenGroup("OPCUA")
+    if err != nil { return nil, nil } // absent is not an error — Rule 1
+    defer grp.Close()
+    // parse Client, Pipe, Triggers subgroups...
+}
+```
+
+**Tests** (add to reader_test.go):
+
+| Test | What it verifies |
+|---|---|
+| `TestOpcuaAbsentOnReferenceFixture` | `config.Opcua == nil` for `reference_config.h5` |
+| `TestOpcuaPresentOnOpcuaFixture` | `config.Opcua != nil` for `reference_config_opcua.h5` |
+| `TestOpcuaClientSessionTimeout` | Correct `SessionTimeout` int value |
+| `TestOpcuaTriggerCount` | Expected number of triggers |
+| `TestOpcuaTriggerSignal` | Known trigger signal field value |
+
+**Cross-check gate**: run `python tools/cross_check.py --langs python,rust,nodejs,cpp,go` — Phases 1 and 2 must be green before proceeding to §5.5.
+
+---
+
+### §5.5 — `GetRawGroup()` and `ToJson()`
+
+```go
+// GetRawGroup returns all attributes of an arbitrary HDF5 path as map[string]any.
+// Returns empty map (not error) if path does not exist. Rule 5.
+func (r *MachineConfigReader) GetRawGroup(path string) (map[string]any, error)
+
+// ToJson serializes the parsed config to canonical JSON.
+// NaN in correction data is converted to null before serialization.
+func (r *MachineConfigReader) ToJson() (string, error)
+```
+
+**Tests**:
+
+| Test | What it verifies |
+|---|---|
+| `TestGetRawGroupMissingPath` | Returns empty map, no error |
+| `TestGetRawGroupOpcuaClient` | Returns non-empty map for `reference_config_opcua.h5` |
+| `TestToJsonIsValidJSON` | `json.Unmarshal` the output without error |
+| `TestToJsonSchemaValid` | Validate output against `schema/machine_config_v1.schema.json` |
+| `TestToJsonMatchesGoldenFile` | Deep-compare JSON fields against `fixtures/reference_output.json` |
+
+---
+
+### §5.6 — CI: `.github/workflows/go.yml`
+
+Ubuntu-only first. The four proto programs run before the test suite so any scigolib/hdf5 regression surfaces immediately with a clear diagnostic.
+
+```yaml
+name: Go
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "release"]
+  pull_request:
+
+jobs:
+  test:
+    name: Test (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HDF5
+        run: sudo apt-get install -y libhdf5-dev
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: go/go.sum
+
+      - name: scigolib/hdf5 prototype validation
+        working-directory: go
+        run: |
+          go run ./proto/proto1_read_root_attrs/
+          go run ./proto/proto2_read_3d_nan_dataset/
+          go run ./proto/proto3_write_3d_nan_roundtrip/
+          go run ./proto/proto4_attribute_types/
+
+      - name: Build
+        working-directory: go
+        run: go build ./...
+
+      - name: Test
+        working-directory: go
+        run: go test ./... -v
+
+      - name: Build CLI binary
+        working-directory: go
+        run: go build -o machine-config-go ./cmd/machine-config-go/
+
+      - name: CLI smoke test (export-json)
+        working-directory: go
+        run: ./machine-config-go export-json ../fixtures/reference_config.h5 > go_output.json
+
+      - name: CLI smoke test (correction-hash)
+        working-directory: go
+        run: ./machine-config-go correction-hash ../fixtures/reference_config.h5 --train 0
+
+      - name: Upload output artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-output-ubuntu
+          path: go/go_output.json
+```
+
+---
+
+### §5.7 — Writer (`write-hdf5`)
+
+`MachineConfigWriter.Write(path string) error` — the direct inverse of `MachineConfigReader.Parse()`.
+
+Type conventions (mirror all other languages):
+- `nil *string` → HDF5 string attr `""`
+- `nil *float64` → HDF5 string attr `""`
+- `*bool` → HDF5 int32 `0` or `1`
+- `[]float64` with NaN → HDF5 float64 dataset with IEEE 754 NaN preserved (confirmed by Proto 3)
+
+**Tests** (go/tests/writer_test.go, ~15 tests):
+
+| Test | What it verifies |
+|---|---|
+| `TestWriterRoundtripMachineName` | Name survives write+parse |
+| `TestWriterRoundtripConfigHash` | Hash survives write+parse |
+| `TestWriterRoundtripBuildPlate` | X and Y dims correct after roundtrip |
+| `TestWriterRoundtripOpticalTrainCount` | Count unchanged |
+| `TestWriterRoundtripScannerOffsets` | offset_x and offset_y for both trains |
+| `TestWriterRoundtripThermalLensing` | `false` and `true` both roundtrip correctly |
+| `TestWriterRoundtripNilFieldSurvives` | nil pointer written as `""`, read back as nil |
+| `TestWriterRoundtripCorrectionGridNaN` | NaN cells survive write+read |
+| `TestWriterRoundtripCorrectionGridFinite` | Finite values are bit-exact after roundtrip |
+| `TestWriterRoundtripOpcua` | OPCUA config roundtrip using opcua fixture |
+| `TestWriterRoundtripWithoutClearBox` | No-ClearBox path works end-to-end |
+| `TestWriterProducesSchemaValidOutput` | Written HDF5 → `ToJson()` → schema validates |
+| `TestWriterCrossLangInterop` | Write via Go, read back via Python subprocess CLI; compare JSON. Build tag: `//go:build integration` — run only with `go test -tags integration`. Skipped if Python venv absent. |
+
+After writer tests pass: uncomment `"go"` in `WRITERS` in `cross_check.py` and run cross-check Phase 3 locally.
+
+---
+
+### §5.8 — `copy-hdf5` CLI
+
+```go
+var copyCmd = &cobra.Command{
+    Use:   "copy-hdf5 <input.h5> <output.h5>",
+    Short: "Copy an HDF5 config file via full model roundtrip",
+    RunE: func(cmd *cobra.Command, args []string) error {
+        config, err := NewReader(args[0]).ParseWithBinary()
+        if err != nil { return err }
+        return NewWriter(config).Write(args[1])
+    },
+}
+```
+
+`ParseWithBinary()` is an extended parse that populates correction grid data in the model (used only for `copy-hdf5`; `Parse()` omits binary data for performance).
+
+**Tests**:
+
+| Test | What it verifies |
+|---|---|
+| `TestCopyCLI` | Copy reference fixture → parse copy → assert machine name matches |
+| `TestCopyCorrectionHash` | SHA-256 of correction grid from copied file matches original (Phase 3.5 coverage) |
+
+After tests pass: uncomment `"go"` in `COPIERS` in `cross_check.py` and run cross-check Phase 3.5 locally.
+
+---
+
+### §5.9 — `correction-hash` CLI
+
+Hashes the correction grid as flat little-endian float64 bytes via SHA-256. Must match Python's `hashlib.sha256(arr.astype("<f8").tobytes())` exactly.
+
+```go
+var corrHashCmd = &cobra.Command{
+    Use:   "correction-hash <file.h5>",
+    Short: "SHA-256 of correction grid (flat little-endian float64 bytes)",
+    RunE: func(cmd *cobra.Command, args []string) error {
+        trainIdx, _ := cmd.Flags().GetInt("train")
+        inverse, _  := cmd.Flags().GetBool("inverse")
+        var cd *CorrectionData
+        var err error
+        if inverse {
+            cd, err = NewReader(args[0]).GetInverseCorrectionData(trainIdx)
+        } else {
+            cd, err = NewReader(args[0]).GetCorrectionData(trainIdx)
+        }
+        if err != nil { return err }
+        // encode each float64 as 8 little-endian bytes; sha256 the concatenation
+        buf := make([]byte, len(cd.Data)*8)
+        for i, v := range cd.Data {
+            binary.LittleEndian.PutUint64(buf[i*8:], math.Float64bits(v))
+        }
+        h := sha256.Sum256(buf)
+        fmt.Printf("%x\n", h)
+        return nil
+    },
+}
+```
+
+**Tests**:
+
+| Test | What it verifies |
+|---|---|
+| `TestCorrectionHashMatchesPython` | Run Python subprocess `correction-hash` and Go `correction-hash` on the same fixture+train; assert identical hex output. Build tag: `//go:build integration`. |
+
+After `correction-hash` tests pass: uncomment `"go"` in `BINARIES` in `cross_check.py` and run cross-check Phase 4 locally. **All 4 phases must be green** before §5.10.
+
+---
+
+### §5.10 — `MockConfigBuilder`
+
+Mirrors Python/Rust/Node.js/C++ builders exactly — same defaults, same Gaussian correction-grid formula.
+
+```go
+type MockConfigBuilder struct {
+    NLasers         int     // default 2
+    BuildPlateX     float64 // default 250.0
+    BuildPlateY     float64 // default 250.0
+    IncludeClearbox bool    // default true
+}
+
+func (b *MockConfigBuilder) Build() *MachineConfig { ... }
+func (b *MockConfigBuilder) Save(path string) error { ... }
+```
+
+Defaults and formulas:
+- 2 lasers, 250×250×20 mm build plate, `MockMachine`/`MockCo`/`MockMIDI+`/`MOCK-001`
+- Alternating ±87.5/∓23.5 mm scan-head offsets, 0°/180° rotation
+- Gaussian grid: `2.0 * exp(-(x²+y²)/0.5)` over `linspace(-1,1,257)`; inverse = forward × 0.9
+- Fixed `machine.id` (`00000000-0000-0000-0000-000000000001`) and `meta.export_date` (`2026-01-01T00:00:00.000Z`) for reproducibility
+
+**Tests** (go/tests/builder_test.go, 8 tests):
+
+| Test | What it verifies |
+|---|---|
+| `TestMockBuilder1Laser` | 1 optical train |
+| `TestMockBuilder2Lasers` | 2 optical trains |
+| `TestMockBuilderBuildPlate` | 250×250 mm after Save+Parse |
+| `TestMockBuilderCorrectionGridShape` | Shape `[257,257,2]` |
+| `TestMockBuilderCorrectionGridNonZero` | At least one non-zero value (Gaussian ≠ flat zero) |
+| `TestMockBuilderInverseGridRatio` | Centre cell of inverse ≈ centre cell of forward × 0.9 |
+| `TestMockBuilderNoClearbox` | `Clearbox == nil` when `IncludeClearbox=false` |
+| `TestMockBuilderSaveRoundtrip` | `Save()` + `Parse()` → machine name, train count, grid shape correct |
+
+---
+
+### §5.11 — Schema Validation
+
+```go
+// go/schema.go
+func Validate(doc map[string]any) []string {
+    // Load schema/machine_config_v1.schema.json relative to the package
+    // Use santhosh-tekuri/jsonschema/v6 to validate
+    // Return empty slice for valid, slice of error strings for invalid
+}
+```
+
+**Tests** (go/tests/schema_test.go):
+
+| Test | What it verifies |
+|---|---|
+| `TestSchemaValidatesReferenceOutput` | `fixtures/reference_output.json` → zero errors |
+| `TestSchemaRejectsMissingMeta` | Object without `meta` key fails |
+| `TestSchemaRejectsEmptyOpticalTrains` | `[]` fails `minItems: 1` |
+| `TestSchemaRejectsShortHash` | 63-char hash fails |
+| `TestValidateSubcommandCLI` | `machine-config-go validate fixtures/reference_config.h5` exits 0 |
+
+Add `validate` subcommand to the cobra CLI that calls `Validate()` and exits non-zero if errors are present.
+
+---
+
+### §5.12 — Hello World / Quickstart
+
+`examples/quickstart/go/main.go` — mirrors Python/Rust/Node.js/C++ quickstart step-for-step:
+1. Open `fixtures/reference_config.h5`
+2. Print: machine name, optical train count, working distance (train 0), correction data shape (train 0)
+3. Write a copy to a temp file via `MachineConfigWriter`
+4. Read the copy back
+5. Assert machine name, train count, working distance match
+6. Print `PASS` or `FAIL` with details
+
+Run from repo root:
+```bash
+cd go && go run ../examples/quickstart/go/main.go
+```
+
+Add to `go.yml`:
+```yaml
+- name: Quickstart smoke test
+  run: cd go && go run ../examples/quickstart/go/main.go
+```
+
+---
+
+### §5.13 — cross_check Integration
+
+After all above phases complete, `cross_check.py` has `"go"` active in all four dicts (`RUNNERS`, `WRITERS`, `COPIERS`, `BINARIES`). `cross_check.yml` gains:
+
+```yaml
+- name: Install HDF5 (Go CGo dep)
+  run: sudo apt-get install -y libhdf5-dev
+
+- name: Build Go CLI
+  run: cd go && go build -o machine-config-go ./cmd/machine-config-go/
+```
+
+And `--langs python,rust,nodejs,cpp,go`.
+
+**Deliverable gate**: All 4 cross-check phases pass for all 5 languages on Ubuntu. SHA-256 correction hash values are identical across all 5 languages for all 3 fixtures × {forward, inverse} × all trains.
+
+---
+
+### §5.14 — Windows CI (follow-on PR)
+
+Added in a separate PR after Ubuntu CI is stable. The approach:
+
+1. `windows-latest` runner
+2. Install MinGW-w64 GCC: `choco install mingw`
+3. Install HDF5 via vcpkg, reusing the vcpkg binary-archive cache already established in `cpp.yml`:
+   ```yaml
+   - uses: actions/cache@v4
+     with:
+       path: ~\AppData\Local\vcpkg\archives
+       key: vcpkg-archives-x64-windows-${{ hashFiles('C:/vcpkg/vcpkg.exe') }}
+       restore-keys: vcpkg-archives-x64-windows-
+   - run: vcpkg install hdf5:x64-windows
+   ```
+4. Set CGo environment:
+   ```yaml
+   - name: Set CGo flags for Go+HDF5
+     run: |
+       $hdf5 = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+       echo "CGO_CFLAGS=-I$hdf5\include" >> $env:GITHUB_ENV
+       echo "CGO_LDFLAGS=-L$hdf5\lib -lhdf5" >> $env:GITHUB_ENV
+       echo "CC=gcc" >> $env:GITHUB_ENV
+   ```
+5. Run all four proto programs before the test suite (same as Ubuntu).
+
+> **Known risk**: The CGo + vcpkg + MinGW combination on Windows is not well-documented. Budget 1–2 days of CI debug time. If proto 3 (NaN write roundtrip) fails on Windows but passes on Ubuntu with the same scigolib/hdf5 version, this is a platform-specific library bug — file an issue upstream and do not ship until resolved.
+
+---
+
+### Phase 5 File Inventory
+
+| File | Step | What it contains |
+|---|---|---|
+| `go/go.mod` | 5.2 | Module declaration; scigolib/hdf5 pin; cobra; jsonschema deps |
+| `go/models.go` | 5.3 | All Go structs with JSON tags; pointer optionals; `CorrectionData` |
+| `go/reader_helpers.go` | 5.3 | `readStrAttr`, `readFloatAttr`, `readIntAttr`, `readBoolFromIntAttr` |
+| `go/reader.go` | 5.4a–e, 5.5 | `MachineConfigReader` — `Parse()`, `ParseWithBinary()`, `GetCorrectionData()`, `GetInverseCorrectionData()`, `GetScanFieldCorrectionBytes()`, `GetRawGroup()`, `ToJson()` |
+| `go/writer.go` | 5.7 | `MachineConfigWriter.Write()` |
+| `go/builder.go` | 5.10 | `MockConfigBuilder.Build()` + `Save()` |
+| `go/schema.go` | 5.11 | `Validate()` via santhosh-tekuri/jsonschema |
+| `go/adapters/registry.go` | 5.1 | Empty adapter registry scaffold |
+| `go/adapters/base.go` | 5.1 | `Adapter` interface |
+| `go/cmd/machine-config-go/main.go` | 5.4a+ | cobra CLI: `export-json`, `write-hdf5`, `copy-hdf5`, `correction-hash`, `validate` |
+| `go/proto/proto1_read_root_attrs/main.go` | 5.0 | Proto 1 |
+| `go/proto/proto2_read_3d_nan_dataset/main.go` | 5.0 | Proto 2 |
+| `go/proto/proto3_write_3d_nan_roundtrip/main.go` | 5.0 | Proto 3 — the critical test |
+| `go/proto/proto4_attribute_types/main.go` | 5.0 | Proto 4 |
+| `go/tests/reader_helpers_test.go` | 5.3 | 9 helper unit tests |
+| `go/tests/reader_test.go` | 5.4a–e, 5.5 | ~20 reader tests |
+| `go/tests/writer_test.go` | 5.7 | ~15 writer + roundtrip tests |
+| `go/tests/builder_test.go` | 5.10 | 8 builder tests |
+| `go/tests/schema_test.go` | 5.11 | 5 schema validation tests |
+| `examples/quickstart/go/main.go` | 5.12 | 6-step read+write roundtrip demo |
+| `.github/workflows/go.yml` | 5.6/5.14 | Go CI — Ubuntu first; Windows in follow-on PR |
 
 ---
 

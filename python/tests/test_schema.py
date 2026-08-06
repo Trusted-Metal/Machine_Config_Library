@@ -165,3 +165,11 @@ def test_optical_train_missing_scanner_card_is_rejected(schema):
     doc = _valid()
     del doc["optical_trains"][0]["scanner_card"]
     assert _validate(doc, schema), "Expected rejection for optical train missing 'scanner_card'"
+
+
+def test_bundled_schema_matches_canonical():
+    canonical = pathlib.Path(__file__).parents[2] / "schema" / "machine_config_v1.schema.json"
+    if not canonical.exists():
+        pytest.skip("canonical schema not present — not running from monorepo")
+    bundled = pathlib.Path(__file__).parents[1] / "src" / "machine_config" / "machine_config_v1.schema.json"
+    assert json.loads(canonical.read_text(encoding="utf-8")) == json.loads(bundled.read_text(encoding="utf-8"))
