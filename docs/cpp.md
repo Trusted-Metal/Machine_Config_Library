@@ -55,6 +55,28 @@ After building, the CLI is at:
 All other dependencies (HighFive, nlohmann/json, CLI11, Catch2, json-schema-validator) are
 fetched automatically via CMake `FetchContent`.
 
+### As a dependency via FetchContent
+
+The library is header-only — consumers only need CMake, a C++17 compiler, and HDF5 on their system:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(machine_config
+  GIT_REPOSITORY https://github.com/Trusted-Metal/Machine_Config_Library.git
+  GIT_TAG        v0.2.0-rc.1
+  SOURCE_SUBDIR  cpp)
+FetchContent_MakeAvailable(machine_config)
+target_link_libraries(your_target PRIVATE machine_config)
+```
+
+Track main (locks to HEAD on first configure; re-run cmake to advance):
+```cmake
+FetchContent_Declare(machine_config
+  GIT_REPOSITORY https://github.com/Trusted-Metal/Machine_Config_Library.git
+  GIT_TAG        main
+  SOURCE_SUBDIR  cpp)
+```
+
 ---
 
 ## Use case 1 — Parse a machine config file

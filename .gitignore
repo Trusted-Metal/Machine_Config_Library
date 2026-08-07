@@ -15,12 +15,16 @@ __pycache__/
 # Developer scratch scripts — personal/machine-specific, not for CI
 scratch/
 
-# Node / Rust / C++ build outputs
+# Node / Rust / C++ / Python build outputs
 node_modules/
 nodejs/node_modules/
 nodejs/dist/
+nodejs/schema/
+nodejs/*.tgz
 rust/target/
 cpp/build/
+python/dist/
+python/build/
 
 # Editor
 .vscode/

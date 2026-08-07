@@ -51,6 +51,29 @@ The `machine-config` CLI command is installed automatically alongside the packag
 > **VS Code tip**: Select `.venv\Scripts\python.exe` as the workspace interpreter. VS Code's
 > integrated terminal will then activate the venv automatically on every new terminal.
 
+### As a dependency
+
+```bash
+# Pin to a specific tag
+pip install "git+https://github.com/Trusted-Metal/Machine_Config_Library.git@v0.2.0-rc.1#subdirectory=python"
+
+# Track main
+pip install "git+https://github.com/Trusted-Metal/Machine_Config_Library.git#subdirectory=python"
+
+# From a release wheel (requires gh CLI — `gh auth login` once)
+gh release download v0.2.0-rc.1 --repo Trusted-Metal/Machine_Config_Library --pattern "*.whl"
+pip install machine_config_library-0.2.0rc1-py3-none-any.whl
+```
+
+Pin in `pyproject.toml`:
+```toml
+dependencies = [
+    "machine-config-library @ git+https://github.com/Trusted-Metal/Machine_Config_Library.git@v0.2.0-rc.1#subdirectory=python",
+]
+```
+
+> Note: PEP 440 normalises `0.2.0-rc.1` → `0.2.0rc1` in wheel filenames.
+
 ---
 
 ## Use case 1 — Parse a machine config file

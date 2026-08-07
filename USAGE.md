@@ -29,6 +29,98 @@ Other docs:
 
 ---
 
+## Installing as a dependency
+
+> All methods use git credentials that org members already have. Python and Node.js release
+> assets additionally require the [GitHub CLI](https://cli.github.com/) (`gh auth login` once).
+
+| Language | Mechanism | Auth |
+|---|---|---|
+| Python | `pip install git+...` or wheel from release | git credentials or `gh` CLI |
+| Node.js | tgz from release | `gh` CLI |
+| Rust | `Cargo.toml` git reference | git credentials |
+| C++ | CMake `FetchContent` git tag | git credentials |
+
+### Python
+
+```bash
+# Pin to a specific tag
+pip install "git+https://github.com/Trusted-Metal/Machine_Config_Library.git@v0.2.0-rc.1#subdirectory=python"
+
+# Track main (locks to HEAD on first install)
+pip install "git+https://github.com/Trusted-Metal/Machine_Config_Library.git#subdirectory=python"
+
+# From a release wheel (requires gh CLI)
+gh release download v0.2.0-rc.1 --repo Trusted-Metal/Machine_Config_Library --pattern "*.whl"
+pip install machine_config_library-0.2.0rc1-py3-none-any.whl
+```
+
+Pin in `pyproject.toml`:
+```toml
+dependencies = [
+    "machine-config-library @ git+https://github.com/Trusted-Metal/Machine_Config_Library.git@v0.2.0-rc.1#subdirectory=python",
+]
+```
+
+See [docs/python.md](docs/python.md) for full usage.
+
+### Node.js
+
+Node.js has no git install method — npm does not support `#subdirectory=` installs, so the tgz release asset is required.
+
+```bash
+# Download tgz with gh CLI, then install
+gh release download v0.2.0-rc.1 --repo Trusted-Metal/Machine_Config_Library --pattern "*.tgz"
+npm install machine-config-library-0.2.0-rc.1.tgz
+```
+
+Pin in `package.json` (after downloading tgz to your project):
+```json
+"machine-config-library": "file:./machine-config-library-0.2.0-rc.1.tgz"
+```
+
+See [docs/nodejs.md](docs/nodejs.md) for full usage.
+
+### Rust
+
+```toml
+# Cargo.toml — pin to a specific tag
+machine-config = { git = "https://github.com/Trusted-Metal/Machine_Config_Library", tag = "v0.2.0-rc.1" }
+
+# Track main (locked in Cargo.lock; run `cargo update -p machine-config` to advance)
+machine-config = { git = "https://github.com/Trusted-Metal/Machine_Config_Library" }
+```
+
+See [docs/rust.md](docs/rust.md) for full usage.
+
+### C++
+
+```cmake
+FetchContent_Declare(machine_config
+  GIT_REPOSITORY https://github.com/Trusted-Metal/Machine_Config_Library.git
+  GIT_TAG        v0.2.0-rc.1
+  SOURCE_SUBDIR  cpp)
+FetchContent_MakeAvailable(machine_config)
+target_link_libraries(your_target PRIVATE machine_config)
+```
+
+See [docs/cpp.md](docs/cpp.md) for full usage.
+
+### Updating to a new version
+
+| Language | Pinned to tag | Tracking main |
+|---|---|---|
+| **Python** | Edit tag in `pip install` command or `pyproject.toml`, re-run install | `pip install --upgrade "git+https://github.com/Trusted-Metal/Machine_Config_Library.git#subdirectory=python"` |
+| **Node.js** | `gh release download` new version + `npm install new.tgz` | N/A — always a manual download |
+| **Rust** | Edit `tag = "..."` in `Cargo.toml` + `cargo update -p machine-config` | `cargo update -p machine-config` |
+| **C++** | Edit `GIT_TAG` in `CMakeLists.txt`, reconfigure CMake | `cmake --fresh -S . -B build` |
+
+> Rust and C++ lock the fetched commit locally (`Cargo.lock` / CMake cache) — the update commands
+> above are required to advance even when tracking main. Python and Node.js always fetch
+> fresh on install when no tag is specified.
+
+---
+
 ## Shared Concepts
 
 ### The HDF5 file
