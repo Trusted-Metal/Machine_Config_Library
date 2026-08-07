@@ -1,3 +1,9 @@
+## 0.2.0-rc.2 (2026-08-07)
+
+* Merge pull request #12 from Trusted-Metal/SD-1663 ([ad87b87](https://github.com/Trusted-Metal/Machine_Config_Library/commit/ad87b87)), closes [#12](https://github.com/Trusted-Metal/Machine_Config_Library/issues/12)
+* docs: Updated usage.md and language files with library dependency usage info ([fd7b641](https://github.com/Trusted-Metal/Machine_Config_Library/commit/fd7b641))
+* feat: Add Node tgz and Python wheel build support, Go implementation ([bf60969](https://github.com/Trusted-Metal/Machine_Config_Library/commit/bf60969))
+
 ## 0.2.0-rc.1 (2026-08-05)
 
 * Merge pull request #10 from Trusted-Metal/SD-1659 ([76e9874](https://github.com/Trusted-Metal/Machine_Config_Library/commit/76e9874)), closes [#10](https://github.com/Trusted-Metal/Machine_Config_Library/issues/10)
