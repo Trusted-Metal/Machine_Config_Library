@@ -152,7 +152,9 @@ Six workflows run on every push to `main`/`release` and on all pull requests.
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/) and are enforced by commitlint. `semantic-release` reads the commit history on every push to `main` or `release` to determine the next version and generate `CHANGELOG.md`.
 
 **Format:** `type(scope): subject`  
-**Scope** (optional, warns if non-standard): `rust` · `python` · `nodejs` · `cpp` · `schema` · `ci` · `docs`
+**Scope:** (optional, warns if non-standard): `rust` · `python` · `nodejs` · `cpp` · `schema` · `ci` · `docs`
+
+**Note:** if a CI update creates a pipeline artifact such as generating a whl or .tgz file, may want to use fix/feat, etc to ensure version bump to test pipeline works correctly. This has been a frustration I have encountered more than once. 
 
 | Type | When to use | Version bump |
 |---|---|---|
