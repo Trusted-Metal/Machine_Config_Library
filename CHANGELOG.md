@@ -1,3 +1,10 @@
+## 0.2.0-rc.3 (2026-08-07)
+
+* Merge pull request #13 from Trusted-Metal/SD-1665 ([f4a3d9f](https://github.com/Trusted-Metal/Machine_Config_Library/commit/f4a3d9f)), closes [#13](https://github.com/Trusted-Metal/Machine_Config_Library/issues/13)
+* Merge pull request #14 from Trusted-Metal/SD-1666 ([4ed7251](https://github.com/Trusted-Metal/Machine_Config_Library/commit/4ed7251)), closes [#14](https://github.com/Trusted-Metal/Machine_Config_Library/issues/14)
+* fix: Last push as ci, no version bump, no artifact generation test, correcting ([d7f3e0e](https://github.com/Trusted-Metal/Machine_Config_Library/commit/d7f3e0e))
+* ci: wire tgz and wheel artifact generation into semantic release ([67ecbde](https://github.com/Trusted-Metal/Machine_Config_Library/commit/67ecbde))
+
 ## 0.2.0-rc.2 (2026-08-07)
 
 * Merge pull request #12 from Trusted-Metal/SD-1663 ([ad87b87](https://github.com/Trusted-Metal/Machine_Config_Library/commit/ad87b87)), closes [#12](https://github.com/Trusted-Metal/Machine_Config_Library/issues/12)
