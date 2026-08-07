@@ -27,6 +27,25 @@ It has no system dependencies — `cargo build` compiles `libhdf5` from source o
 
 ---
 
+## Installation
+
+Add to `Cargo.toml` — no system dependencies required (`libhdf5` is compiled from source on first build via `hdf5-metno` with the `static` feature):
+
+```toml
+# Pin to a specific tag
+machine-config = { git = "https://github.com/Trusted-Metal/Machine_Config_Library", tag = "v0.2.0-rc.1" }
+
+# Track main (locked in Cargo.lock; run `cargo update -p machine-config` to advance)
+machine-config = { git = "https://github.com/Trusted-Metal/Machine_Config_Library" }
+```
+
+SSH URL also works:
+```toml
+machine-config = { git = "ssh://git@github.com/Trusted-Metal/Machine_Config_Library.git", tag = "v0.2.0-rc.1" }
+```
+
+---
+
 ## Use case 1 — Parse a machine config file
 
 ```rust

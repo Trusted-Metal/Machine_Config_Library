@@ -40,6 +40,21 @@ npm run build      # compile TypeScript → dist/
 All types and the runtime are exported from `dist/index.js`. Build output must be present
 before running any example or CLI command.
 
+### As a dependency
+
+Node.js has no git install method — npm does not support `#subdirectory=` installs.
+Use the tgz release asset (requires [GitHub CLI](https://cli.github.com/) — `gh auth login` once):
+
+```bash
+gh release download v0.2.0-rc.1 --repo Trusted-Metal/Machine_Config_Library --pattern "*.tgz"
+npm install machine-config-library-0.2.0-rc.1.tgz
+```
+
+Pin in `package.json` (after downloading tgz to your project):
+```json
+"machine-config-library": "file:./machine-config-library-0.2.0-rc.1.tgz"
+```
+
 ---
 
 ## TypeScript interfaces
