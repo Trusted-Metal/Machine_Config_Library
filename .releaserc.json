@@ -43,7 +43,8 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "npm run sync-version"
+        "prepareCmd": "npm run sync-version",
+        "publishCmd": "(cd nodejs && npm pack) && python -m build python/"
       }
     ],
     [
@@ -63,6 +64,11 @@
     [
       "@semantic-release/github",
       {
+        "assets": [
+          { "path": "nodejs/*.tgz",         "label": "Node.js package (.tgz)" },
+          { "path": "python/dist/*.whl",     "label": "Python wheel (.whl)" },
+          { "path": "python/dist/*.tar.gz",  "label": "Python source distribution (.tar.gz)" }
+        ],
         "successComment": false,
         "failComment": false,
         "releasedLabels": false

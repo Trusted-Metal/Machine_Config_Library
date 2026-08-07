@@ -26,6 +26,18 @@ jobs:
       - name: Install release tooling
         run: npm ci
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Node.js library dependencies
+        run: npm ci
+        working-directory: nodejs
+
+      - name: Install Python build frontend
+        run: pip install build
+
       - name: Configure deploy key for git push
         env:
           RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
