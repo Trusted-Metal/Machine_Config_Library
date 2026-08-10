@@ -40,8 +40,18 @@ jobs:
         run: pip install -e "python/[dev]" deepdiff
 
       # -----------------------------------------------------------------------
-      # Rust  (no apt-get — hdf5-metno links libhdf5 statically)
+      # Rust
       # -----------------------------------------------------------------------
+      - name: Install HDF5 (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      # Windows has no system libhdf5; compile from source using cmake (available by default)
+      - name: Configure static HDF5 (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "HDF5_STATIC=1" >> "$GITHUB_ENV"
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 

@@ -18,9 +18,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No apt-get for libhdf5 — hdf5-metno compiles libhdf5 from source
-      # via the `static` feature.  First cold run takes ~2-3 min; subsequent
-      # runs use the Swatinem cache below.
+      - name: Install HDF5 (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      # Windows has no system libhdf5; compile from source using cmake (available by default)
+      - name: Configure static HDF5 (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "HDF5_STATIC=1" >> "$GITHUB_ENV"
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
