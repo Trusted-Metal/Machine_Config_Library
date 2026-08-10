@@ -16,9 +16,12 @@ path = "src/main.rs"
 name = "reader_bench"
 harness = false
 
+[features]
+static-hdf5 = ["hdf5-sys/static", "hdf5-sys/zlib"]
+
 [dependencies]
 hdf5        = { package = "hdf5-metno", version = "0.12" }
-hdf5-sys    = { package = "hdf5-metno-sys", version = "0.11", features = ["static", "zlib"] }
+hdf5-sys    = { package = "hdf5-metno-sys", version = "0.11" }
 ndarray     = "0.17"
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
