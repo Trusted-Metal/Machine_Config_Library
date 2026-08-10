@@ -46,11 +46,14 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
 
-      # Windows has no system libhdf5; compile from source using cmake (available by default)
-      - name: Configure static HDF5 (Windows)
+      - name: Install HDF5 via vcpkg (Windows)
         if: runner.os == 'Windows'
-        shell: bash
-        run: echo "HDF5_STATIC=1" >> "$GITHUB_ENV"
+        run: vcpkg install hdf5:x64-windows
+
+      - name: Set HDF5_DIR (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: echo "HDF5_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows" >> $env:GITHUB_ENV
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
