@@ -1,3 +1,13 @@
+## 0.2.0-rc.4 (2026-08-11)
+
+* Create LICENSE ([70f0ffc](https://github.com/Trusted-Metal/Machine_Config_Library/commit/70f0ffc))
+* Merge pull request #15 from Trusted-Metal/richardoconnell-patch-1 ([e5f06d7](https://github.com/Trusted-Metal/Machine_Config_Library/commit/e5f06d7)), closes [#15](https://github.com/Trusted-Metal/Machine_Config_Library/issues/15)
+* Merge pull request #16 from Trusted-Metal/SD-1671 ([a8509b1](https://github.com/Trusted-Metal/Machine_Config_Library/commit/a8509b1)), closes [#16](https://github.com/Trusted-Metal/Machine_Config_Library/issues/16)
+* fix: Removed static feature from dependency to work with capture software ([d4702d5](https://github.com/Trusted-Metal/Machine_Config_Library/commit/d4702d5))
+* fix(ci): add HDF5 bin dir to PATH on Windows so DLLs are found at build time ([7fcdfe6](https://github.com/Trusted-Metal/Machine_Config_Library/commit/7fcdfe6))
+* fix(ci): install libhdf5-dev on Linux in cross-check workflow ([6c25874](https://github.com/Trusted-Metal/Machine_Config_Library/commit/6c25874))
+* fix(ci): use vcpkg HDF5 on Windows instead of broken HDF5_STATIC env var ([e7b0ab4](https://github.com/Trusted-Metal/Machine_Config_Library/commit/e7b0ab4))
+
 ## 0.2.0-rc.3 (2026-08-07)
 
 * Merge pull request #13 from Trusted-Metal/SD-1665 ([f4a3d9f](https://github.com/Trusted-Metal/Machine_Config_Library/commit/f4a3d9f)), closes [#13](https://github.com/Trusted-Metal/Machine_Config_Library/issues/13)
