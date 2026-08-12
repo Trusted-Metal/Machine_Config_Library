@@ -1,0 +1,19 @@
+# Shared capability-API error taxonomy (all languages).
+# Result/Outcome carries these for version/capability/validation misses.
+# Programmer bugs (use-after-close, etc.) throw/panic outside Result.
+
+errors:
+  - id: UnsupportedVersion
+    description: Cannot open or bind this HDF5 File_Version
+  - id: UnsupportedInVersion
+    description: get/set not available on this File_Version adapter
+  - id: NotPresent
+    description: Optional group or field absent in the file
+  - id: ValidationError
+    description: Unit lock or schema validation failure
+  - id: IoError
+    description: HDF5 read/write failure
+  - id: InvalidIndex
+    description: Optical train (or other) index out of range
+  - id: Closed
+    description: Session used after close (programmer bug — may throw)

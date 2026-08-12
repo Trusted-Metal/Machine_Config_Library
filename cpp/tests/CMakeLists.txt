@@ -4,6 +4,7 @@ add_executable(machine_config_tests
   test_writer.cpp
   test_builder.cpp          # §4.20
   test_schema.cpp           # §4.21
+  test_capabilities.cpp     # stable model facade
 )
 
 target_link_libraries(machine_config_tests PRIVATE

@@ -78,13 +78,13 @@ target_include_directories(machine_config_cli PRIVATE ${picosha2_SOURCE_DIR})
 add_executable(full_workflow ${CMAKE_SOURCE_DIR}/../examples/full_workflow/cpp/main.cpp)
 target_link_libraries(full_workflow PRIVATE machine_config)
 target_compile_definitions(full_workflow PRIVATE
-  FIXTURES_DIR="${CMAKE_SOURCE_DIR}/../fixtures")
+  EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/../examples")
 
 # §4.18: quickstart example
 add_executable(quickstart ${CMAKE_SOURCE_DIR}/../examples/quickstart/cpp/main.cpp)
 target_link_libraries(quickstart PRIVATE machine_config)
 target_compile_definitions(quickstart PRIVATE
-  FIXTURES_DIR="${CMAKE_SOURCE_DIR}/../fixtures")
+  EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/../examples")
 
 # Examples — uncomment in §4.18 (quickstart)
 # add_subdirectory(examples)

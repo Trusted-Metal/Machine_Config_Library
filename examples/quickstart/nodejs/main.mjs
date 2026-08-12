@@ -5,15 +5,7 @@
 //   cd nodejs && npm run build && cd ..
 //   node examples/quickstart/nodejs/main.mjs
 //
-// Demonstrates the six essential operations:
-//   1. Open an HDF5 machine config file
-//   2. Read scalar fields (machine name, optical train count, working distance)
-//   3. Inspect binary data shape (ClearBox correction grid)
-//   4. Write the config to a temporary HDF5 file
-//   5. Read the temporary file back
-//   6. Assert round-trip fidelity and print PASS / FAIL
-//
-// No additional dependencies beyond the library itself.
+// Opens examples/dummy_2train.h5 via the stable model facade.
 
 import { existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,93 +13,107 @@ import { dirname, join, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
-// ---------------------------------------------------------------------------
-// Resolve the repo root so this script works regardless of working directory
-// (this file lives at examples/quickstart/nodejs/, so the repo root is three
-// levels up).
-// ---------------------------------------------------------------------------
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
-const FIXTURE = join(REPO_ROOT, 'fixtures', 'reference_config.h5');
+const DUMMY = join(REPO_ROOT, 'examples', 'dummy_2train.h5');
 
-if (!existsSync(FIXTURE)) {
-  console.error(`Fixture not found: ${FIXTURE}`);
-  console.error('Run from the repo root or ensure fixtures/ is present.');
+if (!existsSync(DUMMY)) {
+  console.error(`Dummy file not found: ${DUMMY}`);
+  console.error('Run: python examples/generate_dummy.py');
   process.exit(1);
 }
 
-// ---------------------------------------------------------------------------
-// Import the library. This uses the compiled output (dist/), the same way
-// nodejs/src/cli.ts does, so this script has no build step of its own.
-// ---------------------------------------------------------------------------
 const distIndex = join(REPO_ROOT, 'nodejs', 'dist', 'index.js');
 if (!existsSync(distIndex)) {
   console.error(`Build output not found: ${distIndex}`);
   console.error('Run "npm run build" inside nodejs/ first.');
   process.exit(1);
 }
-const { MachineConfigReader, MachineConfigWriter } = await import(pathToFileURL(distIndex).href);
+const {
+  openMachineConfig,
+  MachineConfigReader,
+  SetMode,
+} = await import(pathToFileURL(distIndex).href);
 
 async function run() {
-  // -------------------------------------------------------------------------
-  // Step 1 & 2 — Open the file and read scalar fields
-  // -------------------------------------------------------------------------
-  const reader = new MachineConfigReader(FIXTURE);
-  const config = await reader.parse();
+  const opened = await openMachineConfig(DUMMY);
+  if (!opened.ok) {
+    console.error(`open failed: ${opened.error.code} — ${opened.error.message}`);
+    process.exit(1);
+  }
+  const file = opened.value;
 
   console.log('=== Machine Config Quickstart ===\n');
-  console.log(`Machine name   : ${config.meta.machine_name}`);
-  console.log(`Optical trains : ${config.optical_trains.length}`);
+  console.log(`File version   : ${file.fileVersion()}`);
+  const meta = file.meta().getModel();
+  console.log(`Machine name   : ${meta.machine_name}`);
+  console.log(`Optical trains : ${file.opticalTrains().length}`);
 
-  const train0 = config.optical_trains[0];
-  const wd = train0.scanner.working_distance;
-  const wdUnit = train0.scanner.working_distance_unit ?? '';
-  console.log(`Working dist   : ${wd} ${wdUnit}   (train 0)`);
+  let i = 0;
+  for (const train of file.opticalTrains()) {
+    const scanner = train.getScanner();
+    console.log(
+      `  Train ${i}  wd=${scanner.working_distance} ${scanner.working_distance_unit ?? ''}  ` +
+        `offset x=${scanner.scan_head_offset_x}, y=${scanner.scan_head_offset_y}`,
+    );
+    const oc = train.optionalComponents();
+    if (oc == null) {
+      console.log('           optionalComponents: none');
+    } else {
+      const cb = oc.clearbox();
+      console.log(`           clearbox: ${cb.ok ? 'present' : cb.error.code}`);
+    }
+    i += 1;
+  }
 
-  // -------------------------------------------------------------------------
-  // Step 3 — Binary data shape (correction grid)
-  // -------------------------------------------------------------------------
-  const correction = await reader.getCorrectionData(0); // { data: Float64Array, shape: [257,257,2] }
+  const train0 = file.opticalTrain(0);
+  if (!train0.ok) {
+    console.error(train0.error.message);
+    process.exit(1);
+  }
+  const scanner = train0.value.getScanner();
+
+  const reader = new MachineConfigReader(DUMMY);
+  const correction = await reader.getCorrectionData(0);
   console.log(`Correction grid: [${correction.shape.join(', ')}]   (train 0)`);
 
-  // -------------------------------------------------------------------------
-  // Step 4 — Write to a temporary file
-  // -------------------------------------------------------------------------
   console.log();
   const tmpPath = join(tmpdir(), `machine_config_quickstart_${randomUUID()}.h5`);
-
-  await new MachineConfigWriter(config).write(tmpPath);
+  const setR = train0.value.setScanner(scanner, SetMode.Merge);
+  if (!setR.ok) {
+    console.error(`setScanner failed: ${setR.error.message}`);
+    process.exit(1);
+  }
+  const saved = await file.save(tmpPath);
+  if (!saved.ok) {
+    console.error(`save failed: ${saved.error.message}`);
+    process.exit(1);
+  }
   console.log(`Written to     : ${basename(tmpPath)}`);
 
-  // -------------------------------------------------------------------------
-  // Step 5 — Read the temporary file back
-  // -------------------------------------------------------------------------
-  const config2 = await new MachineConfigReader(tmpPath).parse();
+  const again = await openMachineConfig(tmpPath);
+  if (!again.ok) {
+    console.error(again.error.message);
+    process.exit(1);
+  }
+  const name2 = again.value.meta().getModel().machine_name;
+  const n2 = again.value.opticalTrains().length;
+  const t2 = again.value.opticalTrain(0);
+  const wd2 = t2.ok ? t2.value.getScanner().working_distance : null;
 
-  // -------------------------------------------------------------------------
-  // Step 6 — Assert round-trip fidelity
-  // -------------------------------------------------------------------------
   const failures = [];
-
-  if (config2.meta.machine_name !== config.meta.machine_name) {
-    failures.push(
-      `  machine_name: expected ${JSON.stringify(config.meta.machine_name)}, ` +
-        `got ${JSON.stringify(config2.meta.machine_name)}`,
-    );
+  if (name2 !== meta.machine_name) {
+    failures.push('  machine_name mismatch after round-trip');
+  }
+  if (n2 !== file.opticalTrains().length) {
+    failures.push(`  train_count: expected ${file.opticalTrains().length}, got ${n2}`);
+  }
+  if (wd2 !== scanner.working_distance) {
+    failures.push(`  working_distance: expected ${scanner.working_distance}, got ${wd2}`);
   }
 
-  if (config2.optical_trains.length !== config.optical_trains.length) {
-    failures.push(
-      `  train_count: expected ${config.optical_trains.length}, got ${config2.optical_trains.length}`,
-    );
-  }
-
-  const wd2 = config2.optical_trains[0].scanner.working_distance;
-  if (wd2 !== wd) {
-    failures.push(`  working_distance: expected ${wd}, got ${wd2}`);
-  }
-
-  // Clean up the temp file regardless of outcome.
+  file.close();
+  again.value.close();
   if (existsSync(tmpPath)) unlinkSync(tmpPath);
 
   console.log();

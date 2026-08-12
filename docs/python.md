@@ -24,6 +24,28 @@ Python is the source of truth for fixture generation, the golden file, and schem
 - [Quickstart example](#quickstart-example)
 - [Full workflow example](#full-workflow-example)
 - [Running the Python test suite](#running-the-python-test-suite)
+- [Capability API (stable model facade)](#capability-api-stable-model-facade)
+
+---
+
+## Capability API (stable model facade)
+
+Preferred for applications. Full-model get/set with `SetMode.MERGE` / `SetMode.REPLACE`:
+
+```python
+from machine_config import open_machine_config, create_machine_config, SetMode
+
+opened = open_machine_config("machine.h5")
+file = opened.value
+scanner = file.optical_train(0).value.get_scanner()
+file.optical_train(0).value.set_scanner(
+    {**scanner, "working_distance": 680}, SetMode.MERGE
+)
+file.save("out.h5")
+file.close()
+```
+
+See [USAGE.md](../USAGE.md) and `schema/capabilities/`.
 
 ---
 
@@ -387,9 +409,13 @@ Expected output:
 ```
 === Machine Config Quickstart ===
 
-Machine name   : TM-LPBF-02: AconityMIDI+_OG
+File version   : 1.0
+Machine name   : ExampleDummy-2Train
 Optical trains : 2
-Working dist   : 670.0 mm   (train 0)
+  Train 0  wd=670.0 mm  offset x=-87.5, y=23.5
+           clearbox: present
+  Train 1  wd=670.0 mm  offset x=87.5, y=-23.5
+           clearbox: present
 Correction grid: (257, 257, 2)   (train 0)
 
 Written to     : <tmp>.h5
@@ -420,13 +446,13 @@ Expected output:
 ```
 === Full Workflow: Calibration Adjustment ===
 
-Machine : TM-LPBF-02: AconityMIDI+_OG
+Machine : ExampleDummy-2Train
 Trains  : 2
 
 Before calibration:
   Train 1  offset x=-87.5, y=23.5
            correction grid 257×257×2
-  Train 2  offset x=86.074, y=-21.695
+  Train 2  offset x=87.5, y=-23.5
            correction grid 257×257×2
 
 Written to : <tmp>.h5

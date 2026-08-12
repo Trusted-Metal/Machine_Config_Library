@@ -17,7 +17,7 @@ The [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) covers *how the library is 
 | Node.js | Phase 2 complete | [docs/nodejs.md](docs/nodejs.md) |
 | Rust | Phase 3 complete | [docs/rust.md](docs/rust.md) |
 | C++ | Phase 4 complete | [docs/cpp.md](docs/cpp.md) |
-| Go | Phase 5 — planned | [docs/go.md](docs/go.md) |
+| Go | Phase 5 — in progress | [docs/go.md](docs/go.md) |
 
 Other docs:
 
@@ -122,6 +122,32 @@ See [docs/cpp.md](docs/cpp.md) for full usage.
 ---
 
 ## Shared Concepts
+
+### Capability API (preferred for applications)
+
+Applications should prefer the **stable model facade** over raw `MachineConfigReader` field
+access. Call `openMachineConfig` / `open_machine_config` (Python/Rust/Go) /
+`openMachineConfig` (C++). The library peeks HDF5 `File_Version`, selects an adapter, and
+exposes uniform navigation + full-model get/set (`getScanner` / `setScanner`, …) with
+`SetMode.Merge` (default) or `SetMode.Replace`. Use `create(version)` for new files;
+`open` preserves the on-disk version. Go is in progress (reader + facade in-memory; writer
+next — see [docs/go.md](docs/go.md)).
+
+| Concept | Meaning |
+|---|---|
+| **File_Version** | Version of the on-disk `.h5` layout (`1.0`, `1.1`, …) — adapter key |
+| **Package semver** | Library release (`0.2.0-rc.x`) — when you upgrade the SDK |
+| **SetMode** | `Merge` updates provided fields; `Replace` replaces the whole node (incl. `extra`) |
+| **Result / Outcome** | Boundary errors (`InvalidIndex`, `NotPresent`, `UnsupportedVersion`, …); programmer bugs throw |
+
+Spec + bindings live under `schema/capabilities/` (`api.yaml`, `models.yaml`). Regenerate language stubs with:
+
+```bash
+python tools/generate_capabilities.py
+python tools/generate_capabilities.py --check   # CI drift guard
+```
+
+Low-level `MachineConfigReader` / `Writer` remain for CLI, interop, and adapters’ internal use.
 
 ### The HDF5 file
 

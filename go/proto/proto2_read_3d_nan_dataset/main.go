@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Proto 2 — Read a 3-D float64 correction-data dataset from a real fixture.
 //
 // Validates that scigolib/hdf5 can:

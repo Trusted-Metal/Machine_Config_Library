@@ -22,9 +22,36 @@ headers directly with no compilation step. All types live in the `machine_config
 - [Quickstart example](#quickstart-example)
 - [Full workflow example](#full-workflow-example)
 - [Running the C++ test suite](#running-the-c-test-suite)
+- [Capability API (stable model facade)](#capability-api-stable-model-facade)
 
 > Use cases 3, 5, and 7 (`config_from_dict`, `ConfigEditor`, `YamlConfigBuilder`) are
 > Python-only conveniences with no C++ port.
+
+---
+
+## Capability API (stable model facade)
+
+Preferred for applications. Include `machine_config/capabilities/file.hpp`. Full-model
+get/set with `SetMode::Merge` (default) / `SetMode::Replace`:
+
+```cpp
+#include "machine_config/capabilities/file.hpp"
+
+using machine_config::capabilities::openMachineConfig;
+using machine_config::capabilities::SetMode;
+
+auto opened = openMachineConfig("machine.h5");
+auto file = std::static_pointer_cast<machine_config::capabilities::MachineConfigFileV10>(
+    opened.value());
+auto scanner = file->getScanner(0).value();
+scanner.working_distance = 680.0;
+file->setScanner(0, scanner);  // SetMode::Merge by default
+std::string out = "out.h5";
+file->save(&out);
+file->close();
+```
+
+See [USAGE.md](../USAGE.md) and `schema/capabilities/`.
 
 ---
 
@@ -352,9 +379,12 @@ Expected output:
 ```
 === Machine Config Quickstart ===
 
-Machine name   : TM-LPBF-02: AconityMIDI+_OG
+Machine name   : ExampleDummy-2Train
 Optical trains : 2
-Working dist   : 670 mm   (train 0)
+  Train 0  wd=670 mm  offset x=-87.5, y=23.5
+           clearbox: present
+  Train 1  wd=670 mm  offset x=87.5, y=-23.5
+           clearbox: present
 Correction grid: [257, 257, 2]   (train 0)
 
 Written to     : mc_quickstart_tmp.h5
@@ -386,13 +416,13 @@ Expected output:
 ```
 === Full Workflow: Calibration Adjustment ===
 
-Machine : TM-LPBF-02: AconityMIDI+_OG
+Machine : ExampleDummy-2Train
 Trains  : 2
 
 Before calibration:
   Train 1  offset x=-87.5, y=23.5
            correction grid 257x257x2
-  Train 2  offset x=86.074, y=-21.695
+  Train 2  offset x=87.5, y=-23.5
            correction grid 257x257x2
 
 Written to : mc_full_workflow_tmp.h5

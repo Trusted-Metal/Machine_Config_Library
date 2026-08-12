@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Proto 3 — Write a 3-D float64 dataset containing NaN, close, reopen, verify.
 //
 // This is the single most critical proto: it confirms that IEEE-754 NaN values

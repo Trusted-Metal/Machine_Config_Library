@@ -21,6 +21,15 @@ from .models import (
 from .reader import MachineConfigReader, config_from_dict
 from .writer import MachineConfigWriter
 from .builder import ConfigEditor, MockConfigBuilder, YamlConfigBuilder
+from .capabilities import (
+    CapabilityError,
+    MachineConfigFileV10,
+    SessionClosedError,
+    SetMode,
+    create_machine_config,
+    open_machine_config,
+    supported_file_versions,
+)
 
 __all__ = [
     "AxisConfig",
@@ -46,4 +55,11 @@ __all__ = [
     "ScannerCard",
     "YamlConfigBuilder",
     "config_from_dict",
+    "CapabilityError",
+    "SessionClosedError",
+    "MachineConfigFileV10",
+    "SetMode",
+    "open_machine_config",
+    "create_machine_config",
+    "supported_file_versions",
 ]

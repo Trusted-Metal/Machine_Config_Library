@@ -28,6 +28,11 @@ jobs:
       - name: Install package and dependencies
         run: pip install -e "python/[dev]"
 
+      - name: Check capability catalog codegen is up to date
+        run: |
+          pip install pyyaml jinja2
+          python tools/generate_capabilities.py --check
+
       - name: Verify golden file checksum
         shell: bash
         run: |

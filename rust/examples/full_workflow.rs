@@ -4,16 +4,13 @@
 //
 //   cargo run --example full_workflow --manifest-path rust/Cargo.toml
 //
-// Scenario: a field calibration measured new scanner-head positions for both
-// optical trains.  Load the current machine config, apply the updated offsets,
-// write the modified config to a new file, and verify the changes persisted
-// alongside the binary correction data.
+// Load examples/dummy_2train.h5, apply new scanner offsets via set_scanner(Merge).
 
 use std::path::PathBuf;
 use std::process;
 
+use machine_config::capabilities::{open_machine_config, SetMode};
 use machine_config::reader::MachineConfigReader;
-use machine_config::writer::MachineConfigWriter;
 
 fn main() {
     match run() {
@@ -30,27 +27,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .parent()
         .expect("CARGO_MANIFEST_DIR has no parent")
         .to_path_buf();
-    let fixture = repo_root.join("fixtures").join("reference_config.h5");
+    let dummy = repo_root.join("examples").join("dummy_2train.h5");
 
-    if !fixture.exists() {
-        eprintln!("Fixture not found: {}", fixture.display());
-        eprintln!("Run from the repo root and ensure fixtures/ is present.");
+    if !dummy.exists() {
+        eprintln!("Dummy file not found: {}", dummy.display());
+        eprintln!("Run: python examples/generate_dummy.py");
         process::exit(1);
     }
 
-    // -------------------------------------------------------------------------
-    // 1. Print pre-calibration summary
-    // -------------------------------------------------------------------------
-    let reader = MachineConfigReader::open(&fixture)?;
-    let mut config = reader.parse()?;
+    let mut file = open_machine_config(&dummy).map_err(|e| e.to_string())?;
 
     println!("=== Full Workflow: Calibration Adjustment ===\n");
-    println!("Machine : {}", config.meta.machine_name);
-    println!("Trains  : {}", config.optical_trains.len());
+    println!("Machine : {}", file.get_meta().map_err(|e| e.to_string())?.machine_name);
+    let n = file.optical_train_count().map_err(|e| e.to_string())?;
+    println!("Trains  : {n}");
     println!();
     println!("Before calibration:");
-    for (i, train) in config.optical_trains.iter().enumerate() {
-        let s = &train.scanner;
+    let reader = MachineConfigReader::open(&dummy)?;
+    for i in 0..n {
+        let s = file.get_scanner(i).map_err(|e| e.to_string())?;
         println!(
             "  Train {}  offset x={:?}, y={:?}",
             i + 1,
@@ -63,65 +58,61 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
-    // -------------------------------------------------------------------------
-    // 2. Apply new scanner offsets (post-calibration values)
-    // -------------------------------------------------------------------------
     let new_offsets: [(f64, f64); 2] = [(-91.5, 24.0), (91.5, -24.0)];
     for (i, (x, y)) in new_offsets.iter().enumerate() {
-        config.optical_trains[i].scanner.scan_head_offset_x = Some(*x);
-        config.optical_trains[i].scanner.scan_head_offset_y = Some(*y);
+        let mut scanner = file.get_scanner(i).map_err(|e| e.to_string())?;
+        scanner.scan_head_offset_x = Some(*x);
+        scanner.scan_head_offset_y = Some(*y);
+        file.set_scanner(i, scanner, SetMode::Merge)
+            .map_err(|e| e.to_string())?;
     }
 
-    // -------------------------------------------------------------------------
-    // 3. Write updated config
-    // -------------------------------------------------------------------------
     let tmp_file = tempfile::NamedTempFile::new()?;
     let out_path = tmp_file.path().with_extension("h5");
     drop(tmp_file);
-
-    MachineConfigWriter::new(&config).write(&out_path)?;
+    file.save(Some(&out_path)).map_err(|e| e.to_string())?;
     println!(
         "Written to : {}\n",
         out_path.file_name().unwrap_or_default().to_string_lossy()
     );
 
-    // -------------------------------------------------------------------------
-    // 4. Read back and verify
-    // -------------------------------------------------------------------------
+    let again = open_machine_config(&out_path).map_err(|e| e.to_string())?;
     let reader2 = MachineConfigReader::open(&out_path)?;
-    let updated = reader2.parse()?;
     let mut failures: Vec<String> = Vec::new();
 
     for (i, (ex, ey)) in new_offsets.iter().enumerate() {
-        let got_x = updated.optical_trains[i].scanner.scan_head_offset_x;
-        let got_y = updated.optical_trains[i].scanner.scan_head_offset_y;
-        if got_x != Some(*ex) {
+        let s = again.get_scanner(i).map_err(|e| e.to_string())?;
+        if s.scan_head_offset_x != Some(*ex) {
             failures.push(format!(
                 "  train{} offset_x: expected {:?}, got {:?}",
-                i + 1, ex, got_x
+                i + 1,
+                ex,
+                s.scan_head_offset_x
             ));
         }
-        if got_y != Some(*ey) {
+        if s.scan_head_offset_y != Some(*ey) {
             failures.push(format!(
                 "  train{} offset_y: expected {:?}, got {:?}",
-                i + 1, ey, got_y
+                i + 1,
+                ey,
+                s.scan_head_offset_y
             ));
         }
         match reader2.get_correction_data(i) {
             Ok(cd) if cd.shape != [257, 257, 2] => failures.push(format!(
                 "  train{} correction shape: expected [257, 257, 2], got {:?}",
-                i + 1, cd.shape
+                i + 1,
+                cd.shape
             )),
             Err(e) => failures.push(format!("  train{} correction read error: {e}", i + 1)),
             _ => {}
         }
     }
 
-    let _ = std::fs::remove_file(&out_path);
-
     println!("After calibration:");
-    for (i, train) in updated.optical_trains.iter().enumerate() {
-        let s = &train.scanner;
+    let n2 = again.optical_train_count().map_err(|e| e.to_string())?;
+    for i in 0..n2 {
+        let s = again.get_scanner(i).map_err(|e| e.to_string())?;
         println!(
             "  Train {}  offset x={:?}, y={:?}",
             i + 1,
@@ -130,6 +121,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     println!();
+
+    let _ = std::fs::remove_file(&out_path);
 
     if failures.is_empty() {
         println!("PASS");

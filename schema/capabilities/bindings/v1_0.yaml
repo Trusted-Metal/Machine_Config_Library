@@ -1,0 +1,5 @@
+# HDF5 File_Version 1.0 — use existing MachineConfigReader/Writer mapping.
+file_version: "1.0"
+description: Stable facade backed by current reader/writer (canonical JSON field names).
+backend: reader_writer
+default_supported: true

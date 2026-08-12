@@ -1,0 +1,190 @@
+# Stable facade models — field names are frozen for File_Version-agnostic apps.
+# Each node may carry `extra` for additional attributes.
+# Aligns with canonical JSON / nodejs/src/models.ts.
+
+models:
+  Meta:
+    extra: true
+    fields:
+      - { id: schema_version, type: string, nullable: false }
+      - { id: machine_name, type: string, nullable: false }
+      - { id: manufacturer, type: string, nullable: false }
+      - { id: model, type: string, nullable: false }
+      - { id: serial_number, type: string, nullable: false }
+      - { id: file_version, type: string, nullable: false }
+      - { id: export_date, type: string, nullable: false }
+      - { id: configuration_hash, type: string, nullable: false }
+
+  Machine:
+    extra: true
+    fields:
+      - { id: id, type: string, nullable: true }
+      - { id: machine_name, type: string, nullable: false }
+      - { id: manufacturer, type: string, nullable: false }
+      - { id: model, type: string, nullable: false }
+      - { id: serial_number, type: string, nullable: false }
+      - { id: build_plate_x, type: number, nullable: true }
+      - { id: build_plate_x_unit, type: string, nullable: true }
+      - { id: build_plate_y, type: number, nullable: true }
+      - { id: build_plate_y_unit, type: string, nullable: true }
+      - { id: build_plate_z, type: number, nullable: true }
+      - { id: build_plate_z_unit, type: string, nullable: true }
+      - { id: build_plate_radius, type: number, nullable: true }
+      - { id: build_plate_radius_unit, type: string, nullable: true }
+      - { id: gas_flow_direction, type: string, nullable: true }
+      - { id: recoat_direction, type: string, nullable: true }
+
+  AxisConfig:
+    extra: true
+    fields:
+      - { id: actual_bit_resolution, type: number, nullable: true }
+      - { id: actual_bit_resolution_unit, type: string, nullable: true }
+      - { id: commanded_bit_resolution, type: number, nullable: true }
+      - { id: commanded_bit_resolution_unit, type: string, nullable: true }
+      - { id: control_type, type: string, nullable: true }
+      - { id: range_of_motion, type: number, nullable: true }
+      - { id: range_of_motion_unit, type: string, nullable: true }
+      - { id: smoothing_kernel, type: string, nullable: true }
+      - { id: smoothing_parameters, type: number, nullable: true }
+      - { id: tuning_parameters, type: string, nullable: true }
+      - { id: tuning_type, type: string, nullable: true }
+
+  Scanner:
+    extra: true
+    fields:
+      - { id: manufacturer, type: string, nullable: false }
+      - { id: model, type: string, nullable: false }
+      - { id: serial_number, type: string, nullable: false }
+      - { id: working_distance, type: number, nullable: true }
+      - { id: working_distance_unit, type: string, nullable: true }
+      - { id: scan_field_x, type: number, nullable: true }
+      - { id: scan_field_x_unit, type: string, nullable: true }
+      - { id: scan_field_y, type: number, nullable: true }
+      - { id: scan_field_y_unit, type: string, nullable: true }
+      - { id: scan_field_z, type: number, nullable: true }
+      - { id: scan_field_z_unit, type: string, nullable: true }
+      - { id: scan_head_offset_x, type: number, nullable: true }
+      - { id: scan_head_offset_x_unit, type: string, nullable: true }
+      - { id: scan_head_offset_y, type: number, nullable: true }
+      - { id: scan_head_offset_y_unit, type: string, nullable: true }
+      - { id: scan_head_offset_z, type: number, nullable: true }
+      - { id: scan_head_offset_z_unit, type: string, nullable: true }
+      - { id: scan_head_rotation, type: number, nullable: true }
+      - { id: scan_head_rotation_unit, type: string, nullable: true }
+      - { id: axis_configuration, type: string, nullable: true }
+      - { id: x_axis, type: AxisConfig, nullable: true }
+      - { id: y_axis, type: AxisConfig, nullable: true }
+      - { id: z_axis, type: AxisConfig, nullable: true }
+      - { id: focus, type: AxisConfig, nullable: true }
+
+  LightSource:
+    extra: true
+    fields:
+      - { id: manufacturer, type: string, nullable: false }
+      - { id: model, type: string, nullable: false }
+      - { id: serial_number, type: string, nullable: false }
+      - { id: wavelength, type: number, nullable: true }
+      - { id: wavelength_unit, type: string, nullable: true }
+      - { id: power_max_nominal, type: number, nullable: true }
+      - { id: power_max_nominal_unit, type: string, nullable: true }
+      - { id: power_max_actual, type: number, nullable: true }
+      - { id: power_max_actual_unit, type: string, nullable: true }
+      - { id: power_min_actual, type: number, nullable: true }
+      - { id: power_min_actual_unit, type: string, nullable: true }
+      - { id: power_min_nominal, type: number, nullable: true }
+      - { id: power_min_nominal_unit, type: string, nullable: true }
+      - { id: power_bit_resolution, type: number, nullable: true }
+      - { id: power_bit_resolution_unit, type: string, nullable: true }
+      - { id: watts_to_volts_algorithm, type: string, nullable: true }
+      - { id: watts_to_volts_params, type: string, nullable: true }
+
+  Collimator:
+    extra: true
+    fields:
+      - { id: manufacturer, type: string, nullable: false }
+      - { id: model, type: string, nullable: false }
+      - { id: serial_number, type: string, nullable: false }
+      - { id: focal_length, type: number, nullable: true }
+      - { id: focal_length_unit, type: string, nullable: true }
+
+  ScannerCard:
+    extra: true
+    fields:
+      - { id: manufacturer, type: string, nullable: false }
+      - { id: model, type: string, nullable: false }
+      - { id: serial_number, type: string, nullable: false }
+      - { id: communication_protocol, type: string, nullable: true }
+      - { id: sample_period, type: number, nullable: true }
+      - { id: sample_period_unit, type: string, nullable: true }
+
+  ClearBox:
+    extra: true
+    fields:
+      - { id: ip_address, type: string, nullable: false }
+      - { id: serial_number, type: string, nullable: true }
+      - { id: data_port, type: number, nullable: true }
+      - { id: server_port, type: number, nullable: true }
+      - { id: actual_timing_offset, type: number, nullable: true }
+      - { id: commanded_timing_offset, type: number, nullable: true }
+      - { id: manufacturer, type: string, nullable: true }
+      - { id: model, type: string, nullable: true }
+      - { id: output_path, type: string, nullable: true }
+      - { id: selected_camera, type: string, nullable: true }
+      - { id: custom_video_format, type: string, nullable: true }
+      - { id: video_output, type: string, nullable: true }
+      - { id: show_console, type: boolean, nullable: true }
+      - { id: software_trigger_delay, type: number, nullable: true }
+      - { id: volts_to_watts_algorithm, type: string, nullable: true }
+      - { id: volts_to_watts_params, type: string, nullable: true }
+      - { id: correction_grid_domain_shape, type: string, nullable: true }
+      - { id: inverse_grid_domain_shape, type: string, nullable: true }
+
+  ScanFieldCorrectionFile:
+    extra: true
+    fields:
+      - { id: document_name, type: string, nullable: false }
+      - { id: document_id, type: string, nullable: false }
+      - { id: file_size, type: number, nullable: false }
+      - { id: valid_as_of_date, type: string, nullable: false }
+      - { id: document_created_at, type: string, nullable: true }
+      - { id: document_type, type: string, nullable: true }
+      - { id: original_uri, type: string, nullable: true }
+
+  OpticalTrain:
+    extra: true
+    fields:
+      - { id: train_id, type: string, nullable: false }
+      - { id: id, type: string, nullable: true }
+      - { id: beam_profile_type, type: string, nullable: true }
+      - { id: beam_waist_definition, type: string, nullable: true }
+      - { id: beam_waist_major, type: number, nullable: true }
+      - { id: beam_waist_major_unit, type: string, nullable: true }
+      - { id: beam_waist_minor, type: number, nullable: true }
+      - { id: beam_waist_minor_unit, type: string, nullable: true }
+      - { id: beam_waist_offset_z, type: number, nullable: true }
+      - { id: beam_waist_offset_z_unit, type: string, nullable: true }
+      - { id: build_plane_offset_major, type: number, nullable: true }
+      - { id: build_plane_offset_major_unit, type: string, nullable: true }
+      - { id: build_plane_offset_minor, type: number, nullable: true }
+      - { id: build_plane_offset_minor_unit, type: string, nullable: true }
+      - { id: collimator_focal_length, type: number, nullable: true }
+      - { id: collimator_focal_length_unit, type: string, nullable: true }
+      - { id: m2_major, type: number, nullable: true }
+      - { id: m2_minor, type: number, nullable: true }
+      - { id: major_axis_angle, type: number, nullable: true }
+      - { id: major_axis_angle_unit, type: string, nullable: true }
+      - { id: rayleigh_length_major, type: number, nullable: true }
+      - { id: rayleigh_length_major_unit, type: string, nullable: true }
+      - { id: rayleigh_length_minor, type: number, nullable: true }
+      - { id: rayleigh_length_minor_unit, type: string, nullable: true }
+      - { id: scanner_number, type: string, nullable: true }
+      - { id: thermal_lensing_passed, type: boolean, nullable: true }
+      - { id: thermal_lensing_focal_plane_shift, type: number, nullable: true }
+      - { id: thermal_lensing_focal_plane_shift_unit, type: string, nullable: true }
+      - { id: thermal_lensing_threshold, type: number, nullable: true }
+      - { id: thermal_lensing_threshold_unit, type: string, nullable: true }
+
+  Opcua:
+    extra: true
+    fields:
+      - { id: triggers_enabled, type: boolean, nullable: true }

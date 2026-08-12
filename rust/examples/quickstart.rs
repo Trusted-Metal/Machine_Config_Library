@@ -4,19 +4,13 @@
 //
 //   cargo run --example quickstart --manifest-path rust/Cargo.toml
 //
-// Demonstrates the six essential operations:
-//   1. Open an HDF5 machine config file
-//   2. Read scalar fields (machine name, optical train count, working distance)
-//   3. Inspect binary data shape (ClearBox correction grid)
-//   4. Write the config to a temporary HDF5 file
-//   5. Read the temporary file back
-//   6. Assert round-trip fidelity and print PASS / FAIL
+// Opens examples/dummy_2train.h5 via the stable model facade.
 
 use std::path::PathBuf;
 use std::process;
 
+use machine_config::capabilities::{open_machine_config, SetMode};
 use machine_config::reader::MachineConfigReader;
-use machine_config::writer::MachineConfigWriter;
 
 fn main() {
     match run() {
@@ -29,95 +23,77 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // -------------------------------------------------------------------------
-    // Resolve the fixture path relative to the repo root (CARGO_MANIFEST_DIR
-    // is rust/, so we go one level up to reach the repo root).
-    // -------------------------------------------------------------------------
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("CARGO_MANIFEST_DIR has no parent")
         .to_path_buf();
-    let fixture = repo_root.join("fixtures").join("reference_config.h5");
+    let dummy = repo_root.join("examples").join("dummy_2train.h5");
 
-    if !fixture.exists() {
-        eprintln!("Fixture not found: {}", fixture.display());
-        eprintln!("Run from the repo root and ensure fixtures/ is present.");
+    if !dummy.exists() {
+        eprintln!("Dummy file not found: {}", dummy.display());
+        eprintln!("Run: python examples/generate_dummy.py");
         process::exit(1);
     }
 
-    // -------------------------------------------------------------------------
-    // Step 1 & 2 — Open the file and read scalar fields
-    // -------------------------------------------------------------------------
-    let reader = MachineConfigReader::open(&fixture)?;
-    let config = reader.parse()?;
+    let mut file = open_machine_config(&dummy).map_err(|e| e.to_string())?;
 
     println!("=== Machine Config Quickstart ===\n");
-    println!("Machine name   : {}", config.meta.machine_name);
-    println!("Optical trains : {}", config.optical_trains.len());
+    println!("File version   : {}", file.file_version());
+    let meta = file.get_meta().map_err(|e| e.to_string())?;
+    println!("Machine name   : {}", meta.machine_name);
+    let n = file.optical_train_count().map_err(|e| e.to_string())?;
+    println!("Optical trains : {n}");
 
-    let train0 = &config.optical_trains[0];
-    let wd = train0.scanner.working_distance;
-    let wd_unit = train0.scanner.working_distance_unit.as_deref().unwrap_or("");
-    println!("Working dist   : {} {}   (train 0)", wd.unwrap_or(0.0), wd_unit);
+    for i in 0..n {
+        let scanner = file.get_scanner(i).map_err(|e| e.to_string())?;
+        println!(
+            "  Train {i}  wd={:?} {}  offset x={:?}, y={:?}",
+            scanner.working_distance,
+            scanner.working_distance_unit.as_deref().unwrap_or(""),
+            scanner.scan_head_offset_x,
+            scanner.scan_head_offset_y,
+        );
+        match file.get_clearbox(i) {
+            Ok(Some(_)) => println!("           clearbox: present"),
+            Ok(None) => println!("           optionalComponents: none"),
+            Err(e) => println!("           clearbox: {e}"),
+        }
+    }
 
-    // -------------------------------------------------------------------------
-    // Step 3 — Binary data shape (correction grid)
-    // -------------------------------------------------------------------------
-    let correction = reader.get_correction_data(0)?;
-    println!(
-        "Correction grid: {:?}   (train 0)",
-        correction.shape
-    );
+    let scanner0 = file.get_scanner(0).map_err(|e| e.to_string())?;
+    let correction = MachineConfigReader::open(&dummy)?.get_correction_data(0)?;
+    println!("Correction grid: {:?}   (train 0)", correction.shape);
 
-    // -------------------------------------------------------------------------
-    // Step 4 — Write to a temporary file
-    // -------------------------------------------------------------------------
     println!();
+    file.set_scanner(0, scanner0.clone(), SetMode::Merge)
+        .map_err(|e| e.to_string())?;
     let tmp_file = tempfile::NamedTempFile::new()?;
     let tmp_path = tmp_file.path().with_extension("h5");
-    // Release the handle so the writer can create the file at that path.
     drop(tmp_file);
-
-    MachineConfigWriter::new(&config).write(&tmp_path)?;
+    file.save(Some(&tmp_path)).map_err(|e| e.to_string())?;
     println!(
         "Written to     : {}",
         tmp_path.file_name().unwrap_or_default().to_string_lossy()
     );
 
-    // -------------------------------------------------------------------------
-    // Step 5 — Read the temporary file back
-    // -------------------------------------------------------------------------
-    let config2 = MachineConfigReader::open(&tmp_path)?.parse()?;
-
-    // -------------------------------------------------------------------------
-    // Step 6 — Assert round-trip fidelity
-    // -------------------------------------------------------------------------
+    let again = open_machine_config(&tmp_path).map_err(|e| e.to_string())?;
     let mut failures: Vec<String> = Vec::new();
-
-    if config2.meta.machine_name != config.meta.machine_name {
-        failures.push(format!(
-            "  machine_name: expected {:?}, got {:?}",
-            config.meta.machine_name, config2.meta.machine_name
-        ));
+    let meta2 = again.get_meta().map_err(|e| e.to_string())?;
+    if meta2.machine_name != meta.machine_name {
+        failures.push("  machine_name mismatch after round-trip".into());
     }
-
-    if config2.optical_trains.len() != config.optical_trains.len() {
-        failures.push(format!(
-            "  train_count: expected {}, got {}",
-            config.optical_trains.len(),
-            config2.optical_trains.len()
-        ));
+    let n2 = again.optical_train_count().map_err(|e| e.to_string())?;
+    if n2 != n {
+        failures.push(format!("  train_count: expected {n}, got {n2}"));
     }
-
-    let wd2 = config2.optical_trains[0].scanner.working_distance;
-    if wd2 != wd {
+    let wd2 = again.get_scanner(0).map_err(|e| e.to_string())?;
+    if wd2.working_distance != scanner0.working_distance {
         failures.push(format!(
             "  working_distance: expected {:?}, got {:?}",
-            wd, wd2
+            scanner0.working_distance, wd2.working_distance
         ));
     }
 
-    // Clean up the temp file regardless of outcome.
     let _ = std::fs::remove_file(&tmp_path);
 
     println!();
@@ -130,6 +106,5 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         process::exit(1);
     }
-
     Ok(())
 }

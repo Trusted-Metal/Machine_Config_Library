@@ -3,6 +3,7 @@
 
 pub mod adapters;
 pub mod builder;
+pub mod capabilities;
 pub mod error;
 pub mod models;
 pub mod reader;

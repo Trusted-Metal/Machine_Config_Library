@@ -6,16 +6,10 @@
 //   cpp/build/quickstart          (Linux)
 //   cpp\build\Release\quickstart  (Windows)
 //
-// Demonstrates the six essential operations:
-//   1. Open an HDF5 machine config file
-//   2. Read scalar fields (machine name, train count, working distance)
-//   3. Inspect binary data shape (ClearBox correction grid)
-//   4. Write the config to a temporary HDF5 file
-//   5. Read the temporary file back
-//   6. Assert round-trip fidelity and print PASS / FAIL
+// Opens examples/dummy_2train.h5 via the stable model facade.
 
+#include "machine_config/capabilities.hpp"
 #include "machine_config/reader.hpp"
-#include "machine_config/writer.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -23,11 +17,13 @@
 #include <string>
 #include <vector>
 
-#ifndef FIXTURES_DIR
-#  error "FIXTURES_DIR must be defined by CMakeLists.txt"
+#ifndef EXAMPLES_DIR
+#  error "EXAMPLES_DIR must be defined by CMakeLists.txt"
 #endif
 
-using namespace machine_config;
+using machine_config::MachineConfigReader;
+using machine_config::capabilities::MachineConfigFileV10;
+using machine_config::capabilities::SetMode;
 
 static std::string fmtOpt(std::optional<double> v) {
     if (!v) return "null";
@@ -37,71 +33,97 @@ static std::string fmtOpt(std::optional<double> v) {
 }
 
 int main() {
-    const std::filesystem::path fixture{FIXTURES_DIR "/reference_config.h5"};
+    const std::filesystem::path dummy{EXAMPLES_DIR "/dummy_2train.h5"};
 
-    if (!std::filesystem::exists(fixture)) {
-        std::cerr << "Fixture not found: " << fixture
-                  << "\nEnsure fixtures/ is present.\n";
+    if (!std::filesystem::exists(dummy)) {
+        std::cerr << "Dummy file not found: " << dummy
+                  << "\nRun: python examples/generate_dummy.py\n";
         return 1;
     }
 
     try {
-        // Step 1 & 2 — Open and read scalar fields
-        MachineConfigReader reader{fixture};
-        auto config = reader.parse();
+        auto opened = MachineConfigFileV10::open(dummy);
+        if (!opened.ok()) {
+            std::cerr << "open failed: " << opened.errorMessage() << "\n";
+            return 1;
+        }
+        auto file = opened.value();
 
         std::cout << "=== Machine Config Quickstart ===\n\n";
-        std::cout << "Machine name   : " << config.meta.machine_name << "\n";
-        std::cout << "Optical trains : " << config.optical_trains.size() << "\n";
+        std::cout << "File version   : " << file->fileVersion() << "\n";
+        auto meta = file->getMeta();
+        std::cout << "Machine name   : " << meta.machine_name << "\n";
+        std::cout << "Optical trains : " << file->opticalTrainCount() << "\n";
 
-        const auto& train0 = config.optical_trains[0];
-        std::cout << "Working dist   : "
-                  << fmtOpt(train0.scanner.working_distance) << " "
-                  << train0.scanner.working_distance_unit.value_or("") << "   (train 0)\n";
+        for (std::size_t i = 0; i < file->opticalTrainCount(); ++i) {
+            auto sc = file->getScanner(i);
+            if (!sc.ok()) {
+                std::cerr << sc.errorMessage() << "\n";
+                return 1;
+            }
+            std::cout << "  Train " << i << "  wd=" << fmtOpt(sc.value().working_distance)
+                      << " " << sc.value().working_distance_unit.value_or("")
+                      << "  offset x=" << fmtOpt(sc.value().scan_head_offset_x)
+                      << ", y=" << fmtOpt(sc.value().scan_head_offset_y) << "\n";
+            if (file->hasOptionalComponents(i)) {
+                auto cb = file->getClearbox(i);
+                std::cout << "           clearbox: " << (cb.ok() ? "present" : cb.errorCode())
+                          << "\n";
+            } else {
+                std::cout << "           optionalComponents: none\n";
+            }
+        }
 
-        // Step 3 — Binary data shape
+        auto scanner = file->getScanner(0);
+        if (!scanner.ok()) {
+            std::cerr << scanner.errorMessage() << "\n";
+            return 1;
+        }
+
+        MachineConfigReader reader{dummy.string()};
         auto cd = reader.getCorrectionData(0);
-        std::cout << "Correction grid: ["
-                  << cd.shape[0] << ", " << cd.shape[1] << ", " << cd.shape[2]
-                  << "]   (train 0)\n\n";
+        std::cout << "Correction grid: [" << cd.shape[0] << ", " << cd.shape[1] << ", "
+                  << cd.shape[2] << "]   (train 0)\n\n";
 
-        // Step 4 — Write to a temporary file
         auto tmp = std::filesystem::temp_directory_path() / "mc_quickstart_tmp.h5";
-        MachineConfigWriter{config}.write(tmp);
+        auto setR = file->setScanner(0, scanner.value(), SetMode::Merge);
+        if (!setR.ok()) {
+            std::cerr << "setScanner failed: " << setR.errorMessage() << "\n";
+            return 1;
+        }
+        std::string out = tmp.string();
+        auto saved = file->save(&out);
+        if (!saved.ok()) {
+            std::cerr << "save failed: " << saved.errorMessage() << "\n";
+            return 1;
+        }
         std::cout << "Written to     : " << tmp.filename().string() << "\n\n";
 
-        // Step 5 — Read back
-        auto config2 = MachineConfigReader{tmp}.parse();
-
-        // Step 6 — Assert round-trip fidelity
+        auto again = MachineConfigFileV10::open(tmp);
+        if (!again.ok()) {
+            std::cerr << again.errorMessage() << "\n";
+            return 1;
+        }
         std::vector<std::string> failures;
+        if (again.value()->getMeta().machine_name != meta.machine_name)
+            failures.push_back("  machine_name mismatch after round-trip");
+        if (again.value()->opticalTrainCount() != file->opticalTrainCount())
+            failures.push_back("  train_count mismatch after round-trip");
+        auto wd2 = again.value()->getScanner(0);
+        if (!wd2.ok() || wd2.value().working_distance != scanner.value().working_distance)
+            failures.push_back("  working_distance mismatch after round-trip");
 
-        if (config2.meta.machine_name != config.meta.machine_name)
-            failures.push_back("  machine_name: expected \"" + config.meta.machine_name +
-                               "\", got \"" + config2.meta.machine_name + "\"");
-
-        if (config2.optical_trains.size() != config.optical_trains.size())
-            failures.push_back("  train_count: expected " +
-                               std::to_string(config.optical_trains.size()) +
-                               ", got " + std::to_string(config2.optical_trains.size()));
-
-        auto wd2 = config2.optical_trains[0].scanner.working_distance;
-        if (wd2 != train0.scanner.working_distance)
-            failures.push_back("  working_distance: expected " +
-                               fmtOpt(train0.scanner.working_distance) +
-                               ", got " + fmtOpt(wd2));
-
+        file->close();
+        again.value()->close();
         std::filesystem::remove(tmp);
 
         if (!failures.empty()) {
             std::cout << "FAIL\n";
-            for (const auto& msg : failures)
-                std::cout << msg << "\n";
+            for (const auto& msg : failures) std::cout << msg << "\n";
             return 1;
         }
         std::cout << "PASS\n";
         return 0;
-
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;

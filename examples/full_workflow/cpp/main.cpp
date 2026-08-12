@@ -6,13 +6,10 @@
 //   cpp/build/full_workflow          (Linux)
 //   cpp\build\Release\full_workflow  (Windows)
 //
-// Scenario: a field calibration measured new scanner-head positions for both
-// optical trains.  Load the current machine config, apply the updated offsets,
-// write the modified config to a new file, and verify the changes persisted
-// alongside the binary correction data.
+// Load examples/dummy_2train.h5, apply new scanner offsets via setScanner(Merge).
 
+#include "machine_config/capabilities.hpp"
 #include "machine_config/reader.hpp"
-#include "machine_config/writer.hpp"
 
 #include <array>
 #include <filesystem>
@@ -22,11 +19,13 @@
 #include <string>
 #include <vector>
 
-#ifndef FIXTURES_DIR
-#  error "FIXTURES_DIR must be defined by CMakeLists.txt"
+#ifndef EXAMPLES_DIR
+#  error "EXAMPLES_DIR must be defined by CMakeLists.txt"
 #endif
 
-using namespace machine_config;
+using machine_config::MachineConfigReader;
+using machine_config::capabilities::MachineConfigFileV10;
+using machine_config::capabilities::SetMode;
 
 static std::string fmtOpt(std::optional<double> v) {
     if (!v) return "null";
@@ -36,66 +35,88 @@ static std::string fmtOpt(std::optional<double> v) {
 }
 
 int main() {
-    const std::filesystem::path fixture{FIXTURES_DIR "/reference_config.h5"};
+    const std::filesystem::path dummy{EXAMPLES_DIR "/dummy_2train.h5"};
 
-    if (!std::filesystem::exists(fixture)) {
-        std::cerr << "Fixture not found: " << fixture
-                  << "\nEnsure fixtures/ is present.\n";
+    if (!std::filesystem::exists(dummy)) {
+        std::cerr << "Dummy file not found: " << dummy
+                  << "\nRun: python examples/generate_dummy.py\n";
         return 1;
     }
 
     try {
-        // ---------------------------------------------------------------------
-        // 1. Print pre-calibration summary
-        // ---------------------------------------------------------------------
-        MachineConfigReader reader{fixture};
-        auto cfg = reader.parse();
+        auto opened = MachineConfigFileV10::open(dummy);
+        if (!opened.ok()) {
+            std::cerr << "open failed: " << opened.errorMessage() << "\n";
+            return 1;
+        }
+        auto file = opened.value();
 
         std::cout << "=== Full Workflow: Calibration Adjustment ===\n\n";
-        std::cout << "Machine : " << cfg.meta.machine_name << "\n";
-        std::cout << "Trains  : " << cfg.optical_trains.size() << "\n\n";
+        std::cout << "Machine : " << file->getMeta().machine_name << "\n";
+        std::cout << "Trains  : " << file->opticalTrainCount() << "\n\n";
         std::cout << "Before calibration:\n";
 
-        for (size_t i = 0; i < cfg.optical_trains.size(); ++i) {
-            const auto& s = cfg.optical_trains[i].scanner;
+        MachineConfigReader reader{dummy.string()};
+        for (std::size_t i = 0; i < file->opticalTrainCount(); ++i) {
+            auto s = file->getScanner(i);
+            if (!s.ok()) {
+                std::cerr << s.errorMessage() << "\n";
+                return 1;
+            }
             std::cout << "  Train " << (i + 1)
-                      << "  offset x=" << fmtOpt(s.scan_head_offset_x)
-                      << ", y=" << fmtOpt(s.scan_head_offset_y) << "\n";
+                      << "  offset x=" << fmtOpt(s.value().scan_head_offset_x)
+                      << ", y=" << fmtOpt(s.value().scan_head_offset_y) << "\n";
             auto cd = reader.getCorrectionData(i);
-            std::cout << "           correction grid "
-                      << cd.shape[0] << "x"
-                      << cd.shape[1] << "x"
-                      << cd.shape[2] << "\n";
+            std::cout << "           correction grid " << cd.shape[0] << "x"
+                      << cd.shape[1] << "x" << cd.shape[2] << "\n";
         }
         std::cout << "\n";
 
-        // ---------------------------------------------------------------------
-        // 2. Apply new scanner offsets (post-calibration values)
-        // ---------------------------------------------------------------------
         const std::array<std::pair<double, double>, 2> newOffsets{{{-91.5, 24.0}, {91.5, -24.0}}};
-        for (size_t i = 0; i < newOffsets.size(); ++i) {
-            cfg.optical_trains[i].scanner.scan_head_offset_x = newOffsets[i].first;
-            cfg.optical_trains[i].scanner.scan_head_offset_y = newOffsets[i].second;
+        for (std::size_t i = 0; i < newOffsets.size(); ++i) {
+            auto sc = file->getScanner(i);
+            if (!sc.ok()) {
+                std::cerr << sc.errorMessage() << "\n";
+                return 1;
+            }
+            auto patched = sc.value();
+            patched.scan_head_offset_x = newOffsets[i].first;
+            patched.scan_head_offset_y = newOffsets[i].second;
+            auto setR = file->setScanner(i, patched, SetMode::Merge);
+            if (!setR.ok()) {
+                std::cerr << setR.errorMessage() << "\n";
+                return 1;
+            }
         }
 
-        // ---------------------------------------------------------------------
-        // 3. Write updated config
-        // ---------------------------------------------------------------------
         auto tmp = std::filesystem::temp_directory_path() / "mc_full_workflow_tmp.h5";
-        MachineConfigWriter{cfg}.write(tmp);
+        std::string out = tmp.string();
+        auto saved = file->save(&out);
+        if (!saved.ok()) {
+            std::cerr << "save failed: " << saved.errorMessage() << "\n";
+            return 1;
+        }
+        file->close();
         std::cout << "Written to : " << tmp.filename().string() << "\n\n";
 
-        // ---------------------------------------------------------------------
-        // 4. Read back and verify
-        // ---------------------------------------------------------------------
-        MachineConfigReader reader2{tmp};
-        auto updated = reader2.parse();
+        auto again = MachineConfigFileV10::open(tmp);
+        if (!again.ok()) {
+            std::cerr << again.errorMessage() << "\n";
+            return 1;
+        }
+        auto updated = again.value();
+        MachineConfigReader reader2{tmp.string()};
         std::vector<std::string> failures;
 
-        for (size_t i = 0; i < newOffsets.size(); ++i) {
+        for (std::size_t i = 0; i < newOffsets.size(); ++i) {
             double ex = newOffsets[i].first, ey = newOffsets[i].second;
-            auto got_x = updated.optical_trains[i].scanner.scan_head_offset_x;
-            auto got_y = updated.optical_trains[i].scanner.scan_head_offset_y;
+            auto s = updated->getScanner(i);
+            if (!s.ok()) {
+                failures.push_back("  train" + std::to_string(i + 1) + ": " + s.errorMessage());
+                continue;
+            }
+            auto got_x = s.value().scan_head_offset_x;
+            auto got_y = s.value().scan_head_offset_y;
             if (!got_x || *got_x != ex)
                 failures.push_back("  train" + std::to_string(i + 1) +
                                    " offset_x: expected " + std::to_string(ex) +
@@ -106,39 +127,35 @@ int main() {
                                    ", got " + fmtOpt(got_y));
             try {
                 auto cd = reader2.getCorrectionData(i);
-                const std::array<size_t, 3> expected{257, 257, 2};
-                if (cd.shape != expected)
+                if (cd.shape[0] != 257 || cd.shape[1] != 257 || cd.shape[2] != 2)
                     failures.push_back("  train" + std::to_string(i + 1) +
-                                       " correction shape: expected {257,257,2}, got {" +
-                                       std::to_string(cd.shape[0]) + "," +
-                                       std::to_string(cd.shape[1]) + "," +
-                                       std::to_string(cd.shape[2]) + "}");
+                                       " correction shape mismatch");
             } catch (const std::exception& e) {
                 failures.push_back("  train" + std::to_string(i + 1) +
                                    " correction read error: " + e.what());
             }
         }
 
-        std::filesystem::remove(tmp);
-
         std::cout << "After calibration:\n";
-        for (size_t i = 0; i < updated.optical_trains.size(); ++i) {
-            const auto& s = updated.optical_trains[i].scanner;
+        for (std::size_t i = 0; i < updated->opticalTrainCount(); ++i) {
+            auto s = updated->getScanner(i);
+            if (!s.ok()) continue;
             std::cout << "  Train " << (i + 1)
-                      << "  offset x=" << fmtOpt(s.scan_head_offset_x)
-                      << ", y=" << fmtOpt(s.scan_head_offset_y) << "\n";
+                      << "  offset x=" << fmtOpt(s.value().scan_head_offset_x)
+                      << ", y=" << fmtOpt(s.value().scan_head_offset_y) << "\n";
         }
         std::cout << "\n";
 
+        updated->close();
+        std::filesystem::remove(tmp);
+
         if (!failures.empty()) {
             std::cout << "FAIL\n";
-            for (const auto& msg : failures)
-                std::cout << msg << "\n";
+            for (const auto& msg : failures) std::cout << msg << "\n";
             return 1;
         }
         std::cout << "PASS\n";
         return 0;
-
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;

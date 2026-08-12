@@ -21,9 +21,28 @@ It has no system dependencies — `cargo build` compiles `libhdf5` from source o
 - [Quickstart example](#quickstart-example)
 - [Full workflow example](#full-workflow-example)
 - [Running the Rust test suite](#running-the-rust-test-suite)
+- [Capability API (stable model facade)](#capability-api-stable-model-facade)
 
 > Use cases 3, 5, and 7 (`config_from_dict`, `ConfigEditor`, `YamlConfigBuilder`) are
 > Python-only conveniences with no Rust port.
+
+---
+
+## Capability API (stable model facade)
+
+Preferred for applications. Index-based full-model get/set with `SetMode::Merge` / `Replace`:
+
+```rust
+use machine_config::capabilities::{open_machine_config, SetMode};
+
+let mut file = open_machine_config("machine.h5")?;
+let mut scanner = file.get_scanner(0)?;
+scanner.working_distance = Some(680.0);
+file.set_scanner(0, scanner, SetMode::Merge)?;
+file.save(Some(std::path::Path::new("out.h5")))?;
+```
+
+See [USAGE.md](../USAGE.md) and `schema/capabilities/`.
 
 ---
 
@@ -282,9 +301,12 @@ Expected output:
 ```
 === Machine Config Quickstart ===
 
-Machine name   : TM-LPBF-02: AconityMIDI+_OG
+Machine name   : ExampleDummy-2Train
 Optical trains : 2
-Working dist   : 670 mm   (train 0)
+  Train 0  wd=Some(670.0) mm  offset x=Some(-87.5), y=Some(23.5)
+           clearbox: present
+  Train 1  wd=Some(670.0) mm  offset x=Some(87.5), y=Some(-23.5)
+           clearbox: present
 Correction grid: [257, 257, 2]   (train 0)
 
 Written to     : <tmp>.h5
@@ -313,13 +335,13 @@ Expected output:
 ```
 === Full Workflow: Calibration Adjustment ===
 
-Machine : TM-LPBF-02: AconityMIDI+_OG
+Machine : ExampleDummy-2Train
 Trains  : 2
 
 Before calibration:
   Train 1  offset x=Some(-87.5), y=Some(23.5)
            correction grid [257, 257, 2]
-  Train 2  offset x=Some(86.074), y=Some(-21.695)
+  Train 2  offset x=Some(87.5), y=Some(-23.5)
            correction grid [257, 257, 2]
 
 Written to : <tmp>.h5
