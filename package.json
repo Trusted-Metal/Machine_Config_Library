@@ -19,6 +19,10 @@
     "@semantic-release/npm": "^13.1.5",
     "@semantic-release/release-notes-generator": "^12.0.0",
     "husky": "^9.0.0",
+    "npm": "file:tooling/npm-cli-stub",
     "semantic-release": "^25.0.8"
+  },
+  "overrides": {
+    "npm": "$npm"
   }
 }

@@ -1,0 +1,7 @@
+{
+  "name": "npm",
+  "version": "0.0.0-security-stub",
+  "private": true,
+  "description": "Stub replacing the full npm CLI package pulled in by @semantic-release/npm. Avoids vendoring npm's vulnerable bundled deps (ip-address, undici, tar, brace-expansion). semantic-release invokes the system npm on PATH via execa preferLocal fallback.",
+  "license": "UNLICENSED"
+}
