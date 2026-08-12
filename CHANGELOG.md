@@ -1,3 +1,8 @@
+## 0.2.0-rc.5 (2026-08-12)
+
+* Merge pull request #17 from Trusted-Metal/SD-1677 ([44707e2](https://github.com/Trusted-Metal/Machine_Config_Library/commit/44707e2)), closes [#17](https://github.com/Trusted-Metal/Machine_Config_Library/issues/17)
+* fix: address npm vulnerabilities by preventing installation of core npm deps we arent using ([17690be](https://github.com/Trusted-Metal/Machine_Config_Library/commit/17690be))
+
 ## 0.2.0-rc.4 (2026-08-11)
 
 * Create LICENSE ([70f0ffc](https://github.com/Trusted-Metal/Machine_Config_Library/commit/70f0ffc))
