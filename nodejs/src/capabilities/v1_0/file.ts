@@ -129,7 +129,13 @@ export class MachineConfigFileV1_0 implements MachineConfigFile {
     ): Result<void, CapabilityError> => {
       this.assertOpen();
       const train = getTrain();
-      train[prop] = applySetMode(train[prop] as Json, model as Json, mode);
+      const updated = applySetMode(train[prop] as Json, model as Json, mode);
+      switch (prop) {
+        case 'scanner': train['scanner'] = updated; break;
+        case 'light_source': train['light_source'] = updated; break;
+        case 'collimator': train['collimator'] = updated; break;
+        case 'scanner_card': train['scanner_card'] = updated; break;
+      }
       return ok(undefined);
     };
 

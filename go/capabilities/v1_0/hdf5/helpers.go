@@ -2,6 +2,7 @@ package hdf5
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -88,7 +89,7 @@ func readIntAttr(g *h5c.Group, key string) (*int, error) {
 		if err != nil {
 			return nil, err
 		}
-		if strconv.IntSize == 32 && (iv < -(1<<31) || iv > (1<<31)-1) {
+		if iv < math.MinInt || iv > math.MaxInt {
 			return nil, fmt.Errorf("attribute %q: integer %d out of range for int", key, iv)
 		}
 		i := int(iv)
@@ -113,7 +114,7 @@ func readIntAttr(g *h5c.Group, key string) (*int, error) {
 		if err != nil {
 			return nil, fmt.Errorf("attribute %q: non-integer string %q", key, s)
 		}
-		if strconv.IntSize == 32 && (iv < -(1<<31) || iv > (1<<31)-1) {
+		if iv < math.MinInt || iv > math.MaxInt {
 			return nil, fmt.Errorf("attribute %q: integer %q out of range for int", key, s)
 		}
 		i := int(iv)
