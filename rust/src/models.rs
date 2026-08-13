@@ -279,7 +279,6 @@ pub struct Machine {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MachineConfigMeta {
-    pub schema_version: String,
     pub machine_name: String,
     pub manufacturer: String,
     pub model: String,
@@ -472,7 +471,6 @@ mod tests {
     fn sample_config() -> MachineConfig {
         MachineConfig {
             meta: MachineConfigMeta {
-                schema_version: "v1".into(),
                 machine_name: "TM-LPBF-02: AconityMIDI+_OG".into(),
                 manufacturer: "Aconity3D".into(),
                 model: "AconityMIDI+".into(),

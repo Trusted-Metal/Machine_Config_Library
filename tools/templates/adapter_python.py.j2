@@ -2,27 +2,41 @@
 # DO NOT EDIT MANUALLY — regenerate with: python tools/generate_adapters.py
 from __future__ import annotations
 from .base import BaseAdapter
-from ..models import MachineConfig
+from . import register
 
 
+@register
 class V{{ spec.from_version | replace('.', '_') }}_to_V{{ spec.to_version | replace('.', '_') }}(BaseAdapter):
     from_version: str = "{{ spec.from_version }}"
     to_version:   str = "{{ spec.to_version }}"
 
-    def adapt(self, config: MachineConfig) -> MachineConfig:
+    def adapt(self, config: dict) -> dict:
         {% for change in spec.changes %}
         {% if change.type == 'field_add' %}
         # field_add: {{ change.field }} (path: {{ change.path }})
-        for train in config.optical_trains:
-            if not hasattr(train, "{{ change.field }}"):
-                object.__setattr__(train, "{{ change.field }}", None)
+        for train in config.get("optical_trains", []):
+            train.setdefault("{{ change.field }}", None)
         {% elif change.type == 'field_rename' %}
         # field_rename: {{ change.old_field }} -> {{ change.new_field }} (path: {{ change.path }})
-        for train in config.optical_trains:
-            object.__setattr__(train, "{{ change.new_field }}", getattr(train, "{{ change.old_field }}", None))
+        for train in config.get("optical_trains", []):
+            if "{{ change.old_field }}" in train:
+                train["{{ change.new_field }}"] = train.pop("{{ change.old_field }}")
         {% elif change.type == 'field_remove' %}
         # field_remove: {{ change.field }} dropped (path: {{ change.path }})
-        # NOTE: removing a field from a frozen dataclass requires hand-editing this adapter.
+        for train in config.get("optical_trains", []):
+            train.pop("{{ change.field }}", None)
+        {% elif change.type == 'field_move' %}
+        {% set dest_obj = change.to_path.split('.')[-1] %}
+        # field_move: {{ change.field }} ({{ change.from_path }} -> {{ change.to_path }})
+        for train in config.get("optical_trains", []):
+            if "{{ change.field }}" in train:
+                train.setdefault("{{ dest_obj }}", {})["{{ change.field }}"] = train.pop("{{ change.field }}")
+        {% elif change.type == 'field_move_rename' %}
+        {% set dest_obj = change.to_path.split('.')[-1] %}
+        # field_move_rename: {{ change.old_field }} -> {{ dest_obj }}.{{ change.new_field }} ({{ change.from_path }} -> {{ change.to_path }})
+        for train in config.get("optical_trains", []):
+            if "{{ change.old_field }}" in train:
+                train.setdefault("{{ dest_obj }}", {})["{{ change.new_field }}"] = train.pop("{{ change.old_field }}")
         {% endif %}
         {% endfor %}
         return config

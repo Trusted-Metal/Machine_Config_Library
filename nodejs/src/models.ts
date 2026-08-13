@@ -135,7 +135,6 @@ export interface ScanFieldCorrectionFile {
 // ---------------------------------------------------------------------------
 
 export interface MachineConfigMeta {
-  schema_version: string;
   machine_name: string;
   manufacturer: string;
   model: string;

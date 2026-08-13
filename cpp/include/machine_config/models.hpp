@@ -262,7 +262,6 @@ struct Machine {
 };
 
 struct MachineConfigMeta {
-    std::string schema_version;
     std::string machine_name;
     std::string manufacturer;
     std::string model;
@@ -771,13 +770,11 @@ inline void to_json(nlohmann::json& j, const MachineConfigMeta& m) {
         {"machine_name",       m.machine_name},
         {"manufacturer",       m.manufacturer},
         {"model",              m.model},
-        {"schema_version",     m.schema_version},
         {"serial_number",      m.serial_number},
     };
 }
 
 inline void from_json(const nlohmann::json& j, MachineConfigMeta& m) {
-    j.at("schema_version").get_to(m.schema_version);
     j.at("machine_name").get_to(m.machine_name);
     j.at("manufacturer").get_to(m.manufacturer);
     j.at("model").get_to(m.model);

@@ -64,6 +64,7 @@ FIXTURES: dict[str, Path] = {
     "reference":       REPO / "fixtures" / "reference_config.h5",
     "reference_opcua": REPO / "fixtures" / "reference_config_opcua.h5",
     "synthetic":       REPO / "fixtures" / "synthetic_2laser.h5",
+    "adapter_v09":     REPO / "fixtures" / "adapters" / "test" / "reference_synthetic_v0_9.h5",
 }
 
 _EXT = ".exe" if platform.system() == "Windows" else ""
@@ -614,6 +615,64 @@ def phase_binary_copy(langs: list[str], verbose: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Phase 5 — Adapter parity
+# ---------------------------------------------------------------------------
+
+def phase_adapter_parity(langs: list[str], verbose: bool) -> bool:
+    """All languages must agree on the typed output for the v0.9 adapter fixture.
+
+    Two checks per language:
+      Version stamp — meta.file_version must equal "1.0" (adapter ran).
+      Parity        — every language's JSON must match Python's (anchor).
+    """
+    print("\n=== Phase 5: Adapter Parity ===")
+
+    fixture = FIXTURES.get("adapter_v09")
+    if fixture is None or not fixture.exists():
+        print(f"{SKIP} adapter_v09 fixture not found — skipping.")
+        return True
+
+    ref_lang = _ref_lang(langs)
+    failures: list[str] = []
+    outputs: dict[str, dict] = {}
+
+    for lang in langs:
+        try:
+            outputs[lang] = _run(RUNNERS[lang](fixture))
+        except Exception as exc:
+            print(f"{FAIL} {lang}/adapter_v09: {exc}")
+            failures.append(f"{lang}/adapter_v09")
+            continue
+
+        fv = outputs[lang].get("meta", {}).get("file_version", "<missing>")
+        if fv != "1.0":
+            tag = f"{lang} file_version"
+            print(f"{FAIL} {tag}: expected '1.0', got {fv!r}")
+            failures.append(tag)
+        elif verbose:
+            print(f"{PASS} {lang} file_version == '1.0'")
+
+    if ref_lang in outputs:
+        for lang, data in outputs.items():
+            if lang == ref_lang:
+                continue
+            tag = f"{ref_lang} vs {lang} / adapter_v09"
+            diffs = _diff(outputs[ref_lang], data)
+            if diffs:
+                print(f"{FAIL} {tag}:")
+                for line in diffs:
+                    print(f"  {line}")
+                failures.append(tag)
+            elif verbose:
+                print(f"{PASS} {tag}")
+
+    if not failures:
+        n = len(langs)
+        print(f"{PASS} Adapter parity: {n} language(s) agree on v0.9 fixture output; all file_version == '1.0'.")
+    return not failures
+
+
+# ---------------------------------------------------------------------------
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -649,6 +708,11 @@ def _parse_args() -> argparse.Namespace:
         "--skip-binary-copy",
         action="store_true",
         help="Skip Phase 3.5 (binary copy round-trip).",
+    )
+    p.add_argument(
+        "--skip-adapter-parity",
+        action="store_true",
+        help="Skip Phase 5 (adapter parity).",
     )
     p.add_argument(
         "--verbose", "-v",
@@ -696,6 +760,7 @@ def main() -> None:
         ("Phase 3 (Write Interop)",   None if args.skip_write_interop   else phase_write_interop(reachable, args.verbose)),
         ("Phase 3.5 (Binary Copy)",   None if args.skip_binary_copy     else phase_binary_copy(reachable, args.verbose)),
         ("Phase 4 (Correction Hash)", None if args.skip_correction_hash else phase_correction_hash(reachable, args.verbose)),
+        ("Phase 5 (Adapter Parity)",  None if args.skip_adapter_parity  else phase_adapter_parity(reachable, args.verbose)),
     ]
 
     print()

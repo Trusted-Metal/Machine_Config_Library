@@ -6,10 +6,9 @@
   "properties": {
     "meta": {
       "type": "object",
-      "required": ["schema_version", "machine_name", "manufacturer", "model", "serial_number",
+      "required": ["machine_name", "manufacturer", "model", "serial_number",
                    "file_version", "export_date", "configuration_hash"],
       "properties": {
-        "schema_version":      { "type": "string" },
         "machine_name":        { "type": "string" },
         "manufacturer":        { "type": "string" },
         "model":               { "type": "string" },

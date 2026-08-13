@@ -3,6 +3,7 @@
 // Each sub-step builds on the previous; stubs are filled in as each step completes.
 
 #include "machine_config/models.hpp"
+#include "machine_config/adapters/registry.hpp"
 
 #include <highfive/H5File.hpp>
 
@@ -16,8 +17,7 @@
 
 namespace machine_config {
 
-static constexpr const char* SCHEMA_VERSION        = "v1";
-static constexpr const char* EXPECTED_FILE_VERSION = "1.0";
+static constexpr const char* CURRENT_VERSION = "1.0";
 
 // ---------------------------------------------------------------------------
 // Attribute-reading helpers
@@ -205,7 +205,6 @@ public:
     // are left empty; use parseWithBinary() when those are needed (§4.11).
     MachineConfig parse() const {
         HighFive::File f(path_.string(), HighFive::File::ReadOnly);
-        checkFileVersion(f);
         return parseInner(f);
     }
 
@@ -213,7 +212,6 @@ public:
     // Required for copy-hdf5 (§4.15) and any caller needing complete fidelity.
     MachineConfig parseWithBinary() const {
         HighFive::File f(path_.string(), HighFive::File::ReadOnly);
-        checkFileVersion(f);
         auto cfg = parseInner(f);
         for (size_t i = 0; i < cfg.optical_trains.size(); ++i) {
             auto& ot  = cfg.optical_trains[i];
@@ -289,37 +287,138 @@ public:
 private:
     std::filesystem::path path_;
 
+    // Snapshot all root attrs and each optical-train group's attrs into a JSON map.
+    static nlohmann::json hdf5ToRaw(const HighFive::File& f) {
+        nlohmann::json meta = nlohmann::json::object();
+        for (const auto& name : f.listAttributeNames()) {
+            auto raw = readRaw(f, name);
+            if (!raw) continue;
+            std::visit([&](auto&& v) { meta[name] = v; }, *raw);
+        }
+
+        nlohmann::json optical_trains = nlohmann::json::array();
+        if (f.exist("Machine/Optical_Trains")) {
+            auto trains_grp = f.getGroup("Machine/Optical_Trains");
+            std::vector<std::string> ids;
+            for (const auto& n : trains_grp.listObjectNames()) {
+                if (n.size() >= 14 && n.substr(0, 14) == "Optical_Train_")
+                    ids.push_back(n);
+            }
+            std::sort(ids.begin(), ids.end());
+            for (const auto& tid : ids) {
+                auto grp = trains_grp.getGroup(tid);
+                nlohmann::json attrs = nlohmann::json::object();
+                for (const auto& name : grp.listAttributeNames()) {
+                    auto raw = readRaw(grp, name);
+                    if (!raw) continue;
+                    std::visit([&](auto&& v) { attrs[name] = v; }, *raw);
+                }
+                optical_trains.push_back(std::move(attrs));
+            }
+        }
+
+        return nlohmann::json{{ "meta", meta }, { "optical_trains", optical_trains }};
+    }
+
+    // JSON-dict helpers for the adapter-output path.
+    static std::optional<std::string> jsonStr(const nlohmann::json& j, const std::string& key) {
+        if (!j.contains(key) || j.at(key).is_null()) return std::nullopt;
+        std::string s = j.at(key).is_string() ? j.at(key).get<std::string>()
+                                               : j.at(key).dump();
+        auto first = s.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) return std::nullopt;
+        return s.substr(first, s.find_last_not_of(" \t\r\n") - first + 1);
+    }
+    static std::string jsonRequiredStr(const nlohmann::json& j, const std::string& key) {
+        return jsonStr(j, key).value_or("");
+    }
+    static std::optional<double> jsonFloat(const nlohmann::json& j, const std::string& key) {
+        if (!j.contains(key) || j.at(key).is_null()) return std::nullopt;
+        if (j.at(key).is_number()) return j.at(key).get<double>();
+        if (j.at(key).is_string()) {
+            try { return std::stod(j.at(key).get<std::string>()); } catch (...) {}
+        }
+        return std::nullopt;
+    }
+    static std::optional<bool> jsonBoolFromInt(const nlohmann::json& j, const std::string& key) {
+        if (!j.contains(key) || j.at(key).is_null()) return std::nullopt;
+        int64_t v = j.at(key).is_number_integer() ? j.at(key).get<int64_t>()
+                                                   : static_cast<int64_t>(j.at(key).get<double>());
+        return v != 0;
+    }
+
     void checkFileVersion(const HighFive::File& f) const {
         std::string ver = readRequiredStr(f, "File_Version");
-        if (ver != EXPECTED_FILE_VERSION)
+        if (ver != CURRENT_VERSION)
             std::cerr << "Warning: File_Version is '" << ver
-                      << "'; this reader targets '" << EXPECTED_FILE_VERSION
-                      << "'. Output may be incomplete or incorrect.\n";
+                      << "'; no adapter available. Output may be incomplete or incorrect.\n";
     }
 
     MachineConfig parseInner(const HighFive::File& f) const {
+        std::string rawVersion = readRequiredStr(f, "File_Version");
+        auto chain = adapters::AdapterRegistry::instance().get_chain(rawVersion, CURRENT_VERSION);
+
+        // Warn for versions with no adapter and not current.
+        if (chain.empty() && !rawVersion.empty() && rawVersion != CURRENT_VERSION)
+            std::cerr << "Warning: File_Version is '" << rawVersion
+                      << "'; no adapter available. Output may be incomplete or incorrect.\n";
+
+        nlohmann::json adaptedMeta;
+        std::vector<nlohmann::json> adaptedTrains;
+        if (!chain.empty()) {
+            auto raw = hdf5ToRaw(f);
+            for (const auto& adapter : chain)
+                raw = adapter->adapt(std::move(raw));
+            raw["meta"]["File_Version"] = CURRENT_VERSION;
+            adaptedMeta   = raw["meta"];
+            if (raw["optical_trains"].is_array())
+                for (auto& t : raw["optical_trains"])
+                    adaptedTrains.push_back(std::move(t));
+        }
+
         MachineConfig cfg;
-        cfg.meta          = parseMeta(f);
-        cfg.machine       = parseMachine(f.getGroup("Machine"));
-        cfg.optical_trains = parseTrains(f);
+        cfg.meta           = adaptedMeta.is_object() ? parseMetaFromJson(adaptedMeta) : parseMeta(f);
+        cfg.machine        = parseMachine(f.getGroup("Machine"));
+        cfg.optical_trains = parseTrains(f, adaptedTrains);
         cfg.opcua          = parseOpcua(f);
         return cfg;
     }
 
     MachineConfigMeta parseMeta(const HighFive::File& f) const {
         MachineConfigMeta m;
-        m.schema_version    = SCHEMA_VERSION;
-        m.machine_name      = readRequiredStr(f, "machine_name");
-        m.manufacturer      = readRequiredStr(f, "manufacturer");
-        m.model             = readRequiredStr(f, "model");
-        m.serial_number     = readRequiredStr(f, "serial_number");
-        m.file_version      = readRequiredStr(f, "File_Version");
-        m.export_date       = readRequiredStr(f, "Export_Date");
-        m.configuration_hash= readRequiredStr(f, "Configuration_Hash");
-        m.extra             = collectExtra(f, {
+        m.machine_name       = readRequiredStr(f, "machine_name");
+        m.manufacturer       = readRequiredStr(f, "manufacturer");
+        m.model              = readRequiredStr(f, "model");
+        m.serial_number      = readRequiredStr(f, "serial_number");
+        m.file_version       = readRequiredStr(f, "File_Version");
+        m.export_date        = readRequiredStr(f, "Export_Date");
+        m.configuration_hash = readRequiredStr(f, "Configuration_Hash");
+        m.extra              = collectExtra(f, {
             "machine_name", "manufacturer", "model", "serial_number",
             "File_Version", "Export_Date", "Configuration_Hash"
         });
+        return m;
+    }
+
+    MachineConfigMeta parseMetaFromJson(const nlohmann::json& j) const {
+        MachineConfigMeta m;
+        m.machine_name       = jsonRequiredStr(j, "machine_name");
+        m.manufacturer       = jsonRequiredStr(j, "manufacturer");
+        m.model              = jsonRequiredStr(j, "model");
+        m.serial_number      = jsonRequiredStr(j, "serial_number");
+        m.file_version       = jsonRequiredStr(j, "File_Version");
+        m.export_date        = jsonRequiredStr(j, "Export_Date");
+        m.configuration_hash = jsonRequiredStr(j, "Configuration_Hash");
+        // Collect extra: any key not in the known set.
+        m.extra = nlohmann::json::object();
+        static const std::vector<std::string> known = {
+            "machine_name", "manufacturer", "model", "serial_number",
+            "File_Version", "Export_Date", "Configuration_Hash"
+        };
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            if (std::find(known.begin(), known.end(), it.key()) == known.end())
+                m.extra[it.key()] = it.value();
+        }
         return m;
     }
 
@@ -343,7 +442,8 @@ private:
         return m;
     }
 
-    std::vector<OpticalTrain> parseTrains(const HighFive::File& f) const {
+    std::vector<OpticalTrain> parseTrains(const HighFive::File& f,
+                                           const std::vector<nlohmann::json>& adapted) const {
         auto trains_grp = f.getGroup("Machine/Optical_Trains");
         std::vector<std::string> ids;
         for (const auto& n : trains_grp.listObjectNames()) {
@@ -353,44 +453,48 @@ private:
         std::sort(ids.begin(), ids.end());
         std::vector<OpticalTrain> result;
         result.reserve(ids.size());
-        for (const auto& id : ids)
-            result.push_back(parseTrain(f, id));
+        for (size_t i = 0; i < ids.size(); ++i) {
+            const nlohmann::json* a = (!adapted.empty() && i < adapted.size()) ? &adapted[i] : nullptr;
+            result.push_back(parseTrain(f, ids[i], a));
+        }
         return result;
     }
 
-    OpticalTrain parseTrain(const HighFive::File& f, const std::string& train_id) const {
+    OpticalTrain parseTrain(const HighFive::File& f, const std::string& train_id,
+                             const nlohmann::json* adapted) const {
         auto grp = f.getGroup("Machine/Optical_Trains/" + train_id);
         OpticalTrain ot;
         ot.train_id  = train_id;
-        ot.id        = readStr(grp, "ID");
-        ot.beam_profile_type     = readStr(grp, "Beam_Profile_Type");
-        ot.beam_waist_definition = readStr(grp, "Beam_Waist_Definition");
-        ot.beam_waist_major      = readFloat(grp, "Beam_Waist_Major");
-        ot.beam_waist_major_unit = readUnitLocked(grp, "Beam_Waist_Major_unit", "\u03bcm");
-        ot.beam_waist_minor      = readFloat(grp, "Beam_Waist_Minor");
-        ot.beam_waist_minor_unit = readUnitLocked(grp, "Beam_Waist_Minor_unit", "\u03bcm");
-        ot.beam_waist_offset_z      = readFloat(grp, "Beam_Waist_Offset_Z");
-        ot.beam_waist_offset_z_unit = readUnitLocked(grp, "Beam_Waist_Offset_Z_unit", "mm");
-        ot.build_plane_offset_major      = readFloat(grp, "Build_Plane_Offset_Major");
-        ot.build_plane_offset_major_unit = readUnitLocked(grp, "Build_Plane_Offset_Major_unit", "mm");
-        ot.build_plane_offset_minor      = readFloat(grp, "Build_Plane_Offset_Minor");
-        ot.build_plane_offset_minor_unit = readUnitLocked(grp, "Build_Plane_Offset_Minor_unit", "mm");
-        ot.collimator_focal_length      = readFloat(grp, "Collimator_Focal_Length");
-        ot.collimator_focal_length_unit = readUnitLocked(grp, "Collimator_Focal_Length_unit", "mm");
-        ot.m2_major        = readFloat(grp, "M2_Major");
-        ot.m2_minor        = readFloat(grp, "M2_Minor");
-        ot.major_axis_angle      = readFloat(grp, "Major_Axis_Angle");
-        ot.major_axis_angle_unit = readUnitLocked(grp, "Major_Axis_Angle_unit", "degrees");
-        ot.rayleigh_length_major      = readFloat(grp, "Rayleigh_Length_Major");
-        ot.rayleigh_length_major_unit = readUnitLocked(grp, "Rayleigh_Length_Major_unit", "mm");
-        ot.rayleigh_length_minor      = readFloat(grp, "Rayleigh_Length_Minor");
-        ot.rayleigh_length_minor_unit = readUnitLocked(grp, "Rayleigh_Length_Minor_unit", "mm");
-        ot.scanner_number         = readStr(grp, "Scanner_Number");
-        ot.thermal_lensing_passed = readBoolFromInt(grp, "Thermal_Lensing_Test_Passed");
-        ot.thermal_lensing_focal_plane_shift      = readFloat(grp, "Thermal_Lensing_Focal_Plane_Shift");
-        ot.thermal_lensing_focal_plane_shift_unit = readUnitLocked(grp, "Thermal_Lensing_Focal_Plane_Shift_unit", "mm");
-        ot.thermal_lensing_threshold      = readFloat(grp, "Thermal_Lensing_Threshold");
-        ot.thermal_lensing_threshold_unit = readUnitLocked(grp, "Thermal_Lensing_Threshold_unit", "mm");
+        // Use adapted JSON when available; fall back to HDF5 for train-level attrs.
+        ot.id        = adapted ? jsonStr(*adapted, "ID")                      : readStr(grp, "ID");
+        ot.beam_profile_type     = adapted ? jsonStr(*adapted, "Beam_Profile_Type")     : readStr(grp, "Beam_Profile_Type");
+        ot.beam_waist_definition = adapted ? jsonStr(*adapted, "Beam_Waist_Definition") : readStr(grp, "Beam_Waist_Definition");
+        ot.beam_waist_major      = adapted ? jsonFloat(*adapted, "Beam_Waist_Major")    : readFloat(grp, "Beam_Waist_Major");
+        ot.beam_waist_major_unit = adapted ? jsonStr(*adapted, "Beam_Waist_Major_unit")                      : readUnitLocked(grp, "Beam_Waist_Major_unit", "\u03bcm");
+        ot.beam_waist_minor      = adapted ? jsonFloat(*adapted, "Beam_Waist_Minor")    : readFloat(grp, "Beam_Waist_Minor");
+        ot.beam_waist_minor_unit = adapted ? jsonStr(*adapted, "Beam_Waist_Minor_unit")                      : readUnitLocked(grp, "Beam_Waist_Minor_unit", "\u03bcm");
+        ot.beam_waist_offset_z      = adapted ? jsonFloat(*adapted, "Beam_Waist_Offset_Z")      : readFloat(grp, "Beam_Waist_Offset_Z");
+        ot.beam_waist_offset_z_unit = adapted ? jsonStr(*adapted, "Beam_Waist_Offset_Z_unit")   : readUnitLocked(grp, "Beam_Waist_Offset_Z_unit", "mm");
+        ot.build_plane_offset_major      = adapted ? jsonFloat(*adapted, "Build_Plane_Offset_Major")      : readFloat(grp, "Build_Plane_Offset_Major");
+        ot.build_plane_offset_major_unit = adapted ? jsonStr(*adapted, "Build_Plane_Offset_Major_unit")   : readUnitLocked(grp, "Build_Plane_Offset_Major_unit", "mm");
+        ot.build_plane_offset_minor      = adapted ? jsonFloat(*adapted, "Build_Plane_Offset_Minor")      : readFloat(grp, "Build_Plane_Offset_Minor");
+        ot.build_plane_offset_minor_unit = adapted ? jsonStr(*adapted, "Build_Plane_Offset_Minor_unit")   : readUnitLocked(grp, "Build_Plane_Offset_Minor_unit", "mm");
+        ot.collimator_focal_length       = adapted ? jsonFloat(*adapted, "Collimator_Focal_Length")       : readFloat(grp, "Collimator_Focal_Length");
+        ot.collimator_focal_length_unit  = adapted ? jsonStr(*adapted, "Collimator_Focal_Length_unit")    : readUnitLocked(grp, "Collimator_Focal_Length_unit", "mm");
+        ot.m2_major        = adapted ? jsonFloat(*adapted, "M2_Major")          : readFloat(grp, "M2_Major");
+        ot.m2_minor        = adapted ? jsonFloat(*adapted, "M2_Minor")          : readFloat(grp, "M2_Minor");
+        ot.major_axis_angle      = adapted ? jsonFloat(*adapted, "Major_Axis_Angle")      : readFloat(grp, "Major_Axis_Angle");
+        ot.major_axis_angle_unit = adapted ? jsonStr(*adapted, "Major_Axis_Angle_unit")   : readUnitLocked(grp, "Major_Axis_Angle_unit", "degrees");
+        ot.rayleigh_length_major      = adapted ? jsonFloat(*adapted, "Rayleigh_Length_Major")      : readFloat(grp, "Rayleigh_Length_Major");
+        ot.rayleigh_length_major_unit = adapted ? jsonStr(*adapted, "Rayleigh_Length_Major_unit")   : readUnitLocked(grp, "Rayleigh_Length_Major_unit", "mm");
+        ot.rayleigh_length_minor      = adapted ? jsonFloat(*adapted, "Rayleigh_Length_Minor")      : readFloat(grp, "Rayleigh_Length_Minor");
+        ot.rayleigh_length_minor_unit = adapted ? jsonStr(*adapted, "Rayleigh_Length_Minor_unit")   : readUnitLocked(grp, "Rayleigh_Length_Minor_unit", "mm");
+        ot.scanner_number         = adapted ? jsonStr(*adapted, "Scanner_Number")             : readStr(grp, "Scanner_Number");
+        ot.thermal_lensing_passed = adapted ? jsonBoolFromInt(*adapted, "Thermal_Lensing_Test_Passed") : readBoolFromInt(grp, "Thermal_Lensing_Test_Passed");
+        ot.thermal_lensing_focal_plane_shift      = adapted ? jsonFloat(*adapted, "Thermal_Lensing_Focal_Plane_Shift")      : readFloat(grp, "Thermal_Lensing_Focal_Plane_Shift");
+        ot.thermal_lensing_focal_plane_shift_unit = adapted ? jsonStr(*adapted, "Thermal_Lensing_Focal_Plane_Shift_unit")   : readUnitLocked(grp, "Thermal_Lensing_Focal_Plane_Shift_unit", "mm");
+        ot.thermal_lensing_threshold      = adapted ? jsonFloat(*adapted, "Thermal_Lensing_Threshold")      : readFloat(grp, "Thermal_Lensing_Threshold");
+        ot.thermal_lensing_threshold_unit = adapted ? jsonStr(*adapted, "Thermal_Lensing_Threshold_unit")   : readUnitLocked(grp, "Thermal_Lensing_Threshold_unit", "mm");
         ot.scanner      = parseScanner(grp.getGroup("Scanner"));
         ot.light_source = parseLightSource(grp.getGroup("Light_Source"));
         ot.collimator   = parseCollimator(grp.getGroup("Collimator"));

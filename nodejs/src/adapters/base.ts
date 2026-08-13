@@ -1,12 +1,8 @@
-import type { MachineConfig } from '../models.js';
-
 /**
  * Base interface for machine-config adapters.
- *
- * An adapter transforms a MachineConfig into another representation
- * (e.g. a different schema or vendor-specific format).
+ * Operates on the raw parsed JSON dict before deserialization into typed models.
  */
 export interface Adapter {
   readonly name: string;
-  adapt(config: MachineConfig): MachineConfig;
+  adapt(config: Record<string, unknown>): Record<string, unknown>;
 }

@@ -1,0 +1,24 @@
+# SYNTHETIC TEST SPEC — validates adapter machinery only. Not a real migration.
+from_version: "0.9"
+to_version:   "1.0"
+changes:
+  - type: field_add
+    field: test_added_field
+    path: optical_trains[*]
+    default: null
+  - type: field_rename
+    old_field: test_old_name
+    new_field: test_new_name
+    path: optical_trains[*]
+  - type: field_remove
+    field: test_removed_field
+    path: optical_trains[*]
+  - type: field_move
+    field: test_move_field
+    from_path: optical_trains[*]
+    to_path: optical_trains[*].test_nested
+  - type: field_move_rename
+    old_field: test_move_rename_old
+    new_field: test_move_rename_new
+    from_path: optical_trains[*]
+    to_path: optical_trains[*].test_nested

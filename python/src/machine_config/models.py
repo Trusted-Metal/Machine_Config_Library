@@ -221,7 +221,6 @@ class Machine:
 
 @dataclass
 class MachineConfigMeta:
-    schema_version: str
     machine_name: str
     manufacturer: str
     model: str

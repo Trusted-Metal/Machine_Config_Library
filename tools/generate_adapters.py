@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+"""
+Decision Made: Raw JSON model across all four languages.
+"""
+
 """
 For every spec in schema/adapters/, render the four language adapter files
 using Jinja2 templates. Idempotent — re-running overwrites existing generated files.

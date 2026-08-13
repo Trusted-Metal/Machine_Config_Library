@@ -36,7 +36,6 @@ _MINIMAL_TRAIN = {
 
 _MINIMAL_CONFIG = {
     "meta": {
-        "schema_version":     "v1",
         "machine_name":       "TM-LPBF-02: AconityMIDI+_OG",
         "manufacturer":       "Aconity3D",
         "model":              "AconityMIDI+",

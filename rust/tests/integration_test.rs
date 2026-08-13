@@ -230,3 +230,43 @@ fn test_writer_roundtrip_opcua() {
     assert_eq!(rt_t.start_value,  orig_t.start_value);
     assert_eq!(rt_t.stop_value,   orig_t.stop_value);
 }
+
+// ---------------------------------------------------------------------------
+// Adapter dispatch tests (Phase D.3)
+// ---------------------------------------------------------------------------
+
+static SYNTHETIC_V09: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../fixtures/adapters/test/reference_synthetic_v0_9.h5"
+);
+
+#[test]
+fn test_dispatch_v09_file_version_upgraded() {
+    let cfg = MachineConfigReader::open(SYNTHETIC_V09).unwrap().parse().unwrap();
+    assert_eq!(cfg.meta.file_version, "1.0");
+}
+
+#[test]
+fn test_dispatch_real_file_version_unchanged() {
+    let cfg = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+    assert_eq!(cfg.meta.file_version, "1.0");
+}
+
+#[test]
+fn test_dispatch_v09_returns_two_trains() {
+    let cfg = MachineConfigReader::open(SYNTHETIC_V09).unwrap().parse().unwrap();
+    assert_eq!(cfg.optical_trains.len(), 2);
+}
+
+#[test]
+fn test_dispatch_v09_beam_waist_major_intact() {
+    let cfg = MachineConfigReader::open(SYNTHETIC_V09).unwrap().parse().unwrap();
+    let bwm = cfg.optical_trains[0].beam_waist_major.expect("beam_waist_major must be Some");
+    assert!(bwm.is_finite(), "beam_waist_major must be finite");
+}
+
+#[test]
+fn test_dispatch_real_file_parses_successfully() {
+    let cfg = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+    assert!(!cfg.optical_trains.is_empty());
+}

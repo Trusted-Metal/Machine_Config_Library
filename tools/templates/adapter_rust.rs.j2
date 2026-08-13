@@ -1,32 +1,58 @@
 // AUTO-GENERATED from schema/adapters/{{ name }}.yaml
 // DO NOT EDIT MANUALLY — regenerate with: python tools/generate_adapters.py
 use serde_json::{Map, Value};
+use crate::adapters::Adapter;
 
 pub const FROM_VERSION: &str = "{{ spec.from_version }}";
 pub const TO_VERSION:   &str = "{{ spec.to_version }}";
 
-/// Adapt a parsed JSON map from schema v{{ spec.from_version }} to v{{ spec.to_version }}.
-/// Operates at the JSON level before deserialization into MachineConfig.
-pub fn adapt(mut config: Map<String, Value>) -> Map<String, Value> {
-    if let Some(Value::Array(trains)) = config.get_mut("optical_trains") {
-        for train in trains.iter_mut() {
-            if let Value::Object(ref mut t) = train {
-                {% for change in spec.changes %}
-                {% if change.type == 'field_add' %}
-                // field_add: {{ change.field }} (path: {{ change.path }})
-                t.entry("{{ change.field }}".to_owned()).or_insert(Value::Null);
-                {% elif change.type == 'field_rename' %}
-                // field_rename: {{ change.old_field }} -> {{ change.new_field }} (path: {{ change.path }})
-                if let Some(val) = t.remove("{{ change.old_field }}") {
-                    t.insert("{{ change.new_field }}".to_owned(), val);
+pub struct V{{ spec.from_version | replace('.', '_') }}ToV{{ spec.to_version | replace('.', '_') }};
+
+impl Adapter for V{{ spec.from_version | replace('.', '_') }}ToV{{ spec.to_version | replace('.', '_') }} {
+    fn from_version(&self) -> &'static str { FROM_VERSION }
+    fn to_version(&self) -> &'static str { TO_VERSION }
+
+    fn adapt(&self, mut config: Map<String, Value>) -> Map<String, Value> {
+        if let Some(Value::Array(trains)) = config.get_mut("optical_trains") {
+            for train in trains.iter_mut() {
+                if let Value::Object(ref mut t) = train {
+                    {% for change in spec.changes %}
+                    {% if change.type == 'field_add' %}
+                    // field_add: {{ change.field }} (path: {{ change.path }})
+                    t.entry("{{ change.field }}".to_owned()).or_insert(Value::Null);
+                    {% elif change.type == 'field_rename' %}
+                    // field_rename: {{ change.old_field }} -> {{ change.new_field }} (path: {{ change.path }})
+                    if let Some(val) = t.remove("{{ change.old_field }}") {
+                        t.insert("{{ change.new_field }}".to_owned(), val);
+                    }
+                    {% elif change.type == 'field_remove' %}
+                    // field_remove: {{ change.field }} dropped (path: {{ change.path }})
+                    t.remove("{{ change.field }}");
+                    {% elif change.type == 'field_move' %}
+                    {% set dest_obj = change.to_path.split('.')[-1] %}
+                    // field_move: {{ change.field }} ({{ change.from_path }} -> {{ change.to_path }})
+                    if let Some(val) = t.remove("{{ change.field }}") {
+                        let dest = t.entry("{{ dest_obj }}".to_owned())
+                            .or_insert_with(|| Value::Object(Map::new()));
+                        if let Value::Object(ref mut d) = dest {
+                            d.insert("{{ change.field }}".to_owned(), val);
+                        }
+                    }
+                    {% elif change.type == 'field_move_rename' %}
+                    {% set dest_obj = change.to_path.split('.')[-1] %}
+                    // field_move_rename: {{ change.old_field }} -> {{ dest_obj }}.{{ change.new_field }} ({{ change.from_path }} -> {{ change.to_path }})
+                    if let Some(val) = t.remove("{{ change.old_field }}") {
+                        let dest = t.entry("{{ dest_obj }}".to_owned())
+                            .or_insert_with(|| Value::Object(Map::new()));
+                        if let Value::Object(ref mut d) = dest {
+                            d.insert("{{ change.new_field }}".to_owned(), val);
+                        }
+                    }
+                    {% endif %}
+                    {% endfor %}
                 }
-                {% elif change.type == 'field_remove' %}
-                // field_remove: {{ change.field }} dropped (path: {{ change.path }})
-                t.remove("{{ change.field }}");
-                {% endif %}
-                {% endfor %}
             }
         }
+        config
     }
-    config
 }

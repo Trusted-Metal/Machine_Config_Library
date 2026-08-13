@@ -36,6 +36,40 @@ from .models import (
 )
 from .schema import SCHEMA, SCHEMA_VERSION
 
+CURRENT_VERSION: str = "1.0"  # never changed by the adapter plan; real bumps update this
+
+
+def _to_native(v: object) -> object:
+    """Convert h5py/numpy scalars to JSON-serialisable Python types."""
+    if isinstance(v, np.integer):          return int(v)
+    if isinstance(v, np.floating):         return float(v)
+    if isinstance(v, np.ndarray):          return v.tolist()
+    if isinstance(v, (bytes, np.bytes_)):  return v.decode()
+    return v
+
+
+def _hdf5_attrs_extra(attrs, known: frozenset[str]) -> dict:
+    """Return all HDF5 attrs not in *known*, converting numpy scalars to Python natives."""
+    return {k: _to_native(v) for k, v in attrs.items() if k not in known}
+
+
+def _hdf5_to_raw_dict(f: h5py.File) -> dict:
+    """Read ALL HDF5 group attrs into a plain dict for the adapter chain to consume.
+
+    Preserves every attribute — including fields the current typed model does not
+    recognise — so adapters can rename, move, or remove them before the typed
+    model is built.
+    """
+    meta = {k: _to_native(v) for k, v in f.attrs.items()}
+    optical_trains: list[dict] = []
+    ot_parent = f.get("Machine/Optical_Trains")
+    if ot_parent is not None:
+        for name in sorted(ot_parent.keys()):
+            grp = ot_parent[name]
+            if isinstance(grp, h5py.Group):
+                optical_trains.append({k: _to_native(v) for k, v in grp.attrs.items()})
+    return {"meta": meta, "optical_trains": optical_trains}
+
 
 _KNOWN_ROOT_KEYS: frozenset[str] = frozenset(
     {"machine_name", "manufacturer", "model", "serial_number",
@@ -64,20 +98,7 @@ _KNOWN_PIPE_KEYS: frozenset[str] = frozenset(
 
 def _hdf5_attrs_extra(attrs, known: frozenset[str]) -> dict:
     """Return all HDF5 attrs not in *known*, converting numpy scalars to Python natives."""
-    import numpy as np
-    result = {}
-    for k, v in attrs.items():
-        if k in known:
-            continue
-        if isinstance(v, np.integer):
-            result[k] = int(v)
-        elif isinstance(v, np.floating):
-            result[k] = float(v)
-        elif isinstance(v, bytes):
-            result[k] = v.decode()
-        else:
-            result[k] = str(v)
-    return result
+    return {k: _to_native(v) for k, v in attrs.items() if k not in known}
 
 
 class MachineConfigReader:
@@ -241,17 +262,31 @@ class MachineConfigReader:
         return f"Machine/Optical_Trains/{tid}/Optional_Components/ClearBox"
 
     def _parse(self, f: h5py.File) -> MachineConfig:
+        from .adapters import get_chain
+
+        # Files without File_Version are pre-versioning and treated as current.
+        raw_version = str(f.attrs.get("File_Version", CURRENT_VERSION))
+        chain = get_chain(raw_version, CURRENT_VERSION)
+        root_attrs: h5py.AttributeManager | dict = f.attrs
+        adapted_trains: list[dict] | None = None
+        if chain:
+            raw = _hdf5_to_raw_dict(f)
+            for adapter in chain:
+                raw = adapter.adapt(raw)
+            raw["meta"]["File_Version"] = CURRENT_VERSION
+            root_attrs = raw["meta"]
+            adapted_trains = raw.get("optical_trains", [])
+
         # ---- root attributes → MachineConfigMeta --------------------------------
         meta = MachineConfigMeta(
-            schema_version=SCHEMA_VERSION,
-            machine_name=str(f.attrs.get("machine_name", "")),
-            manufacturer=str(f.attrs.get("manufacturer", "")),
-            model=str(f.attrs.get("model", "")),
-            serial_number=str(f.attrs.get("serial_number", "")),
-            file_version=str(f.attrs.get("File_Version", "")),
-            export_date=str(f.attrs.get("Export_Date", "")),
-            configuration_hash=str(f.attrs.get("Configuration_Hash", "")),
-            extra=_hdf5_attrs_extra(f.attrs, _KNOWN_ROOT_KEYS),
+            machine_name=str(root_attrs.get("machine_name", "")),
+            manufacturer=str(root_attrs.get("manufacturer", "")),
+            model=str(root_attrs.get("model", "")),
+            serial_number=str(root_attrs.get("serial_number", "")),
+            file_version=str(root_attrs.get("File_Version", "")),
+            export_date=str(root_attrs.get("Export_Date", "")),
+            configuration_hash=str(root_attrs.get("Configuration_Hash", "")),
+            extra=_hdf5_attrs_extra(root_attrs, _KNOWN_ROOT_KEYS),
         )
 
         # ---- Machine group → Machine + BuildPlate --------------------------------
@@ -284,7 +319,13 @@ class MachineConfigReader:
         train_ids = sorted(
             k for k in trains_grp.keys() if k.startswith("Optical_Train_")
         )
-        optical_trains = [self._parse_train(f, tid) for tid in train_ids]
+        optical_trains = [
+            self._parse_train(
+                f, tid,
+                attrs=adapted_trains[i] if adapted_trains is not None else None,
+            )
+            for i, tid in enumerate(train_ids)
+        ]
 
         # ---- Optional OPCUA group ------------------------------------------------
         opcua = self._parse_opcua(f)
@@ -296,9 +337,9 @@ class MachineConfigReader:
             opcua=opcua,
         )
 
-    def _parse_train(self, f: h5py.File, train_id: str) -> OpticalTrain:
+    def _parse_train(self, f: h5py.File, train_id: str, attrs: dict | None = None) -> OpticalTrain:
         base_path = f"Machine/Optical_Trains/{train_id}"
-        a = f[base_path].attrs
+        a = attrs if attrs is not None else f[base_path].attrs
 
         scanner = self._parse_scanner(f[f"{base_path}/Scanner"])
         light_source = self._parse_light_source(f[f"{base_path}/Light_Source"])
@@ -596,7 +637,6 @@ class MachineConfigReader:
     def _config_to_dict(self, config: MachineConfig, include_binary: bool = False) -> dict:
         result = {
             "meta": {
-                "schema_version": config.meta.schema_version,
                 "machine_name": config.meta.machine_name,
                 "manufacturer": config.meta.manufacturer,
                 "model": config.meta.model,
@@ -867,7 +907,6 @@ def config_from_dict(d: dict) -> MachineConfig:
     m = d["machine"]
 
     meta = MachineConfigMeta(
-        schema_version=meta_d.get("schema_version", "v1"),
         machine_name=meta_d["machine_name"],
         manufacturer=meta_d["manufacturer"],
         model=meta_d["model"],

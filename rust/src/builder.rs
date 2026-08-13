@@ -12,7 +12,6 @@ use crate::error::Result;
 use crate::models::*;
 use crate::writer::MachineConfigWriter;
 
-const SCHEMA_VERSION: &str = "v1";
 const MOCK_EXPORT_DATE: &str = "2026-01-01T00:00:00.000Z";
 
 /// Generates a structurally valid synthetic machine-config `.h5` file.
@@ -49,7 +48,6 @@ impl MockConfigBuilder {
     /// Build the in-memory `MachineConfig` without writing to disk.
     pub fn build(&self) -> MachineConfig {
         let meta = MachineConfigMeta {
-            schema_version: SCHEMA_VERSION.to_owned(),
             machine_name: self.machine_name.clone(),
             manufacturer: self.manufacturer.clone(),
             model: self.model.clone(),

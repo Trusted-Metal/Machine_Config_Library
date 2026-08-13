@@ -12,7 +12,6 @@ import type {
   OptionalComponents,
   ScanFieldCorrectionFile,
 } from './models.js';
-import { SCHEMA_VERSION } from './schema.js';
 import { MachineConfigWriter } from './writer.js';
 
 export interface MockConfigBuilderOptions {
@@ -309,7 +308,6 @@ export class MockConfigBuilder {
     };
 
     const meta: MachineConfigMeta = {
-      schema_version: SCHEMA_VERSION,
       machine_name: o.machineName,
       manufacturer: o.manufacturer,
       model: o.model,

@@ -24,7 +24,7 @@ TEST_CASE("ParsesMeta") {
     MachineConfigReader reader{REF};
     auto cfg = reader.parse();
 
-    REQUIRE(cfg.meta.schema_version    == "v1");
+    REQUIRE(cfg.meta.file_version == "1.0");
     REQUIRE(cfg.meta.machine_name      == "TM-LPBF-02: AconityMIDI+_OG");
     REQUIRE(cfg.meta.configuration_hash == "9bc38c92c582a15439fe74990c04bcf75705ca6ac499ef4332460b923400e431");
     REQUIRE_FALSE(cfg.meta.extra.empty()); // Description + Generator are extra attrs
@@ -476,7 +476,7 @@ TEST_CASE("ToJsonOpcuaKeyPresent") {
 TEST_CASE("SyntheticFixtureParsesCorrectly") {
     MachineConfigReader reader{SYNTHETIC};
     auto cfg = reader.parse();
-    REQUIRE(cfg.meta.schema_version == "v1");
+    REQUIRE(cfg.meta.file_version == "1.0");
     REQUIRE(cfg.meta.machine_name   == "SyntheticMachine");
     // Synthetic fixture has a 64-char all-zero hash (builder default).
     REQUIRE(cfg.meta.configuration_hash.size() == 64);
@@ -505,4 +505,42 @@ TEST_CASE("GetRawGroupOpcuaClient") {
     REQUIRE(client.is_object());
     REQUIRE(client.contains("Server_URL"));
     REQUIRE_FALSE(client["Server_URL"].get<std::string>().empty());
+}
+
+// ---------------------------------------------------------------------------
+// Phase D.4 — adapter dispatch tests
+// ---------------------------------------------------------------------------
+static const std::string SYNTHETIC_V09 =
+    std::string(FIXTURES_DIR) + "/../fixtures/adapters/test/reference_synthetic_v0_9.h5";
+
+TEST_CASE("dispatch: v0.9 fixture is upgraded to file_version 1.0") {
+    MachineConfigReader reader{SYNTHETIC_V09};
+    auto cfg = reader.parse();
+    REQUIRE(cfg.meta.file_version == "1.0");
+}
+
+TEST_CASE("dispatch: real fixture file_version unchanged") {
+    MachineConfigReader reader{REF};
+    auto cfg = reader.parse();
+    REQUIRE(cfg.meta.file_version == "1.0");
+}
+
+TEST_CASE("dispatch: v0.9 fixture returns 2 optical trains") {
+    MachineConfigReader reader{SYNTHETIC_V09};
+    auto cfg = reader.parse();
+    REQUIRE(cfg.optical_trains.size() == 2);
+}
+
+TEST_CASE("dispatch: beam_waist_major survives upgrade") {
+    MachineConfigReader reader{SYNTHETIC_V09};
+    auto cfg = reader.parse();
+    REQUIRE(cfg.optical_trains[0].beam_waist_major.has_value());
+    REQUIRE(*cfg.optical_trains[0].beam_waist_major > 0.0);
+}
+
+TEST_CASE("dispatch: real fixture parses successfully") {
+    MachineConfigReader reader{REF};
+    auto cfg = reader.parse();
+    REQUIRE_FALSE(cfg.meta.machine_name.empty());
+    REQUIRE_FALSE(cfg.optical_trains.empty());
 }

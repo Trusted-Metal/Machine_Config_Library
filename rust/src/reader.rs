@@ -18,12 +18,13 @@ use hdf5::types::{TypeDescriptor, VarLenAscii, VarLenUnicode};
 use hdf5::{Dataset, File as H5File, Group, Location};
 use indexmap::IndexMap;
 use ndarray::Array3;
+use serde_json::{Map, Value};
 
+use crate::adapters;
 use crate::error::{MachineConfigError, Result};
 use crate::models::*;
 
-const SCHEMA_VERSION: &str = "v1";
-const EXPECTED_FILE_VERSION: &str = "1.0";
+const CURRENT_VERSION: &str = "1.0";
 
 const KNOWN_ROOT_KEYS: &[&str] = &[
     "machine_name",
@@ -264,6 +265,89 @@ fn collect_extra(loc: &Location, known: &[&str]) -> Result<ExtraAttrs> {
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// Version dispatch helpers
+// ---------------------------------------------------------------------------
+
+/// Snapshot all root-level attrs and each optical-train group's attrs into a
+/// plain JSON map — the input/output contract for adapter `adapt()`.
+fn hdf5_to_raw(f: &H5File) -> Result<Map<String, Value>> {
+    let mut meta = Map::new();
+    for name in f.attr_names()? {
+        if let Some(raw) = read_raw(f, &name)? {
+            meta.insert(name, raw_to_json(raw));
+        }
+    }
+
+    let mut optical_trains = Vec::new();
+    if let Ok(trains_grp) = f.group("Machine/Optical_Trains") {
+        let mut train_ids: Vec<String> = trains_grp
+            .member_names()?
+            .into_iter()
+            .filter(|k| k.starts_with("Optical_Train_"))
+            .collect();
+        train_ids.sort();
+        for tid in &train_ids {
+            let grp = trains_grp.group(tid)?;
+            let mut attrs = Map::new();
+            for name in grp.attr_names()? {
+                if let Some(raw) = read_raw(&grp, &name)? {
+                    attrs.insert(name, raw_to_json(raw));
+                }
+            }
+            optical_trains.push(Value::Object(attrs));
+        }
+    }
+
+    let mut result = Map::new();
+    result.insert("meta".to_string(), Value::Object(meta));
+    result.insert("optical_trains".to_string(), Value::Array(optical_trains));
+    Ok(result)
+}
+
+/// Read a trimmed string from a plain JSON map (adapter-output path).
+fn json_str(map: &Map<String, Value>, key: &str) -> Option<String> {
+    match map.get(key)? {
+        Value::String(s) => {
+            let t = s.trim();
+            if t.is_empty() { None } else { Some(t.to_string()) }
+        }
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+fn json_required_str(map: &Map<String, Value>, key: &str) -> String {
+    json_str(map, key).unwrap_or_default()
+}
+
+fn json_float(map: &Map<String, Value>, key: &str) -> Option<f64> {
+    match map.get(key)? {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn json_int(map: &Map<String, Value>, key: &str) -> Option<i64> {
+    match map.get(key)? {
+        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+fn json_bool_from_int(map: &Map<String, Value>, key: &str) -> Option<bool> {
+    json_int(map, key).map(|i| i != 0)
+}
+
+fn collect_extra_from_json(map: &Map<String, Value>, known: &[&str]) -> ExtraAttrs {
+    map.iter()
+        .filter(|(k, _)| !known.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
 /// Opens a child group, converting a missing-group error into the dedicated
 /// `MissingGroup` variant (Rule 1: required groups raise a clear error).
 fn require_group(parent: &Group, path: &str) -> Result<Group> {
@@ -325,7 +409,6 @@ impl MachineConfigReader {
     /// or [`Self::get_scan_field_correction_bytes`] for those.
     pub fn parse(&self) -> Result<MachineConfig> {
         let f = H5File::open(&self.path)?;
-        self.check_file_version(&f);
         self.parse_inner(&f, false)
     }
 
@@ -333,7 +416,6 @@ impl MachineConfigReader {
     /// the raw `.fc3` bytes into the model.
     pub fn parse_with_binary(&self) -> Result<MachineConfig> {
         let f = H5File::open(&self.path)?;
-        self.check_file_version(&f);
         self.parse_inner(&f, true)
     }
 
@@ -415,28 +497,63 @@ impl MachineConfigReader {
         )
     }
 
-    /// File_Version mismatches only warn (Rule 6) — they never fail parsing.
-    fn check_file_version(&self, f: &H5File) {
-        let version = read_required_str(f, "File_Version").unwrap_or_default();
-        if version.trim() != EXPECTED_FILE_VERSION {
+    fn parse_inner(&self, f: &H5File, include_binary: bool) -> Result<MachineConfig> {
+        let raw_version = read_required_str(f, "File_Version").unwrap_or_default();
+        let chain = adapters::registry::get_chain(&raw_version, CURRENT_VERSION);
+
+        // Warn for versions with no adapter and not current.
+        if chain.is_empty() && !raw_version.is_empty() && raw_version != CURRENT_VERSION {
             eprintln!(
-                "Warning: File_Version is {version:?}; this reader targets {EXPECTED_FILE_VERSION:?}. \
+                "Warning: File_Version is {raw_version:?}; no adapter available. \
                  Output may be incomplete or incorrect."
             );
         }
-    }
 
-    fn parse_inner(&self, f: &H5File, include_binary: bool) -> Result<MachineConfig> {
-        let meta = MachineConfigMeta {
-            schema_version: SCHEMA_VERSION.to_string(),
-            machine_name: read_required_str(f, "machine_name")?,
-            manufacturer: read_required_str(f, "manufacturer")?,
-            model: read_required_str(f, "model")?,
-            serial_number: read_required_str(f, "serial_number")?,
-            file_version: read_required_str(f, "File_Version")?,
-            export_date: read_required_str(f, "Export_Date")?,
-            configuration_hash: read_required_str(f, "Configuration_Hash")?,
-            extra: collect_extra(f, KNOWN_ROOT_KEYS)?,
+        let (adapted_meta, adapted_trains): (Option<Map<String, Value>>, Vec<Map<String, Value>>) =
+            if chain.is_empty() {
+                (None, vec![])
+            } else {
+                let mut raw = hdf5_to_raw(f)?;
+                for adapter in &chain {
+                    raw = adapter.adapt(raw);
+                }
+                if let Some(Value::Object(ref mut m)) = raw.get_mut("meta") {
+                    m.insert("File_Version".to_string(), Value::String(CURRENT_VERSION.to_string()));
+                }
+                let trains = raw
+                    .get("optical_trains")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_object().cloned()).collect())
+                    .unwrap_or_default();
+                let meta = raw
+                    .get("meta")
+                    .and_then(|v| v.as_object())
+                    .cloned()
+                    .unwrap_or_default();
+                (Some(meta), trains)
+            };
+
+        let meta = match &adapted_meta {
+            Some(am) => MachineConfigMeta {
+                machine_name: json_required_str(am, "machine_name"),
+                manufacturer: json_required_str(am, "manufacturer"),
+                model: json_required_str(am, "model"),
+                serial_number: json_required_str(am, "serial_number"),
+                file_version: json_required_str(am, "File_Version"),
+                export_date: json_required_str(am, "Export_Date"),
+                configuration_hash: json_required_str(am, "Configuration_Hash"),
+                extra: collect_extra_from_json(am, KNOWN_ROOT_KEYS),
+            },
+            None => MachineConfigMeta {
+                machine_name: read_required_str(f, "machine_name")?,
+                manufacturer: read_required_str(f, "manufacturer")?,
+                model: read_required_str(f, "model")?,
+                serial_number: read_required_str(f, "serial_number")?,
+                file_version: read_required_str(f, "File_Version")?,
+                export_date: read_required_str(f, "Export_Date")?,
+                configuration_hash: read_required_str(f, "Configuration_Hash")?,
+                extra: collect_extra(f, KNOWN_ROOT_KEYS)?,
+            },
         };
 
         let m = require_group(f, "Machine")?;
@@ -471,7 +588,8 @@ impl MachineConfigReader {
         train_ids.sort();
         let optical_trains = train_ids
             .iter()
-            .map(|tid| self.parse_train(f, tid, include_binary))
+            .enumerate()
+            .map(|(i, tid)| self.parse_train(f, tid, include_binary, adapted_trains.get(i)))
             .collect::<Result<Vec<_>>>()?;
 
         let opcua = self.parse_opcua(f)?;
@@ -479,9 +597,21 @@ impl MachineConfigReader {
         Ok(MachineConfig { meta, machine, optical_trains, opcua })
     }
 
-    fn parse_train(&self, f: &H5File, train_id: &str, include_binary: bool) -> Result<OpticalTrain> {
+    fn parse_train(
+        &self,
+        f: &H5File,
+        train_id: &str,
+        include_binary: bool,
+        adapted_attrs: Option<&Map<String, Value>>,
+    ) -> Result<OpticalTrain> {
         let base = format!("Machine/Optical_Trains/{train_id}");
         let a = require_group(f, &base)?;
+
+        // Dispatch helpers: use adapted JSON map when present, HDF5 otherwise.
+        let s   = |k: &str| -> Result<Option<String>>  { adapted_attrs.map_or_else(|| read_str(&a, k),       |am| Ok(json_str(am, k))) };
+        let flt = |k: &str| -> Result<Option<f64>>     { adapted_attrs.map_or_else(|| read_float(&a, k),     |am| Ok(json_float(am, k))) };
+        let u   = |k: &str, exp: &str| -> Result<Option<String>> { adapted_attrs.map_or_else(|| read_unit_locked(&a, k, exp), |am| Ok(json_str(am, k))) };
+        let b   = |k: &str| -> Result<Option<bool>>    { adapted_attrs.map_or_else(|| read_bool_from_int(&a, k), |am| Ok(json_bool_from_int(am, k))) };
 
         let scanner = self.parse_scanner(&require_group(&a, "Scanner")?)?;
         let light_source = self.parse_light_source(&require_group(&a, "Light_Source")?)?;
@@ -500,55 +630,35 @@ impl MachineConfigReader {
 
         Ok(OpticalTrain {
             train_id: train_id.to_string(),
-            id: read_str(&a, "ID")?,
-            beam_profile_type: read_str(&a, "Beam_Profile_Type")?,
-            beam_waist_definition: read_str(&a, "Beam_Waist_Definition")?,
-            beam_waist_major: read_float(&a, "Beam_Waist_Major")?,
-            beam_waist_major_unit: read_unit_locked(&a, "Beam_Waist_Major_unit", "\u{03bc}m")?,
-            beam_waist_minor: read_float(&a, "Beam_Waist_Minor")?,
-            beam_waist_minor_unit: read_unit_locked(&a, "Beam_Waist_Minor_unit", "\u{03bc}m")?,
-            beam_waist_offset_z: read_float(&a, "Beam_Waist_Offset_Z")?,
-            beam_waist_offset_z_unit: read_unit_locked(&a, "Beam_Waist_Offset_Z_unit", "mm")?,
-            build_plane_offset_major: read_float(&a, "Build_Plane_Offset_Major")?,
-            build_plane_offset_major_unit: read_unit_locked(
-                &a,
-                "Build_Plane_Offset_Major_unit",
-                "mm",
-            )?,
-            build_plane_offset_minor: read_float(&a, "Build_Plane_Offset_Minor")?,
-            build_plane_offset_minor_unit: read_unit_locked(
-                &a,
-                "Build_Plane_Offset_Minor_unit",
-                "mm",
-            )?,
-            collimator_focal_length: read_float(&a, "Collimator_Focal_Length")?,
-            collimator_focal_length_unit: read_unit_locked(
-                &a,
-                "Collimator_Focal_Length_unit",
-                "mm",
-            )?,
-            m2_major: read_float(&a, "M2_Major")?,
-            m2_minor: read_float(&a, "M2_Minor")?,
-            major_axis_angle: read_float(&a, "Major_Axis_Angle")?,
-            major_axis_angle_unit: read_unit_locked(&a, "Major_Axis_Angle_unit", "degrees")?,
-            rayleigh_length_major: read_float(&a, "Rayleigh_Length_Major")?,
-            rayleigh_length_major_unit: read_unit_locked(&a, "Rayleigh_Length_Major_unit", "mm")?,
-            rayleigh_length_minor: read_float(&a, "Rayleigh_Length_Minor")?,
-            rayleigh_length_minor_unit: read_unit_locked(&a, "Rayleigh_Length_Minor_unit", "mm")?,
-            scanner_number: read_str(&a, "Scanner_Number")?,
-            thermal_lensing_passed: read_bool_from_int(&a, "Thermal_Lensing_Test_Passed")?,
-            thermal_lensing_focal_plane_shift: read_float(&a, "Thermal_Lensing_Focal_Plane_Shift")?,
-            thermal_lensing_focal_plane_shift_unit: read_unit_locked(
-                &a,
-                "Thermal_Lensing_Focal_Plane_Shift_unit",
-                "mm",
-            )?,
-            thermal_lensing_threshold: read_float(&a, "Thermal_Lensing_Threshold")?,
-            thermal_lensing_threshold_unit: read_unit_locked(
-                &a,
-                "Thermal_Lensing_Threshold_unit",
-                "mm",
-            )?,
+            id: s("ID")?,
+            beam_profile_type: s("Beam_Profile_Type")?,
+            beam_waist_definition: s("Beam_Waist_Definition")?,
+            beam_waist_major: flt("Beam_Waist_Major")?,
+            beam_waist_major_unit: u("Beam_Waist_Major_unit", "\u{03bc}m")?,
+            beam_waist_minor: flt("Beam_Waist_Minor")?,
+            beam_waist_minor_unit: u("Beam_Waist_Minor_unit", "\u{03bc}m")?,
+            beam_waist_offset_z: flt("Beam_Waist_Offset_Z")?,
+            beam_waist_offset_z_unit: u("Beam_Waist_Offset_Z_unit", "mm")?,
+            build_plane_offset_major: flt("Build_Plane_Offset_Major")?,
+            build_plane_offset_major_unit: u("Build_Plane_Offset_Major_unit", "mm")?,
+            build_plane_offset_minor: flt("Build_Plane_Offset_Minor")?,
+            build_plane_offset_minor_unit: u("Build_Plane_Offset_Minor_unit", "mm")?,
+            collimator_focal_length: flt("Collimator_Focal_Length")?,
+            collimator_focal_length_unit: u("Collimator_Focal_Length_unit", "mm")?,
+            m2_major: flt("M2_Major")?,
+            m2_minor: flt("M2_Minor")?,
+            major_axis_angle: flt("Major_Axis_Angle")?,
+            major_axis_angle_unit: u("Major_Axis_Angle_unit", "degrees")?,
+            rayleigh_length_major: flt("Rayleigh_Length_Major")?,
+            rayleigh_length_major_unit: u("Rayleigh_Length_Major_unit", "mm")?,
+            rayleigh_length_minor: flt("Rayleigh_Length_Minor")?,
+            rayleigh_length_minor_unit: u("Rayleigh_Length_Minor_unit", "mm")?,
+            scanner_number: s("Scanner_Number")?,
+            thermal_lensing_passed: b("Thermal_Lensing_Test_Passed")?,
+            thermal_lensing_focal_plane_shift: flt("Thermal_Lensing_Focal_Plane_Shift")?,
+            thermal_lensing_focal_plane_shift_unit: u("Thermal_Lensing_Focal_Plane_Shift_unit", "mm")?,
+            thermal_lensing_threshold: flt("Thermal_Lensing_Threshold")?,
+            thermal_lensing_threshold_unit: u("Thermal_Lensing_Threshold_unit", "mm")?,
             scanner,
             light_source,
             collimator,
@@ -783,7 +893,6 @@ mod tests {
         assert_eq!(config.meta.manufacturer, "Aconity3D");
         assert_eq!(config.meta.file_version, "1.0");
         assert_eq!(config.meta.configuration_hash.len(), 64);
-        assert_eq!(config.meta.schema_version, "v1");
         assert_eq!(
             config.meta.extra.get("Description").and_then(|v| v.as_str()),
             Some("Machine Configuration Export from Service Observations")

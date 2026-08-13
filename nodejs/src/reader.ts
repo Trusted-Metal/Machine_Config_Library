@@ -1,5 +1,6 @@
 import * as h5wasm from "h5wasm/node";
 import { resolve } from "node:path";
+import { getChainFor } from "./adapters/index.js";
 import type {
   MachineConfig,
   MachineConfigMeta,
@@ -182,6 +183,67 @@ const KNOWN_TRIGGER = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
+// Version dispatch
+// ---------------------------------------------------------------------------
+
+/** The schema version this build of the library produces. */
+const CURRENT_VERSION = "1.0";
+
+/**
+ * Snapshot all root-level attributes and each optical-train group's attributes
+ * into a plain-JS dict suited for adapter input/output.
+ */
+function hdf5ToRawDict(f: h5wasm.File): Record<string, unknown> {
+  const meta: Record<string, unknown> = {};
+  for (const [k, attr] of Object.entries(f.attrs)) {
+    const v = attr.value;
+    meta[k] = typeof v === "bigint" ? Number(v) : v;
+  }
+
+  const optical_trains: Record<string, unknown>[] = [];
+  const trainsGrpEnt = f.get("Machine/Optical_Trains");
+  if (trainsGrpEnt instanceof h5wasm.Group) {
+    const trainIds = trainsGrpEnt.keys().filter((k) => k.startsWith("Optical_Train_")).sort();
+    for (const trainId of trainIds) {
+      const trainEnt = trainsGrpEnt.get(trainId);
+      if (trainEnt instanceof h5wasm.Group) {
+        const trainAttrs: Record<string, unknown> = {};
+        for (const [k, attr] of Object.entries(trainEnt.attrs)) {
+          const v = attr.value;
+          trainAttrs[k] = typeof v === "bigint" ? Number(v) : v;
+        }
+        optical_trains.push(trainAttrs);
+      }
+    }
+  }
+
+  return { meta, optical_trains };
+}
+
+/** Read a string from an adapted-attrs plain dict. */
+function adaptedAttrStr(d: Record<string, unknown>, k: string): string | null {
+  const v = d[k];
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s || null;
+}
+
+/** Read a float from an adapted-attrs plain dict. */
+function adaptedAttrNum(d: Record<string, unknown>, k: string): number | null {
+  const v = d[k];
+  if (v == null) return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n;
+}
+
+/** Read a boolean (stored as 0/1) from an adapted-attrs plain dict. */
+function adaptedAttrBool(d: Record<string, unknown>, k: string): boolean | null {
+  const v = d[k];
+  if (v == null) return null;
+  return Number(v) !== 0;
+}
+
+// ---------------------------------------------------------------------------
 // Dataset helpers
 // ---------------------------------------------------------------------------
 
@@ -218,7 +280,6 @@ function float64ToNested3D(
 function parseMeta(f: h5wasm.File): MachineConfigMeta {
   const a = f.attrs;
   return {
-    schema_version: "v1",
     machine_name: attrStrReq(a, "machine_name"),
     manufacturer: attrStrReq(a, "manufacturer"),
     model: attrStrReq(a, "model"),
@@ -413,10 +474,16 @@ function parseOpticalTrain(
   f: h5wasm.File,
   trainId: string,
   includeBinary: boolean,
+  adaptedAttrs: Record<string, unknown> | null = null,
 ): OpticalTrain {
   const base = `Machine/Optical_Trains/${trainId}`;
   const trainGrp = asGroup(f.get(base), base);
-  const a = trainGrp.attrs;
+  const hdfAttrs = trainGrp.attrs;
+
+  // When adapters have run, read from the adapted plain dict; otherwise from HDF5.
+  const getStr  = (k: string) => adaptedAttrs ? adaptedAttrStr(adaptedAttrs, k)  : attrStr(hdfAttrs, k);
+  const getNum  = (k: string) => adaptedAttrs ? adaptedAttrNum(adaptedAttrs, k)  : attrFloat(hdfAttrs, k);
+  const getBool = (k: string) => adaptedAttrs ? adaptedAttrBool(adaptedAttrs, k) : attrBool(hdfAttrs, k);
 
   const cbEnt = trainGrp.get("Optional_Components/ClearBox");
   const sfcfEnt = trainGrp.get("scan_field_correction_file");
@@ -433,35 +500,35 @@ function parseOpticalTrain(
 
   return {
     train_id: trainId,
-    id: attrStr(a, "ID"),
-    beam_profile_type: attrStr(a, "Beam_Profile_Type"),
-    beam_waist_definition: attrStr(a, "Beam_Waist_Definition"),
-    beam_waist_major: attrFloat(a, "Beam_Waist_Major"),
-    beam_waist_major_unit: attrStr(a, "Beam_Waist_Major_unit"),
-    beam_waist_minor: attrFloat(a, "Beam_Waist_Minor"),
-    beam_waist_minor_unit: attrStr(a, "Beam_Waist_Minor_unit"),
-    beam_waist_offset_z: attrFloat(a, "Beam_Waist_Offset_Z"),
-    beam_waist_offset_z_unit: attrStr(a, "Beam_Waist_Offset_Z_unit"),
-    build_plane_offset_major: attrFloat(a, "Build_Plane_Offset_Major"),
-    build_plane_offset_major_unit: attrStr(a, "Build_Plane_Offset_Major_unit"),
-    build_plane_offset_minor: attrFloat(a, "Build_Plane_Offset_Minor"),
-    build_plane_offset_minor_unit: attrStr(a, "Build_Plane_Offset_Minor_unit"),
-    collimator_focal_length: attrFloat(a, "Collimator_Focal_Length"),
-    collimator_focal_length_unit: attrStr(a, "Collimator_Focal_Length_unit"),
-    m2_major: attrFloat(a, "M2_Major"),
-    m2_minor: attrFloat(a, "M2_Minor"),
-    major_axis_angle: attrFloat(a, "Major_Axis_Angle"),
-    major_axis_angle_unit: attrStr(a, "Major_Axis_Angle_unit"),
-    rayleigh_length_major: attrFloat(a, "Rayleigh_Length_Major"),
-    rayleigh_length_major_unit: attrStr(a, "Rayleigh_Length_Major_unit"),
-    rayleigh_length_minor: attrFloat(a, "Rayleigh_Length_Minor"),
-    rayleigh_length_minor_unit: attrStr(a, "Rayleigh_Length_Minor_unit"),
-    scanner_number: attrStr(a, "Scanner_Number"),
-    thermal_lensing_passed: attrBool(a, "Thermal_Lensing_Test_Passed"),
-    thermal_lensing_focal_plane_shift: attrFloat(a, "Thermal_Lensing_Focal_Plane_Shift"),
-    thermal_lensing_focal_plane_shift_unit: attrStr(a, "Thermal_Lensing_Focal_Plane_Shift_unit"),
-    thermal_lensing_threshold: attrFloat(a, "Thermal_Lensing_Threshold"),
-    thermal_lensing_threshold_unit: attrStr(a, "Thermal_Lensing_Threshold_unit"),
+    id: getStr("ID"),
+    beam_profile_type: getStr("Beam_Profile_Type"),
+    beam_waist_definition: getStr("Beam_Waist_Definition"),
+    beam_waist_major: getNum("Beam_Waist_Major"),
+    beam_waist_major_unit: getStr("Beam_Waist_Major_unit"),
+    beam_waist_minor: getNum("Beam_Waist_Minor"),
+    beam_waist_minor_unit: getStr("Beam_Waist_Minor_unit"),
+    beam_waist_offset_z: getNum("Beam_Waist_Offset_Z"),
+    beam_waist_offset_z_unit: getStr("Beam_Waist_Offset_Z_unit"),
+    build_plane_offset_major: getNum("Build_Plane_Offset_Major"),
+    build_plane_offset_major_unit: getStr("Build_Plane_Offset_Major_unit"),
+    build_plane_offset_minor: getNum("Build_Plane_Offset_Minor"),
+    build_plane_offset_minor_unit: getStr("Build_Plane_Offset_Minor_unit"),
+    collimator_focal_length: getNum("Collimator_Focal_Length"),
+    collimator_focal_length_unit: getStr("Collimator_Focal_Length_unit"),
+    m2_major: getNum("M2_Major"),
+    m2_minor: getNum("M2_Minor"),
+    major_axis_angle: getNum("Major_Axis_Angle"),
+    major_axis_angle_unit: getStr("Major_Axis_Angle_unit"),
+    rayleigh_length_major: getNum("Rayleigh_Length_Major"),
+    rayleigh_length_major_unit: getStr("Rayleigh_Length_Major_unit"),
+    rayleigh_length_minor: getNum("Rayleigh_Length_Minor"),
+    rayleigh_length_minor_unit: getStr("Rayleigh_Length_Minor_unit"),
+    scanner_number: getStr("Scanner_Number"),
+    thermal_lensing_passed: getBool("Thermal_Lensing_Test_Passed"),
+    thermal_lensing_focal_plane_shift: getNum("Thermal_Lensing_Focal_Plane_Shift"),
+    thermal_lensing_focal_plane_shift_unit: getStr("Thermal_Lensing_Focal_Plane_Shift_unit"),
+    thermal_lensing_threshold: getNum("Thermal_Lensing_Threshold"),
+    thermal_lensing_threshold_unit: getStr("Thermal_Lensing_Threshold_unit"),
     scanner: parseScanner(asGroup(trainGrp.get("Scanner"), `${base}/Scanner`)),
     light_source: parseLightSource(asGroup(trainGrp.get("Light_Source"), `${base}/Light_Source`)),
     collimator: parseCollimator(asGroup(trainGrp.get("Collimator"), `${base}/Collimator`)),
@@ -520,7 +587,38 @@ function parseOpcua(f: h5wasm.File): OpcuaConfig | undefined {
 function parseFile(f: h5wasm.File, opts: ReadOptions): MachineConfig {
   const includeBinary = opts.includeBinary ?? false;
 
-  const meta = parseMeta(f);
+  // Dispatch: if the stored File_Version differs from CURRENT_VERSION, run adapters.
+  const rawVersion = attrStrReq(f.attrs, "File_Version") || CURRENT_VERSION;
+  const chain = getChainFor(rawVersion, CURRENT_VERSION);
+
+  let adaptedMeta: Record<string, unknown> | null = null;
+  let adaptedTrains: Record<string, unknown>[] | null = null;
+
+  if (chain.length > 0) {
+    let raw = hdf5ToRawDict(f);
+    for (const adapter of chain) {
+      raw = adapter.adapt(raw);
+    }
+    (raw.meta as Record<string, unknown>)["File_Version"] = CURRENT_VERSION;
+    adaptedMeta = raw.meta as Record<string, unknown>;
+    adaptedTrains = raw.optical_trains as Record<string, unknown>[];
+  }
+
+  const meta: MachineConfigMeta = adaptedMeta
+    ? {
+        machine_name: String(adaptedMeta["machine_name"] ?? ""),
+        manufacturer: String(adaptedMeta["manufacturer"] ?? ""),
+        model: String(adaptedMeta["model"] ?? ""),
+        serial_number: String(adaptedMeta["serial_number"] ?? ""),
+        file_version: String(adaptedMeta["File_Version"] ?? CURRENT_VERSION),
+        export_date: String(adaptedMeta["Export_Date"] ?? ""),
+        configuration_hash: String(adaptedMeta["Configuration_Hash"] ?? ""),
+        extra: Object.fromEntries(
+          Object.entries(adaptedMeta).filter(([k]) => !KNOWN_ROOT.has(k))
+        ),
+      }
+    : parseMeta(f);
+
   const machine = parseMachine(f);
 
   const trainsGrp = asGroup(f.get("Machine/Optical_Trains"), "Machine/Optical_Trains");
@@ -529,8 +627,8 @@ function parseFile(f: h5wasm.File, opts: ReadOptions): MachineConfig {
     .filter((k) => k.startsWith("Optical_Train_"))
     .sort();
 
-  const optical_trains = trainIds.map((tid) =>
-    parseOpticalTrain(f, tid, includeBinary),
+  const optical_trains = trainIds.map((tid, i) =>
+    parseOpticalTrain(f, tid, includeBinary, adaptedTrains ? adaptedTrains[i] ?? null : null),
   );
 
   const opcua = parseOpcua(f);

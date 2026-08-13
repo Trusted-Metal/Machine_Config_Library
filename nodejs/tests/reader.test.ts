@@ -35,8 +35,8 @@ beforeAll(async () => {
 // ===========================================================================
 
 describe('MachineConfigReader — meta', () => {
-  it('schema_version is "v1" (synthetic)', () => {
-    expect(synthetic.meta.schema_version).toBe('v1');
+  it('file_version is "1.0" (synthetic)', () => {
+    expect(synthetic.meta.file_version).toBe('1.0');
   });
 
   it('machine_name is non-empty (synthetic)', () => {
@@ -455,6 +455,49 @@ describe('MachineConfigReader — OPCUA', () => {
     expect(t.signal).toBe('oxygen_level');
     expect(t.start_value).toBe('700');
     expect(t.stop_value).toBe('1000');
+  });
+});
+
+// ===========================================================================
+// Adapter dispatch (Phase D.2)
+// ===========================================================================
+
+const SYNTHETIC_V09 = join(__dirname, '../../fixtures/adapters/test/reference_synthetic_v0_9.h5');
+const REAL_FIXTURE  = join(__dirname, '../../fixtures/reference_config.h5');
+
+describe('MachineConfigReader — adapter dispatch', () => {
+  let upgraded: MachineConfig;
+  let real: MachineConfig;
+
+  beforeAll(async () => {
+    [upgraded, real] = await Promise.all([
+      new MachineConfigReader(SYNTHETIC_V09).parse(),
+      new MachineConfigReader(REAL_FIXTURE).parse(),
+    ]);
+  }, 60_000);
+
+  it('v0.9 fixture is upgraded to file_version "1.0"', () => {
+    expect(upgraded.meta.file_version).toBe('1.0');
+  });
+
+  it('real fixture (already v1.0) has file_version "1.0" unchanged', () => {
+    expect(real.meta.file_version).toBe('1.0');
+  });
+
+  it('v0.9 fixture parses to a valid MachineConfig with 2 optical trains', () => {
+    expect(upgraded.optical_trains).toHaveLength(2);
+  });
+
+  it('beam_waist_major survives the v0.9 → v1.0 upgrade intact', () => {
+    // The adapter chain must not corrupt existing optical-train numeric fields.
+    const bwm = upgraded.optical_trains[0].beam_waist_major;
+    expect(bwm).not.toBeNull();
+    expect(typeof bwm).toBe('number');
+    expect(Number.isFinite(bwm!)).toBe(true);
+  });
+
+  it('real fixture parses successfully with no adapters applied', () => {
+    expect(real.optical_trains.length).toBeGreaterThan(0);
   });
 });
 

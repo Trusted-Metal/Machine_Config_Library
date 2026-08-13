@@ -1,12 +1,14 @@
 """
 Phase 0.7 — Jinja Adapter Generator Tests
 Verifies:
-  - generate_adapters.py runs cleanly on an empty spec directory
+  - generate_adapters.py runs cleanly and creates one file per language
   - All four .j2 templates parse as valid Jinja2
   - Each template renders the DO NOT EDIT MANUALLY header and correct version strings
-  - All three change types (field_add, field_rename, field_remove) render correctly
+  - All five change types render correctly
   - Templates render without error when changes list is empty
+  - Generator is idempotent: running it twice produces identical output
 """
+import hashlib
 import subprocess
 import sys
 import pathlib
@@ -24,15 +26,17 @@ TEMPLATES = [
     "adapter_cpp.hpp.j2",
 ]
 
-# Sample spec covering all three change types
+# Sample spec covering all five implemented change types
 _SAMPLE_SPEC = {
     "from_version": "1.0",
     "to_version":   "1.1",
     "breaking":     False,
     "changes": [
-        {"type": "field_add",    "path": "optical_trains[*]",         "field": "new_field_nm"},
-        {"type": "field_rename", "path": "optical_trains[*].scanner", "old_field": "old_name", "new_field": "new_name"},
-        {"type": "field_remove", "path": "optical_trains[*]",         "field": "deprecated_field"},
+        {"type": "field_add",         "path":      "optical_trains[*]",          "field":     "new_field_nm"},
+        {"type": "field_rename",      "path":      "optical_trains[*].scanner",  "old_field": "old_name",       "new_field": "new_name"},
+        {"type": "field_remove",      "path":      "optical_trains[*]",          "field":     "deprecated_field"},
+        {"type": "field_move",        "from_path": "optical_trains[*]",          "to_path":   "optical_trains[*].scanner", "field":     "move_src_field"},
+        {"type": "field_move_rename", "from_path": "optical_trains[*]",          "to_path":   "optical_trains[*].scanner", "old_field": "move_rename_src", "new_field": "move_rename_dst"},
     ],
 }
 
@@ -60,14 +64,39 @@ def jinja_env():
 # Generator script
 # ---------------------------------------------------------------------------
 
-def test_generator_runs_with_empty_spec_dir():
-    """Generator exits 0 and reports nothing to generate when spec dir is empty."""
+def test_generator_runs_and_creates_outputs():
+    """Generator exits 0 and writes one file per language for every spec found."""
     result = subprocess.run(
         [sys.executable, str(GENERATOR)],
         capture_output=True, text=True, cwd=str(REPO_ROOT),
     )
     assert result.returncode == 0, f"Generator failed:\n{result.stderr}"
-    assert "No adapter specs found" in result.stdout
+    expected = [
+        REPO_ROOT / "python/src/machine_config/adapters/test_v0_9_to_v1_0.py",
+        REPO_ROOT / "nodejs/src/adapters/test_v0_9_to_v1_0.ts",
+        REPO_ROOT / "rust/src/adapters/test_v0_9_to_v1_0.rs",
+        REPO_ROOT / "cpp/include/machine_config/adapters/test_v0_9_to_v1_0.hpp",
+    ]
+    for path in expected:
+        assert path.exists(), f"Generator did not create {path}"
+
+
+def test_generator_is_idempotent():
+    """Running the generator twice produces byte-for-byte identical output."""
+    generated = [
+        REPO_ROOT / "python/src/machine_config/adapters/test_v0_9_to_v1_0.py",
+        REPO_ROOT / "nodejs/src/adapters/test_v0_9_to_v1_0.ts",
+        REPO_ROOT / "rust/src/adapters/test_v0_9_to_v1_0.rs",
+        REPO_ROOT / "cpp/include/machine_config/adapters/test_v0_9_to_v1_0.hpp",
+    ]
+
+    def sha256(path: pathlib.Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    before = {p: sha256(p) for p in generated}
+    subprocess.run([sys.executable, str(GENERATOR)], check=True, capture_output=True, cwd=str(REPO_ROOT))
+    for path in generated:
+        assert sha256(path) == before[path], f"Generator not idempotent: {path.name} changed on second run"
 
 
 # ---------------------------------------------------------------------------
@@ -138,3 +167,20 @@ def test_rendered_empty_changes_is_non_empty(jinja_env, tmpl):
     rendered = jinja_env.get_template(tmpl).render(spec=_SAMPLE_SPEC_EMPTY, name="v1_1_to_v1_2")
     assert "DO NOT EDIT MANUALLY" in rendered
     assert rendered.strip(), f"{tmpl}: empty output for empty changes"
+
+
+@pytest.mark.parametrize("tmpl", TEMPLATES)
+def test_rendered_field_move(jinja_env, tmpl):
+    """field_move change produces comment and field name in output."""
+    rendered = jinja_env.get_template(tmpl).render(spec=_SAMPLE_SPEC, name="v1_0_to_v1_1")
+    assert "field_move" in rendered, f"{tmpl}: missing field_move"
+    assert "move_src_field" in rendered, f"{tmpl}: missing field name"
+
+
+@pytest.mark.parametrize("tmpl", TEMPLATES)
+def test_rendered_field_move_rename(jinja_env, tmpl):
+    """field_move_rename change produces both old and new field names in output."""
+    rendered = jinja_env.get_template(tmpl).render(spec=_SAMPLE_SPEC, name="v1_0_to_v1_1")
+    assert "field_move_rename" in rendered, f"{tmpl}: missing field_move_rename"
+    assert "move_rename_src" in rendered, f"{tmpl}: missing old_field"
+    assert "move_rename_dst" in rendered, f"{tmpl}: missing new_field"

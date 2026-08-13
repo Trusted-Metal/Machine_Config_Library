@@ -1,35 +1,62 @@
 // AUTO-GENERATED from schema/adapters/{{ name }}.yaml
 // DO NOT EDIT MANUALLY — regenerate with: python tools/generate_adapters.py
-import type { MachineConfig } from '../models';
+import type { Adapter } from './base.js';
 
 export const fromVersion = '{{ spec.from_version }}';
 export const toVersion   = '{{ spec.to_version }}';
 
-export function adapt(config: MachineConfig): MachineConfig {
-    {% for change in spec.changes %}
-    {% if change.type == 'field_add' %}
-    // field_add: {{ change.field }} (path: {{ change.path }})
-    for (const train of config.optical_trains) {
-        const t = train as Record<string, unknown>;
-        if (!Object.prototype.hasOwnProperty.call(t, '{{ change.field }}')) {
-            t['{{ change.field }}'] = null;
+export class V{{ spec.from_version | replace('.', '_') }}_to_V{{ spec.to_version | replace('.', '_') }} implements Adapter {
+    readonly name = '{{ name }}';
+
+    adapt(config: Record<string, unknown>): Record<string, unknown> {
+        const trains = (config['optical_trains'] as Record<string, unknown>[]) ?? [];
+{% for change in spec.changes %}
+{% if change.type == 'field_add' %}
+        // field_add: {{ change.field }} (path: {{ change.path }})
+        for (const train of trains) {
+            if (!Object.prototype.hasOwnProperty.call(train, '{{ change.field }}')) {
+                train['{{ change.field }}'] = null;
+            }
         }
-    }
-    {% elif change.type == 'field_rename' %}
-    // field_rename: {{ change.old_field }} -> {{ change.new_field }} (path: {{ change.path }})
-    for (const train of config.optical_trains) {
-        const t = train as Record<string, unknown>;
-        if (Object.prototype.hasOwnProperty.call(t, '{{ change.old_field }}')) {
-            t['{{ change.new_field }}'] = t['{{ change.old_field }}'];
-            delete t['{{ change.old_field }}'];
+{% elif change.type == 'field_rename' %}
+        // field_rename: {{ change.old_field }} -> {{ change.new_field }} (path: {{ change.path }})
+        for (const train of trains) {
+            if (Object.prototype.hasOwnProperty.call(train, '{{ change.old_field }}')) {
+                train['{{ change.new_field }}'] = train['{{ change.old_field }}'];
+                delete train['{{ change.old_field }}'];
+            }
         }
+{% elif change.type == 'field_remove' %}
+        // field_remove: {{ change.field }} dropped (path: {{ change.path }})
+        for (const train of trains) {
+            delete train['{{ change.field }}'];
+        }
+{% elif change.type == 'field_move' %}
+{% set dest_obj = change.to_path.split('.')[-1] %}
+        // field_move: {{ change.field }} ({{ change.from_path }} -> {{ change.to_path }})
+        for (const train of trains) {
+            if (Object.prototype.hasOwnProperty.call(train, '{{ change.field }}')) {
+                if (typeof train['{{ dest_obj }}'] !== 'object' || train['{{ dest_obj }}'] === null) {
+                    train['{{ dest_obj }}'] = {};
+                }
+                (train['{{ dest_obj }}'] as Record<string, unknown>)['{{ change.field }}'] = train['{{ change.field }}'];
+                delete train['{{ change.field }}'];
+            }
+        }
+{% elif change.type == 'field_move_rename' %}
+{% set dest_obj = change.to_path.split('.')[-1] %}
+        // field_move_rename: {{ change.old_field }} -> {{ dest_obj }}.{{ change.new_field }} ({{ change.from_path }} -> {{ change.to_path }})
+        for (const train of trains) {
+            if (Object.prototype.hasOwnProperty.call(train, '{{ change.old_field }}')) {
+                if (typeof train['{{ dest_obj }}'] !== 'object' || train['{{ dest_obj }}'] === null) {
+                    train['{{ dest_obj }}'] = {};
+                }
+                (train['{{ dest_obj }}'] as Record<string, unknown>)['{{ change.new_field }}'] = train['{{ change.old_field }}'];
+                delete train['{{ change.old_field }}'];
+            }
+        }
+{% endif %}
+{% endfor %}
+        return config;
     }
-    {% elif change.type == 'field_remove' %}
-    // field_remove: {{ change.field }} dropped (path: {{ change.path }})
-    for (const train of config.optical_trains) {
-        delete (train as Record<string, unknown>)['{{ change.field }}'];
-    }
-    {% endif %}
-    {% endfor %}
-    return config;
 }

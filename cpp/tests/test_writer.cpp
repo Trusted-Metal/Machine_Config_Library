@@ -31,7 +31,6 @@ static std::filesystem::path tmpPath(const std::string& tag) {
 // Build a minimal valid MachineConfig with no ClearBox and no OPCUA.
 static MachineConfig makeMinimalConfig() {
     MachineConfig cfg;
-    cfg.meta.schema_version     = "v1";
     cfg.meta.machine_name       = "MinimalMachine";
     cfg.meta.manufacturer       = "Acme";
     cfg.meta.model              = "M1";
@@ -248,7 +247,7 @@ TEST_CASE("WrittenHdf5ValidatesSchema") {
     REQUIRE_FALSE(j["optical_trains"].empty());
 
     // Required meta fields
-    REQUIRE(j["meta"]["schema_version"].get<std::string>() == "v1");
+    REQUIRE(j["meta"]["file_version"].get<std::string>() == "1.0");
     REQUIRE_FALSE(j["meta"]["machine_name"].get<std::string>().empty());
     REQUIRE(j["meta"]["configuration_hash"].get<std::string>().size() == 64);
 

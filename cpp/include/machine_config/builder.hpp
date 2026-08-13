@@ -51,7 +51,6 @@ public:
     MachineConfig build() const {
         MachineConfig cfg;
 
-        cfg.meta.schema_version     = "v1";
         cfg.meta.machine_name       = machine_name;
         cfg.meta.manufacturer       = manufacturer;
         cfg.meta.model              = model;

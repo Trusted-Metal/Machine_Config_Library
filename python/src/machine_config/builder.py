@@ -309,7 +309,6 @@ class MockConfigBuilder:
             recoat_direction="X+",
         )
         meta = MachineConfigMeta(
-            schema_version=SCHEMA_VERSION,
             machine_name=self.machine_name,
             manufacturer=self.manufacturer,
             model=self.model,
@@ -380,7 +379,6 @@ class YamlConfigBuilder:
             recoat_direction=sm.get("recoat_direction"),
         )
         meta = MachineConfigMeta(
-            schema_version=SCHEMA_VERSION,
             machine_name=machine_name,
             manufacturer=machine.manufacturer,
             model=machine.model,

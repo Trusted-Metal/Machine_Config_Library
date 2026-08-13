@@ -99,7 +99,6 @@ TEST_CASE("CorrectionDataFlatIndexing") {
 // ---------------------------------------------------------------------------
 TEST_CASE("MachineConfigRoundtrip") {
     MachineConfig cfg;
-    cfg.meta.schema_version    = "1.0";
     cfg.meta.machine_name      = "TestMachine";
     cfg.meta.manufacturer      = "ACME";
     cfg.meta.model             = "TM-01";

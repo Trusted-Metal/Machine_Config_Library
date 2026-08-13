@@ -223,7 +223,6 @@ def _train(axis_cfg: str = "3D", include_clearbox: bool = True) -> OpticalTrain:
 def _config(axis_cfg: str = "3D", include_clearbox: bool = True) -> MachineConfig:
     return MachineConfig(
         meta=MachineConfigMeta(
-            schema_version=SCHEMA_VERSION,
             machine_name="TestMachine-01",
             manufacturer="TestCo",
             model="TestModel-X",

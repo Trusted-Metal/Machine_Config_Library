@@ -1,4 +1,5 @@
 add_executable(machine_config_tests
+  test_adapters.cpp
   test_models.cpp
   test_reader.cpp
   test_writer.cpp
