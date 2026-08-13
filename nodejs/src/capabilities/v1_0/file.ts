@@ -128,6 +128,11 @@ export class MachineConfigFileV1_0 implements MachineConfigFile {
       mode: SetMode,
     ): Result<void, CapabilityError> => {
       this.assertOpen();
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+        return err(
+          capabilityError('InvalidArgument', `invalid child key: ${key}`),
+        );
+      }
       const train = getTrain();
       train[key] = applySetMode(train[key] as Json, model as Json, mode);
       return ok(undefined);
