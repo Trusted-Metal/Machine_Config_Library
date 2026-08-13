@@ -88,6 +88,9 @@ func readIntAttr(g *h5c.Group, key string) (*int, error) {
 		if err != nil {
 			return nil, err
 		}
+		if strconv.IntSize == 32 && (iv < -(1<<31) || iv > (1<<31)-1) {
+			return nil, fmt.Errorf("attribute %q: integer %d out of range for int", key, iv)
+		}
 		i := int(iv)
 		return &i, nil
 	case h5c.AttrFloat:

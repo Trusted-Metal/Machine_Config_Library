@@ -122,19 +122,14 @@ export class MachineConfigFileV1_0 implements MachineConfigFile {
     const getTrain = (): Json =>
       (this.data['optical_trains'] as Json[])[index];
 
-    const setChild = (
-      key: string,
+    const setTrainProp = (
+      prop: 'scanner' | 'light_source' | 'collimator' | 'scanner_card',
       model: unknown,
       mode: SetMode,
     ): Result<void, CapabilityError> => {
       this.assertOpen();
-      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
-        return err(
-          capabilityError('InvalidArgument', `invalid child key: ${key}`),
-        );
-      }
       const train = getTrain();
-      train[key] = applySetMode(train[key] as Json, model as Json, mode);
+      train[prop] = applySetMode(train[prop] as Json, model as Json, mode);
       return ok(undefined);
     };
 
@@ -148,19 +143,19 @@ export class MachineConfigFileV1_0 implements MachineConfigFile {
         return ok(undefined);
       },
       getScanner: (): ScannerModel => snapshot(getTrain()['scanner']) as ScannerModel,
-      setScanner: (model, mode = SetMode.Merge) => setChild('scanner', model, mode),
+      setScanner: (model, mode = SetMode.Merge) => setTrainProp('scanner', model, mode),
       getLightSource: (): LightSourceModel =>
         snapshot(getTrain()['light_source']) as LightSourceModel,
       setLightSource: (model, mode = SetMode.Merge) =>
-        setChild('light_source', model, mode),
+        setTrainProp('light_source', model, mode),
       getCollimator: (): CollimatorModel =>
         snapshot(getTrain()['collimator']) as CollimatorModel,
       setCollimator: (model, mode = SetMode.Merge) =>
-        setChild('collimator', model, mode),
+        setTrainProp('collimator', model, mode),
       getScannerCard: (): ScannerCardModel =>
         snapshot(getTrain()['scanner_card']) as ScannerCardModel,
       setScannerCard: (model, mode = SetMode.Merge) =>
-        setChild('scanner_card', model, mode),
+        setTrainProp('scanner_card', model, mode),
       optionalComponents: (): OptionalComponentsHandle | null => {
         this.assertOpen();
         const oc = getTrain()['optional_components'] as Json | undefined;
