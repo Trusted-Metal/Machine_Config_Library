@@ -1,7 +1,6 @@
 name: Go
 
-# Builds and tests the Go library on Ubuntu (CGo + libhdf5).
-# Windows CI deferred (§5.14) — MSVC HDF5 does not link cleanly with MinGW CGo.
+# Builds and tests the Go library: Ubuntu (apt HDF5) and Windows (MSYS2 MinGW64 HDF5).
 
 on:
   workflow_dispatch:
@@ -24,11 +23,12 @@ permissions:
 
 jobs:
   test:
-    name: Test (ubuntu)
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: go
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -38,14 +38,44 @@ jobs:
           go-version: "1.24.x"
           cache-dependency-path: go/go.sum
 
-      - name: Install libhdf5
+      - name: Install libhdf5 (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libhdf5-dev pkg-config
 
-      - name: Proto gate (CGo dense attrs)
-        run: |
-          CGO_ENABLED=1 go run ./proto/proto_cgo_read_root_attrs/
+      # MSYS2 MINGW64 provides MinGW-compatible HDF5 headers, .a, .dll, and pkg-config.
+      - name: Install MSYS2 MinGW64 HDF5 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-hdf5
+            mingw-w64-x86_64-pkg-config
 
-      - name: Test
+      # HDF5 runtime DLLs must be on PATH when the test binary executes.
+      - name: Add MSYS2 MinGW64 bin to PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: echo "C:\msys64\mingw64\bin" | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_PATH
+
+      - name: Proto gate (CGo dense attrs, Linux)
+        if: runner.os == 'Linux'
+        run: CGO_ENABLED=1 go run ./proto/proto_cgo_read_root_attrs/
+        working-directory: go
+
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
         run: CGO_ENABLED=1 go test ./... -count=1
+        working-directory: go
+
+      # MSYS2 shell provides MinGW64 gcc and pkg-config; native Go is on PATH via setup-go.
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export CGO_ENABLED=1
+          cd go
+          go test ./... -count=1

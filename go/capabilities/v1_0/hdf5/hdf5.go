@@ -663,8 +663,18 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 
 // GetCorrectionData loads the ClearBox Correction_Data grid for train index.
 func (r *Adapter) GetCorrectionData(trainIndex int) (*CorrectionData, error) {
-	path := layout.ClearboxPath(trainIndex) + "/" + layout.DSCorrectionData
-	return r.readCorrection(path)
+	return r.readCorrection(layout.ClearboxPath(trainIndex) + "/" + layout.DSCorrectionData)
+}
+
+// GetInverseCorrectionData loads the ClearBox Inverse_Correction_Data grid for train index.
+func GetInverseCorrectionData(path string, trainIndex int) (*CorrectionData, error) {
+	r := &Adapter{path: path}
+	return r.readCorrection(layout.ClearboxPath(trainIndex) + "/" + layout.DSInverseCorrectionData)
+}
+
+// GetInverseCorrectionData loads the ClearBox Inverse_Correction_Data grid for train index.
+func (r *Adapter) GetInverseCorrectionData(trainIndex int) (*CorrectionData, error) {
+	return r.readCorrection(layout.ClearboxPath(trainIndex) + "/" + layout.DSInverseCorrectionData)
 }
 
 func (r *Adapter) readCorrection(path string) (*CorrectionData, error) {

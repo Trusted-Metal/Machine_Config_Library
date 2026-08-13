@@ -52,3 +52,17 @@ func (r *MachineConfigReader) GetCorrectionData(trainIndex int) (*CorrectionData
 		return nil, &UnsupportedFileVersionError{Version: fv}
 	}
 }
+
+// GetInverseCorrectionData loads the ClearBox Inverse_Correction_Data grid for train index.
+func (r *MachineConfigReader) GetInverseCorrectionData(trainIndex int) (*CorrectionData, error) {
+	fv, err := PeekFileVersion(r.path)
+	if err != nil {
+		return nil, err
+	}
+	switch fv {
+	case "1.0":
+		return v10hdf5.GetInverseCorrectionData(r.path, trainIndex)
+	default:
+		return nil, &UnsupportedFileVersionError{Version: fv}
+	}
+}

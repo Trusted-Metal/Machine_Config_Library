@@ -4,8 +4,8 @@ name: Cross-Language Check
 # implementations: Python source, Rust source, Node.js source, shared
 # fixtures, schema, or the cross-check script itself.
 #
-# Languages active now: python, rust, nodejs, cpp
-# All five phases run for all four languages.
+# Languages active now: python, rust, nodejs, cpp (all platforms) + go (all platforms via MSYS2)
+# Go participates in Phases 1, 2, 4. Phases 3/3.5 deferred until Go writer (§5.7) is done.
 
 on:
   workflow_dispatch:
@@ -86,6 +86,49 @@ jobs:
       - name: Build Node.js TypeScript
         run: npm run build
         working-directory: nodejs
+
+      # -----------------------------------------------------------------------
+      # Go  (CGo + libhdf5 — Linux via apt, Windows via MSYS2 MinGW64)
+      # libhdf5-dev is already installed for Rust on Linux.
+      # -----------------------------------------------------------------------
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache-dependency-path: go/go.sum
+
+      # MSYS2 MINGW64 provides MinGW-compatible HDF5 + pkg-config for CGo on Windows.
+      - name: Install MSYS2 MinGW64 HDF5 (Windows, Go CGo)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-hdf5
+            mingw-w64-x86_64-pkg-config
+
+      # HDF5 runtime DLLs must be on PATH before cross-check phases invoke the Go binary.
+      - name: Add MSYS2 MinGW64 bin to PATH (Windows, Go runtime DLLs)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: echo "C:\msys64\mingw64\bin" | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_PATH
+
+      - name: Build Go CLI binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p bin
+          CGO_ENABLED=1 go build -o bin/machine-config-cli ./cmd/machine-config-cli/
+        working-directory: go
+
+      # MSYS2 shell provides MinGW64 gcc and pkg-config; native Go is on PATH via setup-go.
+      - name: Build Go CLI binary (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          mkdir -p go/bin
+          export CGO_ENABLED=1
+          go build -o go/bin/machine-config-cli.exe ./go/cmd/machine-config-cli/
 
       # -----------------------------------------------------------------------
       # C++
@@ -183,8 +226,14 @@ jobs:
       - name: Phase 1 — Schema validation (all languages)
         run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-read-parity --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
 
+      - name: Phase 1 — Schema validation (Go)
+        run: python tools/cross_check.py --langs go --skip-read-parity --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
+
       - name: Phase 2 — Read parity (all fixtures, all languages)
         run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
+
+      - name: Phase 2 — Read parity (Go vs Python)
+        run: python tools/cross_check.py --langs python,go --skip-schema --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
 
       - name: Phase 3 — Write interoperability (all languages)
         run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-binary-copy --skip-correction-hash --verbose
@@ -194,6 +243,9 @@ jobs:
 
       - name: Phase 4 — Correction data hash parity (all languages)
         run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-write-interop --skip-binary-copy --verbose
+
+      - name: Phase 4 — Correction data hash parity (Go vs Python)
+        run: python tools/cross_check.py --langs python,go --skip-schema --skip-read-parity --skip-write-interop --skip-binary-copy --verbose
 
       # Upload both outputs so developers can diff them manually if a check fails.
       - name: Export Python JSON artifact
@@ -224,6 +276,14 @@ jobs:
           [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/machine_config_cli.exe"
           "$bin" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/cpp_output_xcheck.json"
 
+      - name: Export Go JSON artifact
+        if: always()
+        shell: bash
+        run: |
+          bin="go/bin/machine-config-cli"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="go/bin/machine-config-cli.exe"
+          "$bin" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/go_output_xcheck.json"
+
       - name: Upload language outputs for manual inspection
         if: always()
         uses: actions/upload-artifact@v4
@@ -234,4 +294,5 @@ jobs:
             ${{ runner.temp }}/rust_output_xcheck.json
             ${{ runner.temp }}/nodejs_output_xcheck.json
             ${{ runner.temp }}/cpp_output_xcheck.json
+            ${{ runner.temp }}/go_output_xcheck.json
           retention-days: 14

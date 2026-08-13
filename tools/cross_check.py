@@ -87,6 +87,10 @@ def _cpp_bin() -> Path:
     return flat
 
 
+def _go_bin() -> Path:
+    return REPO / "go" / "bin" / f"machine-config-cli{_EXT}"
+
+
 def _python_cli() -> str:
     """Find the machine-config CLI entry point.
 
@@ -115,6 +119,8 @@ RUNNERS: dict[str, Callable[[Path], list[str]]] = {
     "rust":   lambda fix: [str(_rust_bin()), "export-json", str(fix)],
     "nodejs": lambda fix: ["node", str(REPO / "nodejs/dist/cli.js"), "export-json", str(fix)],
     "cpp":    lambda fix: [str(_cpp_bin()), "export-json", str(fix)],
+    # Go: Linux-only (CGo + libhdf5). Binary built by cross_check.yml before phases run.
+    "go":     lambda fix: [str(_go_bin()), "export-json", str(fix)],
 }
 
 # Argv *prefix* for subcommands other than export-json (e.g. correction-hash).
@@ -124,6 +130,8 @@ BINARIES: dict[str, Callable[[], list[str]]] = {
     "rust":   lambda: [str(_rust_bin())],
     "nodejs": lambda: ["node", str(REPO / "nodejs/dist/cli.js")],
     "cpp":    lambda: [str(_cpp_bin())],
+    # Go: Linux-only (CGo + libhdf5). Supports correction-hash; write-hdf5/copy-hdf5 deferred.
+    "go":     lambda: [str(_go_bin())],
 }
 
 # Each entry is a callable(json_path: Path, h5_path: Path) -> list[str] that
