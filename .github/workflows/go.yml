@@ -53,14 +53,15 @@ jobs:
           update: false
           path-type: inherit
           install: >-
+            mingw-w64-x86_64-gcc
             mingw-w64-x86_64-hdf5
             mingw-w64-x86_64-pkg-config
 
-      # HDF5 runtime DLLs must be on PATH when the test binary executes.
+      # Adds the actual MSYS2 mingw64/bin to Windows PATH for subsequent steps (HDF5 DLLs).
       - name: Add MSYS2 MinGW64 bin to PATH (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: echo "C:\msys64\mingw64\bin" | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_PATH
+        shell: msys2 {0}
+        run: echo "$(cygpath -w /mingw64/bin)" >> "$GITHUB_PATH"
 
       - name: Proto gate (CGo dense attrs, Linux)
         if: runner.os == 'Linux'
