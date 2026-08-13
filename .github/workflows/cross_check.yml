@@ -134,7 +134,8 @@ jobs:
           export CGO_ENABLED=1
           export CC=$(cygpath -w /mingw64/bin/gcc.exe)
           export CXX=$(cygpath -w /mingw64/bin/g++.exe)
-          go build -o go/bin/machine-config-cli.exe ./go/cmd/machine-config-cli/
+          cd go
+          go build -o bin/machine-config-cli.exe ./cmd/machine-config-cli/
 
       # -----------------------------------------------------------------------
       # C++
