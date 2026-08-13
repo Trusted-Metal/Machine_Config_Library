@@ -1,13 +1,13 @@
 /**
  * File_Version 1.0 stable model facade — navigation + get/set with SetMode.
  */
-import { MachineConfigReader } from '../reader.js';
-import { MachineConfigWriter } from '../writer.js';
-import { MockConfigBuilder } from '../builder.js';
-import type { MachineConfig } from '../models.js';
-import { err, ok, type Result } from './result.js';
-import { capabilityError, SessionClosedError, type CapabilityError } from './errors.js';
-import { applySetMode, snapshot } from './merge.js';
+import { Hdf5AdapterV1_0 } from './hdf5.js';
+import { Hdf5WriterV1_0 } from './writer.js';
+import { MockConfigBuilder } from '../../builder.js';
+import type { MachineConfig } from '../../models.js';
+import { err, ok, type Result } from '../result.js';
+import { capabilityError, SessionClosedError, type CapabilityError } from '../errors.js';
+import { applySetMode, snapshot } from '../merge.js';
 import {
   SetMode,
   type ClearBoxHandle,
@@ -27,7 +27,7 @@ import {
   type ScannerModel,
   type TrainCollection,
   type TrainHandle,
-} from './generated.js';
+} from '../generated.js';
 
 type Json = Record<string, unknown>;
 
@@ -35,7 +35,7 @@ function asJson(config: MachineConfig): Json {
   return config as unknown as Json;
 }
 
-export class MachineConfigFileV10 implements MachineConfigFile {
+export class MachineConfigFileV1_0 implements MachineConfigFile {
   private closed = false;
   private path: string | null;
   private data: Json;
@@ -47,9 +47,9 @@ export class MachineConfigFileV10 implements MachineConfigFile {
     this.version = version;
   }
 
-  static async open(path: string): Promise<Result<MachineConfigFileV10, CapabilityError>> {
+  static async open(path: string): Promise<Result<MachineConfigFileV1_0, CapabilityError>> {
     try {
-      const reader = new MachineConfigReader(path);
+      const reader = new Hdf5AdapterV1_0(path);
       const config = await reader.parse({ includeBinary: true });
       const fv = (config.meta.file_version || '1.0').trim() || '1.0';
       if (fv !== '1.0') {
@@ -60,13 +60,13 @@ export class MachineConfigFileV10 implements MachineConfigFile {
           ),
         );
       }
-      return ok(new MachineConfigFileV10(asJson(config), path, fv));
+      return ok(new MachineConfigFileV1_0(asJson(config), path, fv));
     } catch (e) {
       return err(capabilityError('IoError', e instanceof Error ? e.message : String(e)));
     }
   }
 
-  static create(version: string): Result<MachineConfigFileV10, CapabilityError> {
+  static create(version: string): Result<MachineConfigFileV1_0, CapabilityError> {
     const fv = version.trim() || '1.0';
     if (fv !== '1.0') {
       return err(
@@ -75,7 +75,7 @@ export class MachineConfigFileV10 implements MachineConfigFile {
     }
     const config = new MockConfigBuilder({ nLasers: 1 }).build();
     config.meta.file_version = '1.0';
-    return ok(new MachineConfigFileV10(asJson(config), null, '1.0'));
+    return ok(new MachineConfigFileV1_0(asJson(config), null, '1.0'));
   }
 
   private assertOpen(): void {
@@ -253,7 +253,7 @@ export class MachineConfigFileV10 implements MachineConfigFile {
       );
     }
     try {
-      await new MachineConfigWriter(
+      await new Hdf5WriterV1_0(
         this.data as unknown as MachineConfig,
       ).write(out);
       this.path = out;

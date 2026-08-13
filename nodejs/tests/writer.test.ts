@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { MachineConfigWriter } from '../src/index.js';
 import { MachineConfigReader } from '../src/index.js';
+import { UnsupportedFileVersion } from '../src/capabilities/index.js';
 import type { MachineConfig } from '../src/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -66,6 +67,15 @@ describe('MachineConfigWriter — class', () => {
 
   it('can be instantiated', () => {
     expect(new MachineConfigWriter(reference)).toBeInstanceOf(MachineConfigWriter);
+  });
+
+  it('rejects an unknown File_Version on the model', () => {
+    const bad: MachineConfig = {
+      ...reference,
+      meta: { ...reference.meta, file_version: '2.0' },
+    };
+    expect(() => new MachineConfigWriter(bad)).toThrow(UnsupportedFileVersion);
+    expect(() => new MachineConfigWriter(bad)).toThrow(/2\.0/);
   });
 });
 

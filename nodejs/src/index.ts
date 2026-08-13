@@ -14,7 +14,7 @@ export {
   openMachineConfig,
   createMachineConfig,
   supportedFileVersions,
-  MachineConfigFileV10,
+  MachineConfigFileV1_0,
   SetMode,
   ok,
   err,

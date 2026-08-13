@@ -1,6 +1,5 @@
 """Phase 1.3 / 1.6 — MachineConfigReader tests against real AconityMIDI fixtures."""
 import json
-import warnings
 
 import numpy as np
 import pytest
@@ -477,14 +476,25 @@ def test_absent_clearbox_is_none(tmp_path):
     assert config.optical_trains[0].optional_components.clearbox is None
 
 
-def test_file_version_warning(tmp_path):
-    builder = MockConfigBuilder(n_lasers=1, file_version="2.0")
+def test_unknown_file_version_does_not_use_v1_layout(tmp_path):
+    """Peek File_Version before walking groups — a v2 file with no Machine
+    group must not be parsed by the v1.0 adapter."""
+    import h5py
+
+    from machine_config.capabilities import open_machine_config
+    from machine_config.capabilities.file_version import UnsupportedFileVersion
+
     out = tmp_path / "future.h5"
-    builder.save(out)
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        MachineConfigReader(out).parse()
-    assert any("File_Version" in str(warning.message) for warning in w)
+    with h5py.File(out, "w") as f:
+        f.attrs["File_Version"] = "2.0"
+
+    with pytest.raises(UnsupportedFileVersion, match="2.0"):
+        MachineConfigReader(out)
+
+    result = open_machine_config(out)
+    assert not result.ok
+    assert result.error.code == "UnsupportedVersion"
+
 
 
 # ===========================================================================

@@ -9,22 +9,22 @@ use crate::models::{
     ClearBox, Collimator, LightSource, Machine, MachineConfig, MachineConfigMeta, OpcuaConfig,
     OpticalTrain, Scanner, ScannerCard,
 };
-use crate::reader::MachineConfigReader;
+use super::hdf5::Hdf5AdapterV1_0;
 use crate::writer::MachineConfigWriter;
 use std::path::{Path, PathBuf};
 
-pub struct MachineConfigFileV10 {
+pub struct MachineConfigFileV1_0 {
     config: MachineConfig,
     path: Option<PathBuf>,
     file_version: String,
     closed: bool,
 }
 
-impl MachineConfigFileV10 {
+impl MachineConfigFileV1_0 {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, CapabilityError> {
         let path = path.as_ref().to_path_buf();
         let reader =
-            MachineConfigReader::open(&path).map_err(|e| CapabilityError::IoError(e.to_string()))?;
+            Hdf5AdapterV1_0::open(&path).map_err(|e| CapabilityError::IoError(e.to_string()))?;
         let config = reader
             .parse_with_binary()
             .map_err(|e| CapabilityError::IoError(e.to_string()))?;

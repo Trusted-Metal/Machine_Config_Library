@@ -127,9 +127,16 @@ See [docs/cpp.md](docs/cpp.md) for full usage.
 
 Applications should prefer the **stable model facade** over raw `MachineConfigReader` field
 access. Call `openMachineConfig` / `open_machine_config` (Python/Rust/Go) /
-`openMachineConfig` (C++). The library peeks HDF5 `File_Version`, selects an adapter, and
-exposes uniform navigation + full-model get/set (`getScanner` / `setScanner`, …) with
-`SetMode.Merge` (default) or `SetMode.Replace`. Use `create(version)` for new files;
+`openMachineConfig` (C++). The library peeks only the root HDF5 `File_Version`
+attribute, selects that version's adapter, and maps on-disk layout to stable
+models (`working_distance`, …). Applications do not branch on file version.
+A restructured v2 file needs a new adapter — not app rewrites.
+
+Version-specific facades and on-disk layout live in a folder per `File_Version`
+(`capabilities/v1_0/`, later `v1_1/`, …) in every language. The capabilities
+root only peeks `File_Version` and dispatches; it does not accumulate version
+implementations. Facade APIs
+use `getScanner` / `setScanner` with `SetMode.Merge` (default) or `SetMode.Replace`.
 `open` preserves the on-disk version. Go is in progress (reader + facade in-memory; writer
 next — see [docs/go.md](docs/go.md)).
 

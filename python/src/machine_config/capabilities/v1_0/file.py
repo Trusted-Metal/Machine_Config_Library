@@ -1,19 +1,19 @@
-"""File_Version 1.0 stable model facade."""
+"""File_Version 1.0 stable model facade (session + get/set)."""
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-from machine_config.builder import MockConfigBuilder
 from machine_config.capabilities.errors import CapabilityError, SessionClosedError, capability_error
 from machine_config.capabilities.generated import SetMode
 from machine_config.capabilities.merge import apply_set_mode, snapshot
 from machine_config.capabilities.result import Result, err, ok
-from machine_config.reader import MachineConfigReader, config_from_dict
-from machine_config.writer import MachineConfigWriter
+
+from .hdf5 import Hdf5AdapterV1_0, config_from_dict
+from .writer import Hdf5WriterV1_0
 
 
-class MachineConfigFileV10:
+class MachineConfigFileV1_0:
     def __init__(self, data: dict[str, Any], path: str | None, version: str) -> None:
         self._data = data
         self._path = path
@@ -21,27 +21,21 @@ class MachineConfigFileV10:
         self._closed = False
 
     @classmethod
-    def open(cls, path: str | Path) -> Result["MachineConfigFileV10", CapabilityError]:
+    def open(cls, path: str | Path) -> Result["MachineConfigFileV1_0", CapabilityError]:
         try:
-            reader = MachineConfigReader(str(path))
-            config = reader.parse()
-            fv = (config.meta.file_version or "1.0").strip() or "1.0"
-            if fv != "1.0":
-                return err(
-                    capability_error(
-                        "UnsupportedVersion",
-                        f'No adapter for File_Version "{fv}" (v1.0 facade)',
-                    )
-                )
-            data = reader._config_to_dict(config, include_binary=True)
-            return ok(cls(data, str(path), fv))
+            adapter = Hdf5AdapterV1_0(str(path))
+            config = adapter.parse()
+            data = adapter._config_to_dict(config, include_binary=True)
+            return ok(cls(data, str(path), "1.0"))
         except Exception as e:  # noqa: BLE001
             return err(capability_error("IoError", str(e)))
 
     @classmethod
-    def create(cls, version: str = "1.0") -> Result["MachineConfigFileV10", CapabilityError]:
+    def create(cls, version: str = "1.0") -> Result["MachineConfigFileV1_0", CapabilityError]:
         import os
         import tempfile
+
+        from machine_config.builder import MockConfigBuilder
 
         fv = version.strip() or "1.0"
         if fv != "1.0":
@@ -56,7 +50,7 @@ class MachineConfigFileV10:
         fd, tmp = tempfile.mkstemp(suffix=".h5")
         os.close(fd)
         try:
-            MachineConfigWriter(config).write(tmp)
+            Hdf5WriterV1_0(config).write(tmp)
             opened = cls.open(tmp)
             if not opened.ok:
                 return opened
@@ -129,7 +123,7 @@ class MachineConfigFileV10:
             )
         try:
             config = config_from_dict(self._data)
-            MachineConfigWriter(config).write(out)
+            Hdf5WriterV1_0(config).write(out)
             self._path = out
             return ok(None)
         except Exception as e:  # noqa: BLE001
@@ -140,7 +134,7 @@ class MachineConfigFileV10:
 
 
 class _NodeHandle:
-    def __init__(self, file: MachineConfigFileV10, getter, setter) -> None:
+    def __init__(self, file: MachineConfigFileV1_0, getter, setter) -> None:
         self._file = file
         self._getter = getter
         self._setter = setter
@@ -158,7 +152,7 @@ class _NodeHandle:
 
 
 class _TrainHandle:
-    def __init__(self, file: MachineConfigFileV10, index: int) -> None:
+    def __init__(self, file: MachineConfigFileV1_0, index: int) -> None:
         self._file = file
         self._index = index
 
@@ -230,7 +224,7 @@ class _TrainHandle:
 
 
 class _OptionalComponentsHandle:
-    def __init__(self, file: MachineConfigFileV10, index: int) -> None:
+    def __init__(self, file: MachineConfigFileV1_0, index: int) -> None:
         self._file = file
         self._index = index
 
@@ -255,7 +249,7 @@ class _OptionalComponentsHandle:
 
 
 class _TrainCollection:
-    def __init__(self, file: MachineConfigFileV10) -> None:
+    def __init__(self, file: MachineConfigFileV1_0) -> None:
         self._file = file
 
     def __len__(self) -> int:

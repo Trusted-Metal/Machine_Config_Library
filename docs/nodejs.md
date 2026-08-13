@@ -99,7 +99,9 @@ const created = createMachineConfig('1.0');
 ```
 
 Adapters are keyed by HDF5 `File_Version`. Today only `1.0` is registered; unknown versions
-return `UnsupportedVersion`. See `schema/capabilities/` and [USAGE.md](../USAGE.md).
+return `UnsupportedVersion`. The v1.0 facade and layout live in
+`nodejs/src/capabilities/v1_0/`; `capabilities/index.ts` only dispatches.
+See `schema/capabilities/` and [USAGE.md](../USAGE.md).
 
 ---
 

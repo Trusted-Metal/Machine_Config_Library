@@ -23,7 +23,7 @@ from .writer import MachineConfigWriter
 from .builder import ConfigEditor, MockConfigBuilder, YamlConfigBuilder
 from .capabilities import (
     CapabilityError,
-    MachineConfigFileV10,
+    MachineConfigFileV1_0,
     SessionClosedError,
     SetMode,
     create_machine_config,
@@ -57,7 +57,7 @@ __all__ = [
     "config_from_dict",
     "CapabilityError",
     "SessionClosedError",
-    "MachineConfigFileV10",
+    "MachineConfigFileV1_0",
     "SetMode",
     "open_machine_config",
     "create_machine_config",

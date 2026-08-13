@@ -22,7 +22,7 @@
 #endif
 
 using machine_config::MachineConfigReader;
-using machine_config::capabilities::MachineConfigFileV10;
+using machine_config::capabilities::MachineConfigFileV1_0;
 using machine_config::capabilities::SetMode;
 
 static std::string fmtOpt(std::optional<double> v) {
@@ -42,7 +42,7 @@ int main() {
     }
 
     try {
-        auto opened = MachineConfigFileV10::open(dummy);
+        auto opened = MachineConfigFileV1_0::open(dummy);
         if (!opened.ok()) {
             std::cerr << "open failed: " << opened.errorMessage() << "\n";
             return 1;
@@ -99,7 +99,7 @@ int main() {
         }
         std::cout << "Written to     : " << tmp.filename().string() << "\n\n";
 
-        auto again = MachineConfigFileV10::open(tmp);
+        auto again = MachineConfigFileV1_0::open(tmp);
         if (!again.ok()) {
             std::cerr << again.errorMessage() << "\n";
             return 1;

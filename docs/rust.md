@@ -30,7 +30,10 @@ It has no system dependencies — `cargo build` compiles `libhdf5` from source o
 
 ## Capability API (stable model facade)
 
-Preferred for applications. Index-based full-model get/set with `SetMode::Merge` / `Replace`:
+Preferred for applications. Peeks root `File_Version`, dispatches to a version
+adapter, then index-based full-model get/set with `SetMode::Merge` / `Replace`.
+The v1.0 facade and layout live in `rust/src/capabilities/v1_0/`;
+`capabilities/mod.rs` only dispatches.
 
 ```rust
 use machine_config::capabilities::{open_machine_config, SetMode};

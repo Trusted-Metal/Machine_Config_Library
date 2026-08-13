@@ -1,4 +1,4 @@
-package machineconfig
+package hdf5
 
 import (
 	"fmt"

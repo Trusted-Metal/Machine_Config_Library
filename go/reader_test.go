@@ -1,11 +1,15 @@
 package machineconfig_test
 
 import (
+	"errors"
 	"math"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
+	"machine-config-go/capabilities"
+	"machine-config-go/internal/h5c"
 	machineconfig "machine-config-go"
 )
 
@@ -123,5 +127,47 @@ func TestGetCorrectionData(t *testing.T) {
 	}
 	if nan == 0 {
 		t.Fatal("expected NaNs in correction grid")
+	}
+}
+
+func writeFutureFileVersion(t *testing.T, path string) {
+	t.Helper()
+	f, err := h5c.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	root, err := f.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := root.WriteStringAttr("File_Version", "2.0"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnknownFileVersionDoesNotUseV1Layout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "future.h5")
+	writeFutureFileVersion(t, path)
+
+	_, err := machineconfig.NewReader(path).Parse()
+	var u *machineconfig.UnsupportedFileVersionError
+	if !errors.As(err, &u) {
+		t.Fatalf("Parse: got %#v, want UnsupportedFileVersionError", err)
+	}
+	if u.Version != "2.0" {
+		t.Fatalf("version = %q", u.Version)
+	}
+
+	_, capErr := capabilities.OpenMachineConfig(path)
+	if capErr == nil {
+		t.Fatal("OpenMachineConfig: expected error")
+	}
+	if capErr.Code != capabilities.ErrUnsupportedVersion {
+		t.Fatalf("code = %q", capErr.Code)
+	}
+	if !strings.Contains(capErr.Message, "2.0") {
+		t.Fatalf("message = %q", capErr.Message)
 	}
 }

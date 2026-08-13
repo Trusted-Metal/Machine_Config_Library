@@ -1,7 +1,14 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as h5wasm from 'h5wasm/node';
 import { MachineConfigReader } from '../src/index.js';
+import {
+  openMachineConfig,
+  UnsupportedFileVersion,
+} from '../src/capabilities/index.js';
 import { validate } from '../src/schema.js';
 import type { MachineConfig } from '../src/models.js';
 
@@ -532,6 +539,36 @@ describe('MachineConfigReader — getRawGroup()', () => {
     expect(result).toHaveProperty('Server_URL');
     expect(typeof result['Server_URL']).toBe('string');
     expect((result['Server_URL'] as string).length).toBeGreaterThan(0);
+  });
+});
+
+// ===========================================================================
+// Unknown File_Version
+// ===========================================================================
+
+describe('MachineConfigReader — unknown File_Version', () => {
+  it('does not use the v1.0 layout for a 2.0 file with no Machine group', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcl-fv-'));
+    const out = join(dir, 'future.h5').replace(/\\/g, '/');
+    try {
+      await h5wasm.ready;
+      const f = new h5wasm.File(out, 'w');
+      f.create_attribute('File_Version', '2.0', [], 'S');
+      f.close();
+
+      await expect(new MachineConfigReader(out).parse()).rejects.toThrow(
+        UnsupportedFileVersion,
+      );
+      await expect(new MachineConfigReader(out).parse()).rejects.toThrow(/2\.0/);
+
+      const result = await openMachineConfig(out);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('UnsupportedVersion');
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

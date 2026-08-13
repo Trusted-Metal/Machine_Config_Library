@@ -31,7 +31,8 @@ headers directly with no compilation step. All types live in the `machine_config
 
 ## Capability API (stable model facade)
 
-Preferred for applications. Include `machine_config/capabilities/file.hpp`. Full-model
+Preferred for applications. Include `machine_config/capabilities/file.hpp`
+(dispatch). The v1.0 adapter lives in `capabilities/v1_0/`. Full-model
 get/set with `SetMode::Merge` (default) / `SetMode::Replace`:
 
 ```cpp
@@ -41,7 +42,7 @@ using machine_config::capabilities::openMachineConfig;
 using machine_config::capabilities::SetMode;
 
 auto opened = openMachineConfig("machine.h5");
-auto file = std::static_pointer_cast<machine_config::capabilities::MachineConfigFileV10>(
+auto file = std::static_pointer_cast<machine_config::capabilities::MachineConfigFileV1_0>(
     opened.value());
 auto scanner = file->getScanner(0).value();
 scanner.working_distance = 680.0;

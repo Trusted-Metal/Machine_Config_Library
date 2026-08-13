@@ -13,7 +13,7 @@
 #endif
 
 using machine_config::MachineConfigReader;
-using machine_config::capabilities::MachineConfigFileV10;
+using machine_config::capabilities::MachineConfigFileV1_0;
 using machine_config::capabilities::SetMode;
 using machine_config::capabilities::createMachineConfig;
 using machine_config::capabilities::openMachineConfig;
@@ -27,7 +27,7 @@ static std::filesystem::path tmpPath(const std::string& tag) {
 }
 
 TEST_CASE("CapabilityOpenGetScannerMatchesReader") {
-    auto opened = MachineConfigFileV10::open(REF);
+    auto opened = MachineConfigFileV1_0::open(REF);
     REQUIRE(opened.ok());
     auto file = opened.value();
     REQUIRE(file->fileVersion() == "1.0");
@@ -41,7 +41,7 @@ TEST_CASE("CapabilityOpenGetScannerMatchesReader") {
 }
 
 TEST_CASE("CapabilityMergeSetScannerRoundtrip") {
-    auto opened = MachineConfigFileV10::open(REF);
+    auto opened = MachineConfigFileV1_0::open(REF);
     REQUIRE(opened.ok());
     auto file = opened.value();
     auto before = file->getScanner(0);
@@ -57,7 +57,7 @@ TEST_CASE("CapabilityMergeSetScannerRoundtrip") {
     REQUIRE(file->save(&out_s).ok());
     file->close();
 
-    auto again = MachineConfigFileV10::open(out);
+    auto again = MachineConfigFileV1_0::open(out);
     REQUIRE(again.ok());
     auto after = again.value()->getScanner(0);
     REQUIRE(after.ok());
@@ -68,7 +68,7 @@ TEST_CASE("CapabilityMergeSetScannerRoundtrip") {
 }
 
 TEST_CASE("CapabilityReplaceSetScanner") {
-    auto opened = MachineConfigFileV10::open(REF);
+    auto opened = MachineConfigFileV1_0::open(REF);
     REQUIRE(opened.ok());
     auto file = opened.value();
     auto before = file->getScanner(0);
@@ -90,7 +90,7 @@ TEST_CASE("CapabilityReplaceSetScanner") {
 }
 
 TEST_CASE("CapabilityInvalidIndex") {
-    auto opened = MachineConfigFileV10::open(REF);
+    auto opened = MachineConfigFileV1_0::open(REF);
     REQUIRE(opened.ok());
     auto bad = opened.value()->getTrain(999);
     REQUIRE_FALSE(bad.ok());
@@ -100,21 +100,21 @@ TEST_CASE("CapabilityInvalidIndex") {
 }
 
 TEST_CASE("CapabilityOpcuaNotPresentVsPresent") {
-    auto no_opc = MachineConfigFileV10::open(REF);
+    auto no_opc = MachineConfigFileV1_0::open(REF);
     REQUIRE(no_opc.ok());
     auto missing = no_opc.value()->getOpcua();
     REQUIRE_FALSE(missing.ok());
     REQUIRE(missing.errorCode() == "NotPresent");
     no_opc.value()->close();
 
-    auto with_opc = MachineConfigFileV10::open(OPCUA_REF);
+    auto with_opc = MachineConfigFileV1_0::open(OPCUA_REF);
     REQUIRE(with_opc.ok());
     REQUIRE(with_opc.value()->getOpcua().ok());
     with_opc.value()->close();
 }
 
 TEST_CASE("CapabilityClearboxOptional") {
-    auto opened = MachineConfigFileV10::open(REF);
+    auto opened = MachineConfigFileV1_0::open(REF);
     REQUIRE(opened.ok());
     REQUIRE(opened.value()->hasOptionalComponents(0));
     REQUIRE(opened.value()->getClearbox(0).ok());
@@ -126,7 +126,7 @@ TEST_CASE("CapabilityClearboxOptional") {
     auto cfg = b.build();
     auto out = tmpPath("no_cb");
     machine_config::MachineConfigWriter{cfg}.write(out);
-    auto no_cb = MachineConfigFileV10::open(out);
+    auto no_cb = MachineConfigFileV1_0::open(out);
     REQUIRE(no_cb.ok());
     REQUIRE_FALSE(no_cb.value()->hasOptionalComponents(0));
     auto cb = no_cb.value()->getClearbox(0);
@@ -151,7 +151,7 @@ TEST_CASE("CapabilityCreateSetMetaSaveReopen") {
     REQUIRE(file->save(&out_s).ok());
     file->close();
 
-    auto again = MachineConfigFileV10::open(out);
+    auto again = MachineConfigFileV1_0::open(out);
     REQUIRE(again.ok());
     REQUIRE(again.value()->fileVersion() == "1.0");
     REQUIRE(again.value()->getMeta().machine_name == "CreatedMachine");

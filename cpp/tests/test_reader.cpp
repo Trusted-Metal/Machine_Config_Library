@@ -4,9 +4,14 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
+#include <highfive/H5File.hpp>
 
 #include <cmath>
+#include <filesystem>
+#include <stdexcept>
+#include <string>
 
+#include "machine_config/capabilities.hpp"
 #include "machine_config/reader.hpp"
 
 #ifndef FIXTURES_DIR
@@ -505,4 +510,30 @@ TEST_CASE("GetRawGroupOpcuaClient") {
     REQUIRE(client.is_object());
     REQUIRE(client.contains("Server_URL"));
     REQUIRE_FALSE(client["Server_URL"].get<std::string>().empty());
+}
+
+static void writeFutureFileVersion(const std::filesystem::path& path) {
+    HighFive::File f(path.string(), HighFive::File::Truncate);
+    f.createAttribute<std::string>("File_Version", HighFive::DataSpace::Scalar())
+        .write(std::string("2.0"));
+}
+
+TEST_CASE("UnknownFileVersionDoesNotUseV1Layout") {
+    auto out = std::filesystem::temp_directory_path() / "mc_reader_future_2_0.h5";
+    writeFutureFileVersion(out);
+
+    MachineConfigReader reader{out};
+    try {
+        reader.parse();
+        FAIL("expected parse() to throw for File_Version 2.0");
+    } catch (const std::runtime_error& e) {
+        REQUIRE(std::string(e.what()).find("2.0") != std::string::npos);
+    }
+
+    auto opened = machine_config::capabilities::openMachineConfig(out);
+    REQUIRE_FALSE(opened.ok());
+    REQUIRE(opened.errorCode() == "UnsupportedVersion");
+    REQUIRE(opened.errorMessage().find("2.0") != std::string::npos);
+
+    std::filesystem::remove(out);
 }

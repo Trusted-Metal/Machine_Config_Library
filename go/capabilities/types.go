@@ -1,33 +1,27 @@
 package capabilities
 
-// SetMode selects merge vs replace semantics for set* APIs.
-type SetMode int
+import "machine-config-go/capabilities/internal/api"
+
+type SetMode = api.SetMode
 
 const (
-	Merge SetMode = iota
-	Replace
+	Merge   SetMode = api.Merge
+	Replace SetMode = api.Replace
 )
 
-// ErrorCode matches schema/capabilities/errors.yaml.
-type ErrorCode string
+type ErrorCode = api.ErrorCode
 
 const (
-	ErrUnsupportedVersion ErrorCode = "UnsupportedVersion"
-	ErrNotPresent         ErrorCode = "NotPresent"
-	ErrInvalidIndex       ErrorCode = "InvalidIndex"
-	ErrValidation         ErrorCode = "ValidationError"
-	ErrIo                 ErrorCode = "IoError"
-	ErrClosed             ErrorCode = "Closed"
+	ErrUnsupportedVersion ErrorCode = api.ErrUnsupportedVersion
+	ErrNotPresent         ErrorCode = api.ErrNotPresent
+	ErrInvalidIndex       ErrorCode = api.ErrInvalidIndex
+	ErrValidation         ErrorCode = api.ErrValidation
+	ErrIo                 ErrorCode = api.ErrIo
+	ErrClosed             ErrorCode = api.ErrClosed
 )
 
-// Error is a typed capability-boundary error.
-type Error struct {
-	Code    ErrorCode
-	Message string
-}
-
-func (e *Error) Error() string { return e.Message }
+type Error = api.Error
 
 func errf(code ErrorCode, msg string) *Error {
-	return &Error{Code: code, Message: msg}
+	return api.Errf(code, msg)
 }

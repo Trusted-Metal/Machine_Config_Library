@@ -30,7 +30,12 @@ Python is the source of truth for fixture generation, the golden file, and schem
 
 ## Capability API (stable model facade)
 
-Preferred for applications. Full-model get/set with `SetMode.MERGE` / `SetMode.REPLACE`:
+Preferred for applications. The library peeks root `File_Version`, dispatches
+to that version's adapter, and returns stable models. On-disk paths, HDF5
+parse/write, and the `MachineConfigFileV1_0` facade live in
+`python/src/machine_config/capabilities/v1_0/`. Shared dispatch is
+`capabilities/__init__.py`. Full-model get/set with `SetMode.MERGE` /
+`SetMode.REPLACE`:
 
 ```python
 from machine_config import open_machine_config, create_machine_config, SetMode

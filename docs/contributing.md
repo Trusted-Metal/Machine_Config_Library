@@ -14,6 +14,7 @@ the golden file.
 - [Generating the golden file and synthetic fixture](#generating-the-golden-file-and-synthetic-fixture)
 - [Regenerating the golden file after a reader fix](#regenerating-the-golden-file-after-a-reader-fix)
 - [How the cross-check pipeline works](#how-the-cross-check-pipeline-works)
+- [File_Version adapters](#file_version-adapters)
 
 ---
 
@@ -170,7 +171,7 @@ git commit -m "chore: regenerate golden file and synthetic fixture"
 
 If a bug is found in the reader after the golden file is committed:
 
-1. Fix the reader bug in `python/src/machine_config/reader.py`
+1. Fix the File_Version adapter in that version's folder (see [File_Version adapters](#file_version-adapters))
 2. Add or update a specific unit test asserting the now-correct value
 3. Run the full suite — confirm it passes
 4. Re-run `tools/generate_fixtures.py` — it overwrites both files atomically
@@ -224,3 +225,25 @@ producing the same wrong value will both pass their own tests but disagree with 
 > reference example. This is not a constraint on the library — any machine that maps its HDF5
 > attributes into the MachineConfig structure is a valid input. New machine types are validated
 > by adding their fixture files and asserting their field values follow the schema.
+
+---
+
+## File_Version adapters
+
+Do not add version-specific facades or on-disk layout to the shared capabilities
+root (`file.hpp`, `__init__.py`, `index.ts`, `mod.rs`, `file.go`). That file
+stays a dispatcher: peek `File_Version`, then call the matching adapter.
+
+Each on-disk version gets its own folder:
+
+| Language | Adapter folder |
+|---|---|
+| Python | `python/src/machine_config/capabilities/v1_0/` (`file.py`, `layout.py`, `hdf5.py`, `writer.py`) |
+| C++ | `cpp/include/machine_config/capabilities/v1_0/` (`file.hpp`, `layout.hpp`, `hdf5.hpp`, `writer.hpp`) |
+| Node.js | `nodejs/src/capabilities/v1_0/` (`file.ts`, `layout.ts`, `hdf5.ts`, `writer.ts`) |
+| Rust | `rust/src/capabilities/v1_0/` (`file.rs`, `layout.rs`, `hdf5.rs`, `writer.rs`) |
+| Go | `go/capabilities/v1_0/` (`file.go`) plus `layout/` and `hdf5/` packages |
+
+A new `File_Version` (e.g. `1.1`) adds `capabilities/v1_1/` plus a registry
+entry in the capabilities root. Apps keep calling `open_machine_config` /
+`openMachineConfig`.

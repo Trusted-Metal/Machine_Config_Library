@@ -7,6 +7,9 @@
 //   REFERENCE_OPCUA  reference_config_opcua.h5   — real AconityMIDI, with OPCUA
 
 use machine_config::builder::MockConfigBuilder;
+use machine_config::capabilities::open_machine_config;
+use machine_config::capabilities::errors::CapabilityError;
+use machine_config::error::MachineConfigError;
 use machine_config::reader::MachineConfigReader;
 use machine_config::writer::MachineConfigWriter;
 use tempfile::NamedTempFile;
@@ -229,4 +232,51 @@ fn test_writer_roundtrip_opcua() {
     assert_eq!(rt_t.rule_enabled, orig_t.rule_enabled);
     assert_eq!(rt_t.start_value,  orig_t.start_value);
     assert_eq!(rt_t.stop_value,   orig_t.stop_value);
+}
+
+fn write_future_file_version(path: &std::path::Path) {
+    let f = hdf5::File::create(path).expect("create future.h5");
+    let v: hdf5::types::VarLenUnicode = "2.0".parse().unwrap();
+    f.new_attr::<hdf5::types::VarLenUnicode>()
+        .create("File_Version")
+        .unwrap()
+        .write_scalar(&v)
+        .unwrap();
+}
+
+#[test]
+fn test_unknown_file_version_does_not_use_v1_layout() {
+    let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+    write_future_file_version(tmp.path());
+
+    match MachineConfigReader::open(tmp.path()) {
+        Err(err) => assert!(
+            matches!(err, MachineConfigError::UnsupportedVersion(ref v) if v == "2.0"),
+            "reader error: {err}"
+        ),
+        Ok(_) => panic!("expected UnsupportedVersion from reader"),
+    }
+
+    match open_machine_config(tmp.path()) {
+        Err(cap) => assert!(
+            matches!(cap, CapabilityError::UnsupportedVersion(ref m) if m.contains("2.0")),
+            "facade error: {cap}"
+        ),
+        Ok(_) => panic!("expected UnsupportedVersion from facade"),
+    }
+}
+
+#[test]
+fn test_writer_rejects_unknown_file_version() {
+    let mut cfg = MachineConfigReader::open(REFERENCE)
+        .unwrap()
+        .parse()
+        .unwrap();
+    cfg.meta.file_version = "2.0".into();
+    let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+    let err = MachineConfigWriter::new(&cfg).write(tmp.path()).unwrap_err();
+    assert!(
+        matches!(err, MachineConfigError::UnsupportedVersion(ref v) if v == "2.0"),
+        "writer error: {err}"
+    );
 }

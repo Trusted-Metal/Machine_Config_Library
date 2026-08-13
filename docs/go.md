@@ -34,7 +34,9 @@ go/
 ├── models.go              ← MachineConfig tree
 ├── reader.go              ← MachineConfigReader (CGo)
 ├── reader_helpers.go
-├── capabilities/          ← stable model facade
+├── capabilities/          ← dispatch + shared SetMode/errors
+│   └── v1_0/              ← File_Version 1.0 facade
+│       └── layout/        ← on-disk paths (own package; avoids import cycle)
 ├── internal/h5c/          ← thin libhdf5 wrapper
 ├── proto/proto_cgo_*      ← CGo gate
 └── .github/workflows/go.yml

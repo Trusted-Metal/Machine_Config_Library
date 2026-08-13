@@ -5,6 +5,7 @@
 #include <picosha2.h>
 
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 
 #include "machine_config/reader.hpp"
@@ -304,5 +305,18 @@ TEST_CASE("BinaryRoundtripFc3Size") {
     auto copy_bytes = MachineConfigReader{out}.getScanFieldCorrectionBytes(0);
     REQUIRE(copy_bytes.size() == orig_bytes.size());
 
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("WriterRejectsUnknownFileVersion") {
+    auto cfg = makeMinimalConfig();
+    cfg.meta.file_version = "2.0";
+    auto out = tmpPath("unknown_version");
+    try {
+        MachineConfigWriter{cfg}.write(out);
+        FAIL("expected write() to throw for File_Version 2.0");
+    } catch (const std::runtime_error& e) {
+        REQUIRE(std::string(e.what()).find("2.0") != std::string::npos);
+    }
     std::filesystem::remove(out);
 }
