@@ -104,6 +104,7 @@ jobs:
         with:
           msystem: MINGW64
           update: false
+          path-type: inherit
           install: >-
             mingw-w64-x86_64-hdf5
             mingw-w64-x86_64-pkg-config
