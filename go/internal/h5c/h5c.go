@@ -10,6 +10,102 @@ package h5c
 #include <hdf5.h>
 #include <stdlib.h>
 #include <string.h>
+
+// h5c_attr_list: collects attribute names.
+// Supports up to 256 attributes, names up to 255 characters.
+typedef struct {
+	char names[256][256];
+	int  count;
+} h5c_attr_list_t;
+
+// h5c_list_attrs fills *list with the names of all attrs on object id.
+// Uses H5Aget_name_by_idx (HDF5 1.8+) with HDF5 error suppression.
+static int h5c_list_attrs(hid_t id, h5c_attr_list_t *list) {
+	list->count = 0;
+	herr_t (*old_func)(hid_t, void*) = NULL;
+	void *old_data = NULL;
+	H5Eget_auto2(H5E_DEFAULT, &old_func, &old_data);
+	H5Eset_auto2(H5E_DEFAULT, NULL, NULL);
+	for (hsize_t i = 0; i < 256; i++) {
+		ssize_t sz = H5Aget_name_by_idx(id, ".", H5_INDEX_NAME, H5_ITER_INC,
+		                                 i, list->names[list->count], 255, H5P_DEFAULT);
+		if (sz < 0) { H5Eclear2(H5E_DEFAULT); break; }
+		if (sz > 0) {
+			list->names[list->count][255] = '\0';
+			list->count++;
+		}
+	}
+	H5Eset_auto2(H5E_DEFAULT, old_func, old_data);
+	return 0;
+}
+
+// h5c_link_list: collects link (child) names via H5Gget_info + H5Lget_name_by_idx.
+typedef struct {
+	char names[256][256];
+	int  count;
+} h5c_link_list_t;
+
+// h5c_list_links fills *list with the names of all links in a group.
+// Uses H5Gget_info + H5Lget_name_by_idx for HDF5 1.8+ compatibility.
+static int h5c_list_links(hid_t id, h5c_link_list_t *list) {
+	H5G_info_t ginfo;
+	list->count = 0;
+	if (H5Gget_info(id, &ginfo) < 0) return -1;
+	hsize_t n = ginfo.nlinks;
+	if (n > 256) n = 256;
+	for (hsize_t i = 0; i < n; i++) {
+		ssize_t sz = H5Lget_name_by_idx(id, ".", H5_INDEX_NAME, H5_ITER_INC,
+		                                 i, list->names[list->count], 255, H5P_DEFAULT);
+		if (sz > 0) {
+			list->names[list->count][255] = '\0';
+			list->count++;
+		}
+	}
+	return 0;
+}// h5c_read_any_attr reads a scalar attribute of any type.
+// On success *type_out is set: 1=string, 2=float64, 3=int64.
+// strbuf/strsz used for string results; fval/ival for numeric results.
+static herr_t h5c_read_any_attr(hid_t id, const char *name,
+                                 char *strbuf, size_t strsz,
+                                 double *fval, int64_t *ival,
+                                 int *type_out) {
+	*type_out = 0;
+	hid_t aid = H5Aopen(id, name, H5P_DEFAULT);
+	if (aid < 0) return -1;
+	hid_t tid = H5Aget_type(aid);
+	if (tid < 0) { H5Aclose(aid); return -1; }
+	H5T_class_t cls = H5Tget_class(tid);
+	herr_t ret = -1;
+	if (cls == H5T_STRING) {
+		hbool_t is_var = H5Tis_variable_str(tid);
+		if (is_var) {
+			char *p = NULL;
+			ret = H5Aread(aid, tid, &p);
+			if (ret >= 0 && p != NULL) {
+				strncpy(strbuf, p, strsz - 1);
+				strbuf[strsz - 1] = '\0';
+				H5free_memory(p);
+				*type_out = 1;
+			}
+		} else {
+			size_t sz = H5Tget_size(tid);
+			if (sz < strsz) {
+				memset(strbuf, 0, strsz);
+				ret = H5Aread(aid, tid, strbuf);
+				if (ret >= 0) *type_out = 1;
+			}
+		}
+	} else if (cls == H5T_FLOAT) {
+		ret = H5Aread(aid, H5T_NATIVE_DOUBLE, fval);
+		if (ret >= 0) *type_out = 2;
+	} else if (cls == H5T_INTEGER) {
+		ret = H5Aread(aid, H5T_NATIVE_INT64, ival);
+		if (ret >= 0) *type_out = 3;
+	}
+	H5Tclose(tid);
+	H5Aclose(aid);
+	return ret;
+}
 */
 import "C"
 
@@ -251,6 +347,20 @@ func (g *Group) LinkExists(name string) bool {
 	return C.H5Lexists(g.id, cname, C.H5P_DEFAULT) > 0
 }
 
+// SubGroupNames returns the names of all links (children) in the group.
+// Callers that need only subgroups should verify with LinkExists/OpenGroup.
+func (g *Group) SubGroupNames() []string {
+	var list C.h5c_link_list_t
+	if C.h5c_list_links(g.id, &list) < 0 {
+		return nil
+	}
+	names := make([]string, int(list.count))
+	for i := 0; i < int(list.count); i++ {
+		names[i] = C.GoString(&list.names[i][0])
+	}
+	return names
+}
+
 // OpenDatasetPath opens a dataset by absolute path from the file.
 func (f *File) OpenDataset(path string) (*Dataset, error) {
 	cpath := C.CString(path)
@@ -418,5 +528,125 @@ func (g *Group) PeekAttr(name string) (AttrTypeKind, error) {
 		return AttrInt, nil
 	default:
 		return AttrOther, nil
+	}
+}
+
+// AttrNames returns the names of all attributes on the group.
+func (g *Group) AttrNames() []string {
+	return listAttrNames(g.id)
+}
+
+// ReadAnyAttrValue reads a scalar attribute of any supported type and returns
+// (string|float64|int64, true) on success, or (nil, false) on failure/unsupported.
+func (g *Group) ReadAnyAttrValue(name string) (any, bool) {
+	return readAnyAttrValue(g.id, name)
+}
+
+// HasAttr reports whether an attribute exists on the dataset.
+func (d *Dataset) HasAttr(name string) bool {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	return C.H5Aexists(d.id, cname) > 0
+}
+
+// ReadStringAttr reads a scalar string attribute from the dataset.
+func (d *Dataset) ReadStringAttr(name string) (string, error) {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	aid := C.H5Aopen(d.id, cname, C.H5P_DEFAULT)
+	if aid < 0 {
+		return "", fmt.Errorf("H5Aopen(%s) failed", name)
+	}
+	defer C.H5Aclose(aid)
+	tid := C.H5Aget_type(aid)
+	if tid < 0 {
+		return "", fmt.Errorf("H5Aget_type(%s) failed", name)
+	}
+	defer C.H5Tclose(tid)
+	isVar := C.H5Tis_variable_str(tid) > 0
+	if isVar {
+		var p *C.char
+		if C.H5Aread(aid, tid, unsafe.Pointer(&p)) < 0 {
+			return "", fmt.Errorf("H5Aread(%s) varstr failed", name)
+		}
+		if p == nil {
+			return "", nil
+		}
+		s := C.GoString(p)
+		C.H5free_memory(unsafe.Pointer(p))
+		return s, nil
+	}
+	sz := C.H5Tget_size(tid)
+	buf := make([]byte, sz)
+	if C.H5Aread(aid, tid, unsafe.Pointer(&buf[0])) < 0 {
+		return "", fmt.Errorf("H5Aread(%s) failed", name)
+	}
+	n := 0
+	for n < len(buf) && buf[n] != 0 {
+		n++
+	}
+	return string(buf[:n]), nil
+}
+
+// ReadInt64Attr reads a scalar int64 attribute from the dataset.
+func (d *Dataset) ReadInt64Attr(name string) (int64, error) {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	aid := C.H5Aopen(d.id, cname, C.H5P_DEFAULT)
+	if aid < 0 {
+		return 0, fmt.Errorf("H5Aopen(%s) failed", name)
+	}
+	defer C.H5Aclose(aid)
+	var v C.int64_t
+	if C.H5Aread(aid, C.H5T_NATIVE_INT64, unsafe.Pointer(&v)) < 0 {
+		return 0, fmt.Errorf("H5Aread(%s) failed", name)
+	}
+	return int64(v), nil
+}
+
+// AttrNames returns the names of all attributes on the dataset.
+func (d *Dataset) AttrNames() []string {
+	return listAttrNames(d.id)
+}
+
+// ReadAnyAttrValue reads a scalar attribute from the dataset.
+func (d *Dataset) ReadAnyAttrValue(name string) (any, bool) {
+	return readAnyAttrValue(d.id, name)
+}
+
+// listAttrNames returns all attribute names for the given HDF5 object id.
+func listAttrNames(id C.hid_t) []string {
+	var list C.h5c_attr_list_t
+	if C.h5c_list_attrs(id, &list) < 0 {
+		return nil
+	}
+	names := make([]string, int(list.count))
+	for i := 0; i < int(list.count); i++ {
+		names[i] = C.GoString(&list.names[i][0])
+	}
+	return names
+}
+
+// readAnyAttrValue reads a scalar attribute of any supported type.
+func readAnyAttrValue(id C.hid_t, name string) (any, bool) {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	var strbuf [1024]C.char
+	var fval C.double
+	var ival C.int64_t
+	var typeOut C.int
+	ret := C.h5c_read_any_attr(id, cname, &strbuf[0], C.size_t(len(strbuf)), &fval, &ival, &typeOut)
+	if ret < 0 {
+		return nil, false
+	}
+	switch int(typeOut) {
+	case 1:
+		return C.GoString(&strbuf[0]), true
+	case 2:
+		return float64(fval), true
+	case 3:
+		return int64(ival), true
+	default:
+		return nil, false
 	}
 }

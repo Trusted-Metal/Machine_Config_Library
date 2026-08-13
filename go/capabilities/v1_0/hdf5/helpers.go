@@ -18,11 +18,26 @@ func readStrAttr(g *h5c.Group, key string) *string {
 	if err != nil {
 		return nil
 	}
-	s = strings.TrimRight(s, "\x00")
+	s = strings.TrimSpace(strings.TrimRight(s, "\x00"))
 	if s == "" {
 		return nil
 	}
 	return &s
+}
+
+// readGroupExtras collects all attributes not in knownKeys into a map[string]any.
+func readGroupExtras(g *h5c.Group, knownKeys map[string]bool) map[string]any {
+	extra := map[string]any{}
+	for _, name := range g.AttrNames() {
+		if knownKeys[name] {
+			continue
+		}
+		val, ok := g.ReadAnyAttrValue(name)
+		if ok {
+			extra[name] = val
+		}
+	}
+	return extra
 }
 
 // readRequiredStr returns "" when absent (for required identity fields).

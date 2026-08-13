@@ -3,6 +3,7 @@ package hdf5
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"machine-config-go/capabilities/v1_0/layout"
 	"machine-config-go/internal/h5c"
@@ -46,6 +47,11 @@ func (r *Adapter) parse(f *h5c.File, includeBinary bool) (*MachineConfig, error)
 
 	fv := readRequiredStr(root, "File_Version")
 
+	metaKnownKeys := map[string]bool{
+		"File_Version": true, "machine_name": true, "manufacturer": true,
+		"model": true, "serial_number": true, "Export_Date": true,
+		"Configuration_Hash": true,
+	}
 	meta := MachineConfigMeta{
 		SchemaVersion:     schemaVersion,
 		MachineName:       readRequiredStr(root, "machine_name"),
@@ -55,7 +61,7 @@ func (r *Adapter) parse(f *h5c.File, includeBinary bool) (*MachineConfig, error)
 		FileVersion:       fv,
 		ExportDate:        readRequiredStr(root, "Export_Date"),
 		ConfigurationHash: readRequiredStr(root, "Configuration_Hash"),
-		Extra:             map[string]any{},
+		Extra:             readGroupExtras(root, metaKnownKeys),
 	}
 
 	machineGrp, err := f.Group("Machine")
@@ -234,7 +240,7 @@ func parseTrain(f *h5c.File, trainID string, includeBinary bool) (OpticalTrain, 
 		}
 	}
 
-	tlp, err := readBoolFromIntAttr(g, "Thermal_Lensing_Passed")
+	tlp, err := readBoolFromIntAttr(g, "Thermal_Lensing_Test_Passed")
 	if err != nil {
 		return OpticalTrain{}, err
 	}
@@ -391,7 +397,7 @@ func parseAxis(g *h5c.Group) (AxisConfig, error) {
 	if err != nil {
 		return AxisConfig{}, err
 	}
-	rom, err := readFloatAttr(g, "Range_of_Motion")
+	rom, err := readFloatAttr(g, "Range_Of_Motion")
 	if err != nil {
 		return AxisConfig{}, err
 	}
@@ -406,7 +412,7 @@ func parseAxis(g *h5c.Group) (AxisConfig, error) {
 		CommandedBitResolutionUnit: readStrAttr(g, "Commanded_Bit_Resolution_unit"),
 		ControlType:                readStrAttr(g, "Control_Type"),
 		RangeOfMotion:              rom,
-		RangeOfMotionUnit:          readStrAttr(g, "Range_of_Motion_unit"),
+		RangeOfMotionUnit:          readStrAttr(g, "Range_Of_Motion_unit"),
 		SmoothingKernel:            readStrAttr(g, "Smoothing_Kernel"),
 		SmoothingParameters:        sp,
 		TuningParameters:           readStrAttr(g, "Tuning_Parameters"),
@@ -559,25 +565,54 @@ func readFloatGrid(f *h5c.File, path string) (*[][][]*float64, error) {
 }
 
 func parseSFCF(f *h5c.File, path string, includeBinary bool) (*ScanFieldCorrectionFile, error) {
-	// Dataset attributes: open dataset and... our h5c doesn't expose dataset attrs yet.
-	// For v1 scaffold, open via a temporary approach — attributes on datasets need API.
-	// Skip detailed SFCF attr parse until Dataset.HasAttr is added; return placeholder
-	// with document name from path if dataset exists.
 	ds, err := f.OpenDataset(path)
 	if err != nil {
 		return nil, nil
 	}
 	defer ds.Close()
-	sfcf := &ScanFieldCorrectionFile{
-		DocumentName: "scan_field_correction_file",
+
+	// Read required string attrs from the dataset.
+	readDSStr := func(key string) string {
+		if !ds.HasAttr(key) {
+			return ""
+		}
+		s, err := ds.ReadStringAttr(key)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(strings.TrimRight(s, "\x00"))
 	}
+	readDSStrPtr := func(key string) *string {
+		s := readDSStr(key)
+		if s == "" {
+			return nil
+		}
+		return &s
+	}
+
+	sfcf := &ScanFieldCorrectionFile{
+		DocumentName:      readDSStr("document_name"),
+		DocumentID:        readDSStr("document_id"),
+		ValidAsOfDate:     readDSStr("valid_as_of_date"),
+		DocumentCreatedAt: readDSStrPtr("document_created_at"),
+		DocumentType:      readDSStrPtr("document_type"),
+		OriginalURI:       readDSStrPtr("original_uri"),
+	}
+	if ds.HasAttr("file_size") {
+		if v, err := ds.ReadInt64Attr("file_size"); err == nil {
+			sfcf.FileSize = int(v)
+		}
+	}
+
 	if includeBinary {
 		dims, err := ds.Dims()
 		if err == nil && len(dims) == 1 {
 			buf := make([]byte, dims[0])
 			if err := ds.ReadUint8(buf); err == nil {
 				sfcf.RawBytes = buf
-				sfcf.FileSize = int(dims[0])
+				if sfcf.FileSize == 0 {
+					sfcf.FileSize = int(dims[0])
+				}
 			}
 		}
 	}
@@ -606,12 +641,17 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 		return nil, err
 	}
 	defer cg.Close()
+	clientKnownKeys := map[string]bool{
+		"Server_URL": true, "Auth_Mode": true, "Security_Mode": true,
+		"Security_Policy": true, "BFS_Max_Depth": true, "Publish_Interval": true,
+		"Sampling_Interval": true, "Session_Timeout": true,
+	}
 	client := OpcuaClientConfig{
 		ServerURL:        readRequiredStr(cg, "Server_URL"),
 		AuthMode:         readRequiredStr(cg, "Auth_Mode"),
 		SecurityMode:     readRequiredStr(cg, "Security_Mode"),
 		SecurityPolicy:   readRequiredStr(cg, "Security_Policy"),
-		Extra:            map[string]any{},
+		Extra:            readGroupExtras(cg, clientKnownKeys),
 	}
 	if v, err := readIntAttr(cg, "BFS_Max_Depth"); err == nil && v != nil {
 		client.BfsMaxDepth = *v
@@ -626,6 +666,9 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 		client.SessionTimeout = *v
 	}
 
+	pipeKnownKeys := map[string]bool{
+		"Pipe_Enabled": true, "Buffer_Size": true,
+	}
 	pipe := OpcuaPipeConfig{Extra: map[string]any{}}
 	if og.LinkExists("Pipe") {
 		pg, err := og.OpenGroup("Pipe")
@@ -636,6 +679,7 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 			if v, err := readIntAttr(pg, "Buffer_Size"); err == nil && v != nil {
 				pipe.BufferSize = *v
 			}
+			pipe.Extra = readGroupExtras(pg, pipeKnownKeys)
 			pg.Close()
 		}
 	}
@@ -648,7 +692,32 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 			if b, err := readBoolFromIntAttr(tg, "Triggers_Enabled"); err == nil {
 				triggersEnabled = b
 			}
-			// Named trigger subgroups are not enumerated yet (needs H5Literate).
+			triggerKnownKeys := map[string]bool{
+				"ID": true, "Signal": true, "Subsystem": true,
+				"Rule_Enabled": true, "Start_Value": true, "Stop_Value": true,
+			}
+			for _, tname := range tg.AttrNames() {
+				_ = tname // Triggers_Enabled etc already handled above; skip scalar attrs
+			}
+			// Enumerate named trigger subgroups.
+			for _, subname := range tg.SubGroupNames() {
+				sg, err := tg.OpenGroup(subname)
+				if err != nil {
+					continue
+				}
+				re, _ := readBoolFromIntAttr(sg, "Rule_Enabled")
+				trig := OpcuaTrigger{
+					ID:          readStrAttr(sg, "ID"),
+					Signal:      readStrAttr(sg, "Signal"),
+					Subsystem:   readStrAttr(sg, "Subsystem"),
+					RuleEnabled: re,
+					StartValue:  readStrAttr(sg, "Start_Value"),
+					StopValue:   readStrAttr(sg, "Stop_Value"),
+					Extra:       readGroupExtras(sg, triggerKnownKeys),
+				}
+				sg.Close()
+				triggers[subname] = trig
+			}
 			tg.Close()
 		}
 	}
