@@ -19,6 +19,9 @@ on:
       - "schema/**"
       - ".github/workflows/go.yml"
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test (ubuntu)
