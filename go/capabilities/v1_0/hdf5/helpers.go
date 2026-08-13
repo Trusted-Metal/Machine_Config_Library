@@ -110,6 +110,9 @@ func readIntAttr(g *h5c.Group, key string) (*int, error) {
 		if err != nil {
 			return nil, fmt.Errorf("attribute %q: non-integer string %q", key, s)
 		}
+		if strconv.IntSize == 32 && (iv < -(1<<31) || iv > (1<<31)-1) {
+			return nil, fmt.Errorf("attribute %q: integer %q out of range for int", key, s)
+		}
 		i := int(iv)
 		return &i, nil
 	default:
