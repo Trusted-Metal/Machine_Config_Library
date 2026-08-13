@@ -123,15 +123,16 @@ jobs:
         working-directory: go
 
       # go.exe is a native Windows binary; it can't resolve gcc from the POSIX-format PATH
-      # set by the MSYS2 shell.  Pinning CC to the Windows path bypasses PATH lookup entirely.
+      # set by the MSYS2 shell.  cygpath -w converts the POSIX path to a Windows path that
+      # go.exe can exec directly, regardless of where setup-msys2 installed MSYS2.
       - name: Build Go CLI binary (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
           mkdir -p go/bin
           export CGO_ENABLED=1
-          export CC=C:/msys64/mingw64/bin/gcc.exe
-          export CXX=C:/msys64/mingw64/bin/g++.exe
+          export CC=$(cygpath -w /mingw64/bin/gcc.exe)
+          export CXX=$(cygpath -w /mingw64/bin/g++.exe)
           go build -o go/bin/machine-config-cli.exe ./go/cmd/machine-config-cli/
 
       # -----------------------------------------------------------------------
