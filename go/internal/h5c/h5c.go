@@ -4,9 +4,11 @@
 package h5c
 
 /*
-#cgo pkg-config: hdf5
+#cgo linux pkg-config: hdf5
 #cgo linux CFLAGS: -I/usr/include/hdf5/serial
 #cgo linux LDFLAGS: -L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5
+#cgo windows CFLAGS: -I/mingw64/include
+#cgo windows LDFLAGS: -L/mingw64/lib -lhdf5
 #include <hdf5.h>
 #include <stdlib.h>
 #include <string.h>
