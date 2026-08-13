@@ -1,55 +1,51 @@
-// Package h5c is a thin CGo wrapper around the HDF5 C library.
-// Used because pure-Go scigolib/hdf5 cannot read dense attribute storage
-// (groups with >8 attrs) as written by h5py / production machine software.
+// Package h5c is a CGo wrapper around the HDF5 C library.
+// It is the complete HDF5 I/O layer for this module (read + write).
 package h5c
 
 /*
 #cgo linux pkg-config: hdf5
 #cgo linux CFLAGS: -I/usr/include/hdf5/serial
 #cgo linux LDFLAGS: -L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5
-#cgo windows CFLAGS: -I/mingw64/include
-#cgo windows LDFLAGS: -L/mingw64/lib -lhdf5
+#cgo windows CFLAGS: -IC:/msys64/mingw64/include
+#cgo windows LDFLAGS: -LC:/msys64/mingw64/lib -lhdf5
 #include <hdf5.h>
 #include <stdlib.h>
 #include <string.h>
 
-// h5c_attr_list: collects attribute names.
-// Supports up to 256 attributes, names up to 255 characters.
+// h5c_list_t is shared by both attribute and link enumeration.
+// Caps: 256 entries, names up to 255 chars.
 typedef struct {
 	char names[256][256];
 	int  count;
-} h5c_attr_list_t;
+} h5c_list_t;
 
-// h5c_list_attrs fills *list with the names of all attrs on object id.
-// Uses H5Aget_name_by_idx (HDF5 1.8+) with HDF5 error suppression.
-static int h5c_list_attrs(hid_t id, h5c_attr_list_t *list) {
+// h5c_check_scalar returns 0 if aid is a scalar (1 element), -1 otherwise.
+static int h5c_check_scalar(hid_t aid) {
+	hid_t space = H5Aget_space(aid);
+	if (space < 0) return -1;
+	hssize_t n = H5Sget_simple_extent_npoints(space);
+	H5Sclose(space);
+	return (n == 1) ? 0 : -1;
+}
+
+// h5c_list_attrs fills *list with attribute names; HDF5 errors are suppressed
+// globally by Open/Create so the stop-iteration failure is silent.
+static int h5c_list_attrs(hid_t id, h5c_list_t *list) {
 	list->count = 0;
-	herr_t (*old_func)(hid_t, void*) = NULL;
-	void *old_data = NULL;
-	H5Eget_auto2(H5E_DEFAULT, &old_func, &old_data);
-	H5Eset_auto2(H5E_DEFAULT, NULL, NULL);
 	for (hsize_t i = 0; i < 256; i++) {
 		ssize_t sz = H5Aget_name_by_idx(id, ".", H5_INDEX_NAME, H5_ITER_INC,
 		                                 i, list->names[list->count], 255, H5P_DEFAULT);
-		if (sz < 0) { H5Eclear2(H5E_DEFAULT); break; }
+		if (sz < 0) break;
 		if (sz > 0) {
 			list->names[list->count][255] = '\0';
 			list->count++;
 		}
 	}
-	H5Eset_auto2(H5E_DEFAULT, old_func, old_data);
 	return 0;
 }
 
-// h5c_link_list: collects link (child) names via H5Gget_info + H5Lget_name_by_idx.
-typedef struct {
-	char names[256][256];
-	int  count;
-} h5c_link_list_t;
-
-// h5c_list_links fills *list with the names of all links in a group.
-// Uses H5Gget_info + H5Lget_name_by_idx for HDF5 1.8+ compatibility.
-static int h5c_list_links(hid_t id, h5c_link_list_t *list) {
+// h5c_list_links fills *list with child link names (HDF5 1.8+).
+static int h5c_list_links(hid_t id, h5c_list_t *list) {
 	H5G_info_t ginfo;
 	list->count = 0;
 	if (H5Gget_info(id, &ginfo) < 0) return -1;
@@ -74,6 +70,7 @@ static herr_t h5c_read_any_attr(hid_t id, const char *name,
 	*type_out = 0;
 	hid_t aid = H5Aopen(id, name, H5P_DEFAULT);
 	if (aid < 0) return -1;
+	if (h5c_check_scalar(aid) < 0) { H5Aclose(aid); return -1; }
 	hid_t tid = H5Aget_type(aid);
 	if (tid < 0) { H5Aclose(aid); return -1; }
 	H5T_class_t cls = H5Tget_class(tid);
@@ -123,6 +120,7 @@ type File struct {
 
 // Open opens an existing HDF5 file read-only.
 func Open(path string) (*File, error) {
+	C.H5Eset_auto2(C.H5E_DEFAULT, nil, nil) // suppress HDF5 stderr for this process
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 	id := C.H5Fopen(cpath, C.H5F_ACC_RDONLY, C.H5P_DEFAULT)
@@ -134,6 +132,7 @@ func Open(path string) (*File, error) {
 
 // Create truncates/creates a file for writing.
 func Create(path string) (*File, error) {
+	C.H5Eset_auto2(C.H5E_DEFAULT, nil, nil)
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 	id := C.H5Fcreate(cpath, C.H5F_ACC_TRUNC, C.H5P_DEFAULT, C.H5P_DEFAULT)
@@ -275,6 +274,9 @@ func (g *Group) readScalar(name string, memType C.hid_t, dest unsafe.Pointer) er
 		return fmt.Errorf("H5Aopen(%s) failed", name)
 	}
 	defer C.H5Aclose(aid)
+	if C.h5c_check_scalar(aid) < 0 {
+		return fmt.Errorf("attribute %q is not scalar", name)
+	}
 	if C.H5Aread(aid, memType, dest) < 0 {
 		return fmt.Errorf("H5Aread(%s) failed", name)
 	}
@@ -352,7 +354,7 @@ func (g *Group) LinkExists(name string) bool {
 // SubGroupNames returns the names of all links (children) in the group.
 // Callers that need only subgroups should verify with LinkExists/OpenGroup.
 func (g *Group) SubGroupNames() []string {
-	var list C.h5c_link_list_t
+	var list C.h5c_list_t
 	if C.h5c_list_links(g.id, &list) < 0 {
 		return nil
 	}
@@ -618,7 +620,7 @@ func (d *Dataset) ReadAnyAttrValue(name string) (any, bool) {
 
 // listAttrNames returns all attribute names for the given HDF5 object id.
 func listAttrNames(id C.hid_t) []string {
-	var list C.h5c_attr_list_t
+	var list C.h5c_list_t
 	if C.h5c_list_attrs(id, &list) < 0 {
 		return nil
 	}
