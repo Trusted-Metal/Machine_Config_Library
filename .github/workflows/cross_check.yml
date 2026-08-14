@@ -4,8 +4,8 @@ name: Cross-Language Check
 # implementations: Python source, Rust source, Node.js source, shared
 # fixtures, schema, or the cross-check script itself.
 #
-# Languages active now: python, rust, nodejs, cpp (all platforms) + go (all platforms via MSYS2)
-# Go participates in Phases 1, 2, 4. Phases 3/3.5 deferred until Go writer (§5.7) is done.
+# Languages active now: python, rust, nodejs, cpp, go (all platforms)
+# Go participates in all phases (1, 2, 3, 3.5, 4).
 
 on:
   workflow_dispatch:
@@ -243,10 +243,10 @@ jobs:
         run: python tools/cross_check.py --langs python,go --skip-schema --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
 
       - name: Phase 3 — Write interoperability (all languages)
-        run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-binary-copy --skip-correction-hash --verbose
+        run: python tools/cross_check.py --langs python,rust,nodejs,cpp,go --skip-schema --skip-read-parity --skip-binary-copy --skip-correction-hash --verbose
 
       - name: Phase 3.5 — Binary copy round-trip (all languages)
-        run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-write-interop --skip-correction-hash --verbose
+        run: python tools/cross_check.py --langs python,rust,nodejs,cpp,go --skip-schema --skip-read-parity --skip-write-interop --skip-correction-hash --verbose
 
       - name: Phase 4 — Correction data hash parity (all languages)
         run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-write-interop --skip-binary-copy --verbose

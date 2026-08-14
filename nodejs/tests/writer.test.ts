@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { MachineConfigWriter } from '../src/index.js';
 import { MachineConfigReader } from '../src/index.js';
 import { UnsupportedFileVersion } from '../src/capabilities/index.js';
@@ -220,4 +220,41 @@ describe('MachineConfigWriter — synthetic 2-laser roundtrip', () => {
     expect(rt.optical_trains[1].scanner.scan_head_rotation)
       .toBeCloseTo(synthetic.optical_trains[1].scanner.scan_head_rotation!, 5);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Correction data hash roundtrip
+// ---------------------------------------------------------------------------
+
+function correctionHash(data: Float64Array): string {
+  const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  return createHash('sha256').update(buf).digest('hex');
+}
+
+describe('MachineConfigWriter — correction data hash roundtrip', () => {
+  it('forward correction data hash is preserved across write roundtrip', async () => {
+    const srcReader = new MachineConfigReader(REFERENCE);
+    const originalFwd = await srcReader.getCorrectionData(0);
+    const originalHash = correctionHash(originalFwd.data);
+
+    const src = await srcReader.parse({ includeBinary: true });
+    const out = tmpH5();
+    tmpFiles.push(out);
+    await new MachineConfigWriter(src).write(out);
+    const rtFwd = await new MachineConfigReader(out).getCorrectionData(0);
+    expect(correctionHash(rtFwd.data)).toBe(originalHash);
+  }, 60_000);
+
+  it('inverse correction data hash is preserved across write roundtrip', async () => {
+    const srcReader = new MachineConfigReader(REFERENCE);
+    const originalInv = await srcReader.getInverseCorrectionData(0);
+    const originalHash = correctionHash(originalInv.data);
+
+    const src = await srcReader.parse({ includeBinary: true });
+    const out = tmpH5();
+    tmpFiles.push(out);
+    await new MachineConfigWriter(src).write(out);
+    const rtInv = await new MachineConfigReader(out).getInverseCorrectionData(0);
+    expect(correctionHash(rtInv.data)).toBe(originalHash);
+  }, 60_000);
 });

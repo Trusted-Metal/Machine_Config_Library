@@ -1,11 +1,8 @@
 package v1_0
 
 import (
-	"os"
-	"path/filepath"
-
 	"machine-config-go/capabilities/internal/api"
-	v10hdf5 "machine-config-go/capabilities/v1_0/hdf5"
+	v1_0hdf5 "machine-config-go/capabilities/v1_0/hdf5"
 	"machine-config-go/capabilities/v1_0/layout"
 	machineconfig "machine-config-go"
 )
@@ -21,7 +18,7 @@ type File struct {
 }
 
 func Open(path string) (*File, *api.Error) {
-	cfg, err := v10hdf5.Parse(path, true)
+	cfg, err := v1_0hdf5.Parse(path, true)
 	if err != nil {
 		return nil, api.Errf(api.ErrIo, err.Error())
 	}
@@ -167,9 +164,11 @@ func (f *File) Save(path string) *api.Error {
 	if out == "" {
 		return api.Errf(api.ErrValidation, "save() requires a path for create()-d files")
 	}
-	_ = filepath.Clean(out)
-	_ = os.DevNull
-	return api.Errf(api.ErrValidation, "Go MachineConfigWriter not implemented yet (§5.7); in-memory set* works")
+	if err := v1_0hdf5.Write(f.config, out); err != nil {
+		return api.Errf(api.ErrIo, err.Error())
+	}
+	f.path = out
+	return nil
 }
 
 func (f *File) Close() { f.closed = true }

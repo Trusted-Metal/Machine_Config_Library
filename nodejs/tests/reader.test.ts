@@ -384,6 +384,14 @@ describe('MachineConfigReader — getCorrectionData / getInverseCorrectionData',
     expect(bytesOf(cd0.data)).not.toEqual(bytesOf(icd0.data));
   });
 
+  it('getInverseCorrectionData first finite value differs from getCorrectionData', () => {
+    const firstFiniteFwd = Array.from(cd0.data).find(v => isFinite(v));
+    const firstFiniteInv = Array.from(icd0.data).find(v => isFinite(v));
+    expect(firstFiniteFwd).toBeDefined();
+    expect(firstFiniteInv).toBeDefined();
+    expect(Math.abs(firstFiniteInv! - firstFiniteFwd!)).toBeGreaterThan(0.0001);
+  });
+
   it('train 1 correction grid differs from train 0', () => {
     expect(bytesOf(cd0.data)).not.toEqual(bytesOf(cd1.data));
   });

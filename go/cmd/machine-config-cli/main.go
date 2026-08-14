@@ -1,5 +1,4 @@
-// CLI entry point: export-json and correction-hash subcommands.
-// write-hdf5 and copy-hdf5 are deferred until the Go writer (§5.7) is complete.
+// CLI entry point: export-json, correction-hash, write-hdf5, copy-hdf5 subcommands.
 package main
 
 import (
@@ -23,15 +22,19 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: machine-config-cli <export-json|correction-hash> [args]")
+		return fmt.Errorf("usage: machine-config-cli <export-json|correction-hash|write-hdf5|copy-hdf5> [args]")
 	}
 	switch args[0] {
 	case "export-json":
 		return cmdExportJSON(args[1:])
 	case "correction-hash":
 		return cmdCorrectionHash(args[1:])
+	case "write-hdf5":
+		return cmdWriteHDF5(args[1:])
+	case "copy-hdf5":
+		return cmdCopyHDF5(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q (available: export-json, correction-hash)", args[0])
+		return fmt.Errorf("unknown command %q (available: export-json, correction-hash, write-hdf5, copy-hdf5)", args[0])
 	}
 }
 
@@ -98,4 +101,51 @@ func cmdCorrectionHash(args []string) error {
 	}
 	fmt.Printf("%x\n", h.Sum(nil))
 	return nil
+}
+
+func cmdWriteHDF5(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("write-hdf5: usage: write-hdf5 <input.json|- > <output.h5>")
+	}
+	var data []byte
+	var err error
+	if args[0] == "-" {
+		data, err = os.ReadFile("/dev/stdin")
+		if err != nil {
+			// fallback for platforms without /dev/stdin
+			data, err = func() ([]byte, error) {
+				buf := make([]byte, 0, 1<<20)
+				tmp := make([]byte, 4096)
+				for {
+					n, readErr := os.Stdin.Read(tmp)
+					buf = append(buf, tmp[:n]...)
+					if readErr != nil {
+						break
+					}
+				}
+				return buf, nil
+			}()
+		}
+	} else {
+		data, err = os.ReadFile(args[0])
+	}
+	if err != nil {
+		return fmt.Errorf("write-hdf5: read input: %w", err)
+	}
+	var cfg machineconfig.MachineConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("write-hdf5: parse JSON: %w", err)
+	}
+	return machineconfig.NewWriter().Write(&cfg, args[1])
+}
+
+func cmdCopyHDF5(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("copy-hdf5: usage: copy-hdf5 <src.h5> <dst.h5>")
+	}
+	cfg, err := machineconfig.NewReader(args[0]).ParseWithOptions(machineconfig.ParseOptions{IncludeBinary: true})
+	if err != nil {
+		return fmt.Errorf("copy-hdf5: read: %w", err)
+	}
+	return machineconfig.NewWriter().Write(cfg, args[1])
 }

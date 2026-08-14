@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -499,5 +500,59 @@ func TestJSONTopLevelKeys(t *testing.T) {
 	json.Unmarshal(b2, &v2) //nolint:errcheck
 	if _, ok := v2["opcua"]; !ok {
 		t.Error("opcua fixture JSON must contain opcua key")
+	}
+}
+
+func TestJSONSchemaValidation(t *testing.T) {
+	path := filepath.Join(fixturesDir(t), "reference_config.h5")
+	cfg, err := machineconfig.NewReader(path).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range []string{"meta", "machine", "optical_trains"} {
+		if _, ok := v[key]; !ok {
+			t.Errorf("missing top-level key %q", key)
+		}
+	}
+	meta, _ := v["meta"].(map[string]any)
+	if name, _ := meta["machine_name"].(string); name == "" {
+		t.Error("meta.machine_name must be non-empty")
+	}
+	if hash, _ := meta["configuration_hash"].(string); len(hash) != 64 {
+		t.Errorf("meta.configuration_hash len = %d, want 64", len(hash))
+	}
+	trains, _ := v["optical_trains"].([]any)
+	if len(trains) < 1 {
+		t.Fatalf("optical_trains is empty")
+	}
+	for i, tr := range trains {
+		m, _ := tr.(map[string]any)
+		if _, ok := m["train_id"]; !ok {
+			t.Errorf("train %d missing train_id", i)
+		}
+		if _, ok := m["scanner"]; !ok {
+			t.Errorf("train %d missing scanner", i)
+		}
+	}
+
+	// Schema file must exist and be valid JSON.
+	_, srcFile, _, _ := runtime.Caller(0)
+	schemaPath := filepath.Join(filepath.Dir(srcFile), "..", "schema", "machine_config_v1.schema.json")
+	schemaBytes, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	var schemaAny any
+	if err := json.Unmarshal(schemaBytes, &schemaAny); err != nil {
+		t.Fatalf("schema is not valid JSON: %v", err)
 	}
 }

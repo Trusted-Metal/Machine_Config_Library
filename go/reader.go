@@ -1,7 +1,7 @@
 package machineconfig
 
 import (
-	v10hdf5 "machine-config-go/capabilities/v1_0/hdf5"
+	v1_0hdf5 "machine-config-go/capabilities/v1_0/hdf5"
 )
 
 // MachineConfigReader reads LPBF machine-config HDF5 files into MachineConfig.
@@ -33,7 +33,7 @@ func (r *MachineConfigReader) ParseWithOptions(opts ParseOptions) (*MachineConfi
 	}
 	switch fv {
 	case "1.0":
-		return v10hdf5.Parse(r.path, opts.IncludeBinary)
+		return v1_0hdf5.Parse(r.path, opts.IncludeBinary)
 	default:
 		return nil, &UnsupportedFileVersionError{Version: fv}
 	}
@@ -47,7 +47,7 @@ func (r *MachineConfigReader) GetCorrectionData(trainIndex int) (*CorrectionData
 	}
 	switch fv {
 	case "1.0":
-		return v10hdf5.GetCorrectionData(r.path, trainIndex)
+		return v1_0hdf5.GetCorrectionData(r.path, trainIndex)
 	default:
 		return nil, &UnsupportedFileVersionError{Version: fv}
 	}
@@ -61,7 +61,7 @@ func (r *MachineConfigReader) GetInverseCorrectionData(trainIndex int) (*Correct
 	}
 	switch fv {
 	case "1.0":
-		return v10hdf5.GetInverseCorrectionData(r.path, trainIndex)
+		return v1_0hdf5.GetInverseCorrectionData(r.path, trainIndex)
 	default:
 		return nil, &UnsupportedFileVersionError{Version: fv}
 	}

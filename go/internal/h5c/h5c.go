@@ -483,6 +483,39 @@ func (g *Group) CreateFloat64Dataset(name string, dims []uint64, data []float64)
 	return nil
 }
 
+// CreateFloat64DatasetOpen creates and writes a float64 dataset and returns it open.
+// The caller must call Close() on the returned Dataset.
+func (g *Group) CreateFloat64DatasetOpen(name string, dims []uint64, data []float64) (*Dataset, error) {
+	if len(dims) == 0 {
+		return nil, fmt.Errorf("empty dims")
+	}
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	cdims := make([]C.hsize_t, len(dims))
+	var n uint64 = 1
+	for i, d := range dims {
+		cdims[i] = C.hsize_t(d)
+		n *= d
+	}
+	if uint64(len(data)) != n {
+		return nil, fmt.Errorf("data len %d != product of dims %d", len(data), n)
+	}
+	space := C.H5Screate_simple(C.int(len(dims)), &cdims[0], nil)
+	if space < 0 {
+		return nil, fmt.Errorf("H5Screate_simple failed")
+	}
+	defer C.H5Sclose(space)
+	id := C.H5Dcreate2(g.id, cname, C.H5T_NATIVE_DOUBLE, space, C.H5P_DEFAULT, C.H5P_DEFAULT, C.H5P_DEFAULT)
+	if id < 0 {
+		return nil, fmt.Errorf("H5Dcreate2(%s) failed", name)
+	}
+	if C.H5Dwrite(id, C.H5T_NATIVE_DOUBLE, C.H5S_ALL, C.H5S_ALL, C.H5P_DEFAULT, unsafe.Pointer(&data[0])) < 0 {
+		C.H5Dclose(id)
+		return nil, fmt.Errorf("H5Dwrite(%s) failed", name)
+	}
+	return &Dataset{id: id}, nil
+}
+
 // ReadUint8 reads the entire dataset as bytes.
 func (d *Dataset) ReadUint8(dst []byte) error {
 	if len(dst) == 0 {
@@ -653,4 +686,107 @@ func readAnyAttrValue(id C.hid_t, name string) (any, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// WriteStringAttr writes a variable-length UTF-8 string attribute on the dataset.
+func (d *Dataset) WriteStringAttr(name, value string) error {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	cval := C.CString(value)
+	defer C.free(unsafe.Pointer(cval))
+
+	tid := C.H5Tcopy(C.H5T_C_S1)
+	if tid < 0 {
+		return fmt.Errorf("H5Tcopy failed")
+	}
+	defer C.H5Tclose(tid)
+	if C.H5Tset_size(tid, C.H5T_VARIABLE) < 0 {
+		return fmt.Errorf("H5Tset_size VARIABLE failed")
+	}
+	if C.H5Tset_cset(tid, C.H5T_CSET_UTF8) < 0 {
+		return fmt.Errorf("H5Tset_cset failed")
+	}
+	space := C.H5Screate(C.H5S_SCALAR)
+	if space < 0 {
+		return fmt.Errorf("H5Screate SCALAR failed")
+	}
+	defer C.H5Sclose(space)
+	aid := C.H5Acreate2(d.id, cname, tid, space, C.H5P_DEFAULT, C.H5P_DEFAULT)
+	if aid < 0 {
+		return fmt.Errorf("H5Acreate2(%s) failed", name)
+	}
+	defer C.H5Aclose(aid)
+	if C.H5Awrite(aid, tid, unsafe.Pointer(&cval)) < 0 {
+		return fmt.Errorf("H5Awrite(%s) failed", name)
+	}
+	return nil
+}
+
+// WriteInt64Attr writes a scalar int64 attribute on the dataset.
+func (d *Dataset) WriteInt64Attr(name string, value int64) error {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	v := C.int64_t(value)
+	space := C.H5Screate(C.H5S_SCALAR)
+	if space < 0 {
+		return fmt.Errorf("H5Screate SCALAR failed")
+	}
+	defer C.H5Sclose(space)
+	aid := C.H5Acreate2(d.id, cname, C.H5T_NATIVE_INT64, space, C.H5P_DEFAULT, C.H5P_DEFAULT)
+	if aid < 0 {
+		return fmt.Errorf("H5Acreate2(%s) failed", name)
+	}
+	defer C.H5Aclose(aid)
+	if C.H5Awrite(aid, C.H5T_NATIVE_INT64, unsafe.Pointer(&v)) < 0 {
+		return fmt.Errorf("H5Awrite(%s) failed", name)
+	}
+	return nil
+}
+
+// CreateUint8Dataset creates and writes a contiguous 1-D uint8 dataset.
+// If data is empty, a zero-element dataset is created with no write.
+func (g *Group) CreateUint8Dataset(name string, data []byte) error {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	n := C.hsize_t(len(data))
+	space := C.H5Screate_simple(1, &n, nil)
+	if space < 0 {
+		return fmt.Errorf("H5Screate_simple failed")
+	}
+	defer C.H5Sclose(space)
+	id := C.H5Dcreate2(g.id, cname, C.H5T_NATIVE_UINT8, space, C.H5P_DEFAULT, C.H5P_DEFAULT, C.H5P_DEFAULT)
+	if id < 0 {
+		return fmt.Errorf("H5Dcreate2(%s) failed", name)
+	}
+	defer C.H5Dclose(id)
+	if len(data) > 0 {
+		if C.H5Dwrite(id, C.H5T_NATIVE_UINT8, C.H5S_ALL, C.H5S_ALL, C.H5P_DEFAULT, unsafe.Pointer(&data[0])) < 0 {
+			return fmt.Errorf("H5Dwrite(%s) failed", name)
+		}
+	}
+	return nil
+}
+
+// CreateUint8DatasetOpen creates and writes a 1-D uint8 dataset and returns it open.
+// The caller must call Close() on the returned Dataset.
+func (g *Group) CreateUint8DatasetOpen(name string, data []byte) (*Dataset, error) {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	n := C.hsize_t(len(data))
+	space := C.H5Screate_simple(1, &n, nil)
+	if space < 0 {
+		return nil, fmt.Errorf("H5Screate_simple failed")
+	}
+	defer C.H5Sclose(space)
+	id := C.H5Dcreate2(g.id, cname, C.H5T_NATIVE_UINT8, space, C.H5P_DEFAULT, C.H5P_DEFAULT, C.H5P_DEFAULT)
+	if id < 0 {
+		return nil, fmt.Errorf("H5Dcreate2(%s) failed", name)
+	}
+	if len(data) > 0 {
+		if C.H5Dwrite(id, C.H5T_NATIVE_UINT8, C.H5S_ALL, C.H5S_ALL, C.H5P_DEFAULT, unsafe.Pointer(&data[0])) < 0 {
+			C.H5Dclose(id)
+			return nil, fmt.Errorf("H5Dwrite(%s) failed", name)
+		}
+	}
+	return &Dataset{id: id}, nil
 }
