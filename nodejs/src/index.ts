@@ -8,8 +8,6 @@ export type { MockConfigBuilderOptions } from './builder.js';
 
 export { SCHEMA_VERSION, getSchema, validate } from './schema.js';
 
-export * from './adapters/index.js';
-
 export {
   openMachineConfig,
   createMachineConfig,
@@ -23,6 +21,7 @@ export {
   SessionClosedError,
   applySetMode,
   snapshot,
+  UnsupportedFileVersion,
 } from './capabilities/index.js';
 export type {
   MachineConfigFile,

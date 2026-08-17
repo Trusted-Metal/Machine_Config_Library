@@ -22,7 +22,14 @@ type ReaderBackend = {
   getRawGroup(hdfPath: string): Promise<Record<string, unknown>>;
 };
 
-const READERS: Record<string, new (path: string) => ReaderBackend> = {
+/**
+ * Version → reader-adapter dispatch table. Exported (underscore-prefixed,
+ * matching Python's `_ADAPTERS` convention) solely so tests can register a
+ * mock adapter for the duration of one test — see
+ * `docs/migrations/mock_v1_0_to_v1_1.md`. Not for application use; the real
+ * consumer entry point is `MachineConfigReader`.
+ */
+export const _READERS: Record<string, new (path: string) => ReaderBackend> = {
   "1.0": Hdf5AdapterV1_0,
 };
 
@@ -37,7 +44,7 @@ export class MachineConfigReader {
   private async adapter(): Promise<ReaderBackend> {
     if (this.backend) return this.backend;
     const version = await peekFileVersion(this.filePath);
-    const Ctor = READERS[version];
+    const Ctor = _READERS[version];
     if (!Ctor) {
       throw new UnsupportedFileVersion(version);
     }

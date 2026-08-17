@@ -134,13 +134,20 @@ function attrStrReq(attrs: H5Attrs, key: string): string {
   return attrStr(attrs, key) ?? "";
 }
 
-/** Read a float attribute; null if absent or empty. */
+/**
+ * Read a float attribute; null if absent or empty.
+ * Throws if the attribute is present but cannot be parsed as a number —
+ * a corrupt/non-numeric value must fail loudly, not silently become null.
+ */
 function attrFloat(attrs: H5Attrs, key: string): number | null {
   const v = attrRaw(attrs, key);
   if (v == null) return null;
   if (typeof v === "string" && !v.trim()) return null;
   const n = Number(v);
-  return isNaN(n) ? null : n;
+  if (isNaN(n)) {
+    throw new TypeError(`Attribute "${key}": cannot parse ${JSON.stringify(v)} as a number`);
+  }
+  return n;
 }
 
 /** Read an integer attribute (truncates towards zero). */

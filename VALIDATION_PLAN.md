@@ -1009,16 +1009,34 @@ tsconfig.json
 
 **After app is green locally:** port into `docs/validation/nodejs/app/`, commit.
 
+Note — this is what actually happened, not what was originally speculated
+here: the ported app is its **own** small npm project, not compiled as part
+of `nodejs/`'s own build. `docs/validation/nodejs/app/package.json` depends on
+the local package via `"machine-config-library": "file:../../../../nodejs"`
+(requires `nodejs/` to have been built at least once — `npm run build`), and
+the app runs directly against its `.mts` sources via `tsx`, not plain `node`
+and not a separate tsc-to-`dist/` compile step — Node's own native TypeScript
+support can't handle the constructor-parameter-property shorthand the real
+adapter classes use throughout (`constructor(private readonly x: T) {}`),
+which `tsx` (esbuild-based, same class of tool Vitest already uses
+internally) handles correctly. AV-09–11 specifically were written directly in
+`docs/validation/nodejs/app/scenarios/` rather than developed externally
+first — see the Node.js section of §13 for why.
+
 **CI integration:** add to `nodejs.yml`:
 ```yaml
 - name: Run Node.js validation app
   shell: bash
   run: |
     npm ci && npm run build
-    node docs/validation/nodejs/app/dist/main.js \
-      "$PWD/fixtures/" "$PWD/Reference Materials/" \
-      2>&1 | tee "$RUNNER_TEMP/nodejs_validation.txt"
   working-directory: nodejs
+- name: Install and run the validation app
+  shell: bash
+  run: |
+    npm install
+    npx tsx main.mts "$PWD/../../../../fixtures/" "$PWD/../../../../Reference Materials/" \
+      2>&1 | tee "$RUNNER_TEMP/nodejs_validation.txt"
+  working-directory: docs/validation/nodejs/app
 ```
 
 ---
@@ -1457,17 +1475,43 @@ adapter pattern, same HDF5 backend). To port this validation plan:
 - [ ] CI integration added to `python.yml`
 
 ### Node.js
-- [ ] Standalone app written externally and verified
-- [ ] App ported to `docs/validation/nodejs/app/`
-- [ ] All S-01–S-09 and AV-01–AV-08 scenarios recorded in `docs/validation/nodejs/results.md`
-- [ ] AV-09–AV-11: mock v1.1 adapter implemented in `nodejs/tests/` and passing
-- [ ] AV-09–AV-11 recorded in `docs/validation/nodejs/results.md`
-- [ ] S-09: `package.json` `types` field confirmed; `.d.ts` files in tarball
-- [ ] S-09: all types importable from package root (no internal paths)
-- [ ] `docs/validation/nodejs/PASS_FAIL.md` complete
-- [ ] `docs/validation/README.md` master summary and scenario matrix updated for Node.js
+- [x] Standalone app written externally and verified (`C:\Users\ChrisParham\Desktop\Practice\machineconfiglibrarytesting\node`) for S-01–09/AV-01–08
+- [x] App ported to `docs/validation/nodejs/app/` (AV-09–11 were written directly in-repo — see note below)
+- [x] All S-01–S-09 and AV-01–AV-08 scenarios recorded in `docs/validation/nodejs/results.md`
+- [x] AV-09–AV-11: mock v1.1 adapter implemented in `nodejs/tests/mockV1_1.ts` and passing
+- [x] AV-09–AV-11 recorded in `docs/validation/nodejs/results.md`
+- [x] S-09: `package.json` `types` field confirmed; `.d.ts` files in tarball
+- [x] S-09: all types importable from package root (no internal paths)
+- [x] `docs/validation/nodejs/PASS_FAIL.md` complete — 20/20
+- [x] `docs/validation/README.md` master summary and scenario matrix updated for Node.js
 - [ ] Validation status cross-linked from `docs/nodejs.md`
 - [ ] CI integration added to `nodejs.yml`
+
+**Bugs found and fixed during this pass (see `docs/validation/nodejs/results.md` for full detail):**
+- AV-05 caught a real defect: `attrFloat()` in `capabilities/v1_0/hdf5.ts` silently
+  returned `null` for a corrupt/non-numeric attribute instead of throwing, unlike
+  Python's `ValueError` for the same input. Fixed to throw `TypeError`; full
+  Node.js suite reconfirmed green after each subsequent change (151 tests as of
+  the AV-09–11 additions), validation app reconfirmed passing throughout.
+- Building the AV-09–11 mock surfaced a second real defect: the mock reader's
+  `facility_id`/`config_author` ended up duplicated into `meta.extra` (the base
+  v1.0 parser's `KNOWN_ROOT` set doesn't know they're typed fields), causing a
+  double-write collision on the next write. Fixed by stripping those keys from
+  `extra` before setting the typed fields — the exact serialization-safety
+  failure mode flagged earlier in this plan, confirmed real, not theoretical.
+
+**Note on AV-09–11 placement:** unlike S-01–09/AV-01–08, these three scenarios
+were written directly in `docs/validation/nodejs/app/scenarios/` rather than
+being developed externally first and ported in. They import the mock adapter
+from `nodejs/tests/mockV1_1.ts` at a fixed relative path — that only works when
+the scenario file and the mock live in the same repo checkout (mirroring
+exactly how Python's AV-09–11 reach `python/tests/test_adapter_migration.py`),
+so there was never an externally-runnable version of these three. The app's
+`package.json` (in `docs/validation/nodejs/app/`) depends on the local package
+via `file:../../../../nodejs` and is run with `npx tsx main.mts <fixtures> <real>`
+— `tsx` is required (not plain `node`) because the real adapter classes use
+TypeScript's constructor-parameter-property shorthand, which Node's native
+type-stripping cannot handle.
 
 ### Rust
 - [ ] Standalone app written externally and verified

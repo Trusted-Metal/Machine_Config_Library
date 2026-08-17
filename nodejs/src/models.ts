@@ -143,6 +143,10 @@ export interface MachineConfigMeta {
   file_version: string;
   export_date: string;
   configuration_hash: string;
+  // TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+  // Not real schema fields — never wired into JSON export or the JSON schema.
+  facility_id?: string | null;
+  config_author?: string | null;
   extra: Record<string, unknown>;
 }
 
