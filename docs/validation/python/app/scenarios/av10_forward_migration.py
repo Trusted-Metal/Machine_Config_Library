@@ -34,7 +34,7 @@ def run(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
         tmp = f.name
 
-    MockV1_1Writer(dc_replace(v1_0, meta=dc_replace(v1_0.meta, file_version="1.1"))).write(tmp)
+    MockV1_1Writer(dc_replace(v1_0, meta=dc_replace(v1_0.meta, file_version="1.1-mock"))).write(tmp)
     v1_1 = MockV1_1Reader(tmp).parse()
 
     # ADDITION: no v1.0 source — typed fields are None

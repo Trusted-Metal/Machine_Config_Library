@@ -26,7 +26,7 @@ class MachineConfigFileV1_0:
             adapter = Hdf5AdapterV1_0(str(path))
             config = adapter.parse()
             data = adapter._config_to_dict(config, include_binary=True)
-            return ok(cls(data, str(path), "1.0"))
+            return ok(cls(data, str(path), config.meta.file_version))
         except Exception as e:  # noqa: BLE001
             return err(capability_error("IoError", str(e)))
 

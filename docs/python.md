@@ -24,6 +24,7 @@ Python is the source of truth for fixture generation, the golden file, and schem
 - [Quickstart example](#quickstart-example)
 - [Full workflow example](#full-workflow-example)
 - [Running the Python test suite](#running-the-python-test-suite)
+- [External validation status](#external-validation-status)
 - [Capability API (stable model facade)](#capability-api-stable-model-facade)
 
 ---
@@ -503,3 +504,17 @@ Source: [examples/full_workflow/python/main.py](../examples/full_workflow/python
 | `test_builder.py` | — | `MockConfigBuilder`; `YamlConfigBuilder` roundtrip; `ConfigEditor` offset mutation |
 | `test_cli.py` | — | `inspect`, `validate`, `export-json`, `write`, `build --mock`, `build --from-yaml`, `demo` |
 | `test_schema.py` | — | Schema parses as JSON; draft 2020-12 meta-validation; all `required` constraints; golden file validation |
+
+### External validation status
+
+Separate from the pytest suite above: this branch also ran the full external
+"validation app" checklist — installing the packaged wheel into a standalone
+project outside this repo and exercising it as a real consumer would,
+including every version-dispatch edge case and the mock v1.1 adapter migration
+tests.
+
+**Result:** ✅ 20/20 scenarios passing. See
+[docs/validation/python/PASS_FAIL.md](../validation/python/PASS_FAIL.md) for
+the full verdict list and
+[docs/validation/python/results.md](../validation/python/results.md) for
+verbatim output.

@@ -62,7 +62,7 @@ _REFERENCE_H5 = _REPO_ROOT / "fixtures" / "reference_config.h5"
 # ---------------------------------------------------------------------------
 
 class MockV1_1Layout:
-    FILE_VERSION = "1.1"
+    FILE_VERSION = "1.1-mock"
 
     # ADDITION (×2): new root-level HDF5 attrs that map to typed StableModel fields
     ATTR_FACILITY_ID   = "Facility_ID"
@@ -121,7 +121,7 @@ class MockV1_1Reader:
             manufacturer=str(f.attrs.get("manufacturer", "")),
             model=str(f.attrs.get("model", "")),
             serial_number=str(f.attrs.get("serial_number", "")),
-            file_version=str(f.attrs.get("File_Version", "")).strip() or "1.1",
+            file_version=str(f.attrs.get("File_Version", "")).strip() or "1.1-mock",
             export_date=str(f.attrs.get("Export_Date", "")),
             configuration_hash=str(f.attrs.get("Configuration_Hash", "")),
             facility_id=str(f.attrs.get(L.ATTR_FACILITY_ID, "")).strip() or None,
@@ -391,7 +391,7 @@ def _make_config(
             manufacturer="AcmeCorp",
             model="Model-X",
             serial_number="SN-001",
-            file_version="1.1",
+            file_version="1.1-mock",
             export_date="2026-01-01",
             configuration_hash="deadbeef",
             facility_id=facility_id,
@@ -544,7 +544,7 @@ def test_v1_to_v1_1(tmp_path):
     """Real v1.0 fixture → StableModel → mock v1.1 layout — surviving fields preserved."""
     source = MachineConfigReader(_REFERENCE_H5).parse()
     out    = tmp_path / "migrated_v1_1.h5"
-    MockV1_1Writer(dc_replace(source, meta=dc_replace(source.meta, file_version="1.1"))).write(out)
+    MockV1_1Writer(dc_replace(source, meta=dc_replace(source.meta, file_version="1.1-mock"))).write(out)
     result = MockV1_1Reader(out).parse()
 
     # NAME CHANGE: machine_name survives both the read and write name remapping
@@ -613,16 +613,16 @@ def test_v1_unaffected():
 
 def test_dispatcher_v1_to_v1_1(tmp_path, monkeypatch):
     """Public API: v1.1 file read and then migrated to v1.0 through the dispatcher."""
-    monkeypatch.setitem(_reader_mod._ADAPTERS, "1.1", MockV1_1Reader)
-    monkeypatch.setitem(_writer_mod._ADAPTERS, "1.1", MockV1_1Writer)
+    monkeypatch.setitem(_reader_mod._ADAPTERS, "1.1-mock", MockV1_1Reader)
+    monkeypatch.setitem(_writer_mod._ADAPTERS, "1.1-mock", MockV1_1Writer)
 
     cfg        = _make_config(machine_name="DispatcherTest", facility_id="Dispatch-Lab")
     v1_1_file  = tmp_path / "dispatcher_v1_1.h5"
     MockV1_1Writer(cfg).write(v1_1_file)
 
-    # Public API read — dispatcher peeks "1.1" and routes to MockV1_1Reader
+    # Public API read — dispatcher peeks "1.1-mock" and routes to MockV1_1Reader
     result = MachineConfigReader(v1_1_file).parse()
-    assert result.meta.file_version                  == "1.1"
+    assert result.meta.file_version                  == "1.1-mock"
     assert result.meta.facility_id               == "Dispatch-Lab"
     assert result.machine.machine_name            == cfg.machine.machine_name
     assert result.machine.build_plate.x              == cfg.machine.build_plate.x
@@ -638,18 +638,18 @@ def test_dispatcher_v1_to_v1_1(tmp_path, monkeypatch):
 
 def test_dispatcher_v1_1_to_v1(tmp_path, monkeypatch):
     """Public API: real v1.0 file migrated to v1.1 and read back through the dispatcher."""
-    monkeypatch.setitem(_reader_mod._ADAPTERS, "1.1", MockV1_1Reader)
-    monkeypatch.setitem(_writer_mod._ADAPTERS, "1.1", MockV1_1Writer)
+    monkeypatch.setitem(_reader_mod._ADAPTERS, "1.1-mock", MockV1_1Reader)
+    monkeypatch.setitem(_writer_mod._ADAPTERS, "1.1-mock", MockV1_1Writer)
 
     source = MachineConfigReader(_REFERENCE_H5).parse()
 
-    # Public API write — dispatcher sees file_version="1.1" and routes to MockV1_1Writer
+    # Public API write — dispatcher sees file_version="1.1-mock" and routes to MockV1_1Writer
     v1_1_out = tmp_path / "dispatcher_v1_1_out.h5"
-    MachineConfigWriter(dc_replace(source, meta=dc_replace(source.meta, file_version="1.1"))).write(v1_1_out)
+    MachineConfigWriter(dc_replace(source, meta=dc_replace(source.meta, file_version="1.1-mock"))).write(v1_1_out)
 
-    # Public API read — dispatcher peeks "1.1" and routes to MockV1_1Reader
+    # Public API read — dispatcher peeks "1.1-mock" and routes to MockV1_1Reader
     result = MachineConfigReader(v1_1_out).parse()
-    assert result.meta.file_version                           == "1.1"
+    assert result.meta.file_version                           == "1.1-mock"
     assert result.machine.machine_name                        == source.machine.machine_name
     assert result.machine.build_plate.x                       == source.machine.build_plate.x
     assert result.optical_trains[0].scanner.working_distance  == source.optical_trains[0].scanner.working_distance

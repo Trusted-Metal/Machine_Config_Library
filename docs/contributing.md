@@ -16,6 +16,7 @@ the golden file.
 - [How the cross-check pipeline works](#how-the-cross-check-pipeline-works)
 - [File_Version adapters](#file_version-adapters)
 - [Adding a new file version — release checklist](#adding-a-new-file-version--release-checklist)
+- [Mock fixtures and real version numbers](#mock-fixtures-and-real-version-numbers)
 
 ---
 
@@ -280,12 +281,19 @@ For each language, the following files must exist and be registered:
 
 ```
 capabilities/v1_1/
+    file.py   / file.ts   / file.rs   / file.hpp   / file.go
     layout.py / layout.ts / layout.rs / layout.hpp / layout.go
     hdf5.py   / hdf5.ts   / hdf5.rs   / hdf5.hpp   / hdf5.go
-    writer.py / writer.ts / writer.rs / writer.hpp  / writer.go
+    writer.py / writer.ts / writer.rs / writer.hpp / writer.go
 ```
 
-Python dispatcher registration (both files):
+Python dispatcher registration — **all three** registries must move together.
+Each is a legitimate, separate "version → its own adapter" table (reader,
+writer, and the capability facade each have their own per-version
+implementation), so none of them is redundant to drop — but that also means
+none of them can be forgotten. Missing one silently leaves that surface
+routing to the old version's adapter while the others correctly pick up the
+new one:
 
 ```python
 # python/src/machine_config/reader.py
@@ -298,6 +306,12 @@ _ADAPTERS = {
 _ADAPTERS = {
     "1.0": Hdf5WriterV1_0,
     "1.1": Hdf5WriterV1_1,    # add here
+}
+
+# python/src/machine_config/capabilities/__init__.py
+_OPEN = {
+    "1.0": MachineConfigFileV1_0.open,
+    "1.1": MachineConfigFileV1_1.open,   # add here
 }
 ```
 
@@ -341,3 +355,43 @@ must pass for all active languages. See [Running the cross-language check](#runn
 Add a `## [1.1.0]` section to `CHANGELOG.md` with a table mirroring the manifest
 (category, field, v1.0 location → v1.1 location, lossy flag). The CHANGELOG is the
 consumer-facing version of the migration manifest.
+
+---
+
+## Mock fixtures and real version numbers
+
+`python/tests/test_adapter_migration.py` (and its per-language equivalents once
+implemented — see `VALIDATION_PLAN.md` §8) uses on-disk version string
+`"1.1-mock"` and field names (`facility_id`, `config_author`) purely to exercise
+the change-category architecture (Addition/Removal/Name/Path/Name+Path)
+end-to-end, independent of any real schema decision. The `-mock` suffix is
+deliberate — it cannot be mistaken for, or collide with, a real `File_Version`.
+See `docs/migrations/mock_v1_0_to_v1_1.md` for the manifest.
+
+**Why this needs no decommissioning.** The mock's classes are never registered
+in a language's real adapter registry (Python: `_ADAPTERS`) except transiently,
+via test-time monkeypatching/injection that reverts after each test — so there
+was never a *runtime* collision risk. The `-mock` suffix removes the *naming*
+collision risk too: no real version will ever be numbered `"1.1-mock"`, so the
+mock stands permanently as generic architecture-regression coverage, decoupled
+from whatever version numbers actually ship. A real v1.1 (or v2.0, or anything
+else) gets its own dedicated tests under the checklist above (§4), **in
+addition to** the mock's, never in place of it. Retiring the mock's coverage
+the moment a real version arrives would throw away the only place that
+exercises all five categories symmetrically — a real version's content is
+driven by product needs and may not touch Name/Path/Removal again for a long
+time.
+
+**If a future mock fixture is ever given a real-looking version number**
+(avoid this — use a `-mock` or similarly unambiguous suffix from the start),
+resolve the collision before merging the real version that reuses it:
+
+1. Rename or delete the mock's layout/reader/writer classes so nothing in the
+   test suite still claims to be that version except the real adapter.
+2. Audit any StableModel fields the mock added: if the real version reuses
+   those names with different semantics, resolve the collision explicitly — do
+   not let two unrelated meanings share a field name. If the real version
+   doesn't reuse them, remove them; left in place, they become unexplained
+   cruft with no adapter that populates them.
+3. Confirm no remaining test asserts against the mock's HDF5 layout under a
+   `File_Version` value the real adapter now owns.

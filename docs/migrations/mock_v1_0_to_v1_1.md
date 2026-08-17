@@ -13,7 +13,7 @@
 | | Value |
 |---|---|
 | Source version | `1.0` |
-| Target version | `1.1` (mock — test artifact only) |
+| Target version | `1.1-mock` (test artifact only — the `-mock` suffix is deliberate so this can never be mistaken for, or collide with, a real `File_Version`) |
 | StableModel changes | **None** — all changes are HDF5 layout only |
 | Layout constants | `python/tests/test_adapter_migration.py` → `MockV1_1Layout` |
 | Reader | `python/tests/test_adapter_migration.py` → `MockV1_1Reader` |

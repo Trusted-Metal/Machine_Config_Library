@@ -490,6 +490,34 @@ All five languages implement the same 10 synthetic HDF5 changes from that manife
 The HDF5 keys are the cross-language contract; StableModel field names follow each
 language's naming convention.
 
+**Serialization safety (all languages, required before merging AV-09–AV-11):**
+The mock's ADDITION fields (`facility_id`/`config_author`, or each language's
+naming-convention equivalent) must never appear in that language's canonical JSON
+export — the output `tools/cross_check.py` compares against Python's golden file
+(Python: `_config_to_dict()`; each other language's `to_json`/`toJson`/`ToJson`/
+equivalent). If they leak in, `cross_check.py` Phase 1 (schema validation — key not
+in `schema/machine_config_v1.schema.json`) and Phase 2 (read parity — extra key vs.
+Python's golden output) both fail, for every fixture, not just the mock's.
+
+- **Python** is safe by construction: `_config_to_dict()` is a hand-written
+  whitelist — a field not explicitly listed is never emitted, mock or not.
+- **Rust is not safe by default.** `MachineConfigMeta` derives `Serialize` via
+  serde — any new field on the struct is included in every JSON export
+  automatically unless annotated. The mock fields must carry
+  `#[serde(skip_serializing_if = "Option::is_none", default)]` (or `#[serde(skip)]`),
+  the same pattern already used for other optional fields in `rust/src/models.rs`.
+- **Node.js**: `hdf5.ts`'s exporter calls `JSON.stringify(config, ...)` directly on
+  the constructed object, so it's safe as long as the real v1.0 reader path never
+  sets the mock keys on the object it returns. Do not add them to the v1.0 reader's
+  object literal — only the mock reader/writer should ever populate them.
+- **C++ / Go**: before implementing, confirm whether that language's JSON exporter
+  enumerates fields explicitly (safe) or serializes the struct/object wholesale
+  (unsafe without an explicit skip/omit annotation), and annotate accordingly.
+
+Each language's AV-09 implementation must assert the mock's ADDITION fields are
+absent from that language's `export-json` output for a v1.0 fixture — this is the
+regression check that would have caught a serialization leak.
+
 ---
 
 ### AV-10: Mock v1.1 adapter — forward migration (v1.0 → v1.1)
@@ -762,6 +790,53 @@ A language is done when:
 - [ ] All verdicts entered in `PASS_FAIL.md`
 - [ ] App code committed to `docs/validation/<lang>/app/`
 - [ ] Any FAIL verdict has an associated issue or explanation in `results.md`
+- [ ] `docs/validation/README.md` master summary and scenario matrix updated for
+      this language — do this as each language finishes, not only at final merge
+      (Python's row was updated this way; treat that as the pattern, not the
+      exception — see §13)
+- [ ] Validation status cross-linked from `docs/<lang>.md` — a short note plus a
+      link to `docs/validation/<lang>/PASS_FAIL.md`, so the per-language usage doc
+      matches what's actually been tested. (Done for Python — see
+      `docs/python.md` §"External validation status" — treat that as the template.)
+
+### External validation project location
+
+Every "Step 1 — Create external project" instruction below used a `~/`-relative
+path. Standardizing on one fixed location instead, so every language's
+standalone app lives in the same place during development:
+
+```
+C:\Users\ChrisParham\Desktop\Practice\machineconfiglibrarytesting\mcl_<lang>_validation
+```
+
+e.g. `...\machineconfiglibrarytesting\mcl_nodejs_validation`,
+`...\machineconfiglibrarytesting\mcl_rust_validation`. This is scratch/working
+space — nothing under it is committed to the repo. Once the app is green
+locally, it gets ported into `docs/validation/<lang>/app/` per the "After app is
+green locally" step in each section below; that's the only copy that ships.
+
+### Recommended step ordering when a language needs new StableModel fields
+
+AV-09–AV-11 needs test-fixture fields on the StableModel (mirroring Python's
+`facility_id`/`config_author` — see `docs/migrations/mock_v1_0_to_v1_1.md`) that
+ship in the real package, unlike the mock reader/writer classes themselves,
+which stay in the test tree and are never packaged. Because of that asymmetry,
+add those fields *before* Step 1 in each language's plan below, not after:
+
+1. Add the two nullable/optional test-fixture fields to the language's
+   StableModel, with the same "TEST FIXTURE... not a real schema field, never
+   serialized" comment used in `python/src/machine_config/models.py`.
+2. Rebuild immediately and confirm nothing breaks. The fields are optional, so
+   this should be a no-op check, not a real risk — but it's a free, immediate
+   signal if something unexpected depends on the model's exact shape.
+3. Grep that language's real v1.0 JSON exporter for the new field names to
+   confirm they're absent. This verifies the "Serialization safety" property
+   (§8, under AV-09) by inspection, before any test exists that could catch a
+   leak — cheaper than finding out from a failing cross-language parity check.
+4. Only then proceed to Step 1 (build/pack) onward. This way the external
+   project is built once, against the library's final shape for this round of
+   work, instead of needing a rebuild-and-reinstall partway through once
+   AV-09–AV-11 work starts.
 
 ---
 
@@ -777,7 +852,8 @@ python -m build python/
 
 **Step 2 — Create external project and install:**
 ```bash
-mkdir ~/mcl_python_validation && cd ~/mcl_python_validation
+mkdir -p "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_python_validation"
+cd "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_python_validation"
 python -m venv .venv
 source .venv/bin/activate           # Linux / macOS
 source .venv/Scripts/activate       # Windows (Git Bash / MSYS2)
@@ -894,7 +970,8 @@ node -e "const p = require('./nodejs/package.json'); console.log('types:', p.typ
 
 **Step 3 — Create external project and install:**
 ```bash
-mkdir ~/mcl_nodejs_validation && cd ~/mcl_nodejs_validation
+mkdir -p "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_nodejs_validation"
+cd "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_nodejs_validation"
 npm init -y
 npm install /path/to/repo/nodejs/machine-config-*.tgz
 ```
@@ -915,6 +992,8 @@ S-06 is fully supported.
 **AV-09–AV-11 (Node.js):** Implement `MockV1_1Layout`, `MockV1_1Reader`, `MockV1_1Writer`
 in `nodejs/tests/` following the same 10 HDF5 changes in `docs/migrations/mock_v1_0_to_v1_1.md`.
 Use Vitest. StableModel field names follow TypeScript camelCase convention.
+See "Serialization safety" under AV-09 (§8) — verify the mock fields never leak into `hdf5.ts`'s
+`JSON.stringify` output for a v1.0 fixture.
 
 **App structure (`docs/validation/nodejs/app/`):**
 ```
@@ -948,7 +1027,8 @@ tsconfig.json
 
 **Step 1 — Create external project:**
 ```bash
-mkdir ~/mcl_rust_validation && cd ~/mcl_rust_validation
+mkdir -p "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_rust_validation"
+cd "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_rust_validation"
 cargo init --name mcl_rust_validation
 ```
 
@@ -985,6 +1065,9 @@ S-06 is fully supported.
 **AV-09–AV-11 (Rust):** Implement mock v1.1 adapter in a `#[cfg(test)]` module in
 `rust/tests/` following the same 10 HDF5 changes. Use `MockV1_1Layout` constants,
 `MockV1_1Reader`, `MockV1_1Writer` structs. Verify adapter trait satisfaction.
+See "Serialization safety" under AV-09 (§8) — the mock fields **require** an explicit
+`#[serde(skip_serializing_if = "Option::is_none", default)]` annotation or they will
+leak into every JSON export, not just the mock's, and break `cross_check.py`.
 
 **App structure (`docs/validation/rust/app/`):**
 ```
@@ -1016,7 +1099,8 @@ Cargo.toml
 
 **Step 1 — Create external project:**
 ```bash
-mkdir ~/mcl_go_validation && cd ~/mcl_go_validation
+mkdir -p "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_go_validation"
+cd "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_go_validation"
 go mod init mcl_go_validation
 ```
 
@@ -1071,6 +1155,8 @@ S-06 is fully supported.
 
 **AV-09–AV-11 (Go):** Implement mock v1.1 adapter in `go/`'s `_test.go` files following
 the same 10 HDF5 changes. Verify the adapter satisfies the reader/writer interfaces.
+See "Serialization safety" under AV-09 (§8) — confirm Go's JSON exporter enumerates
+fields explicitly before assuming the mock fields are safe to add.
 
 **App structure (`docs/validation/go/app/`):**
 ```
@@ -1115,7 +1201,11 @@ go.sum
 **Minimum requirements:** CMake 3.20+, C++17 compiler
 (GCC 10+ / Clang 12+ / MSVC 2019+), HDF5 1.12+ development headers.
 
-**Step 1 — Write `CMakeLists.txt` for from-source install:**
+**Step 1 — Create external project and write `CMakeLists.txt` for from-source install:**
+```bash
+mkdir -p "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_cpp_validation/src"
+cd "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_cpp_validation"
+```
 ```cmake
 cmake_minimum_required(VERSION 3.20)
 project(mcl_cpp_validation CXX)
@@ -1158,6 +1248,8 @@ source, and once from the static tarball (§8 Step 4).
 
 **AV-09–AV-11 (C++):** Implement mock v1.1 adapter as test-only `.cpp` files linked only
 in the test binary. Verify adapter satisfies the reader/writer abstract interface.
+See "Serialization safety" under AV-09 (§8) — confirm the C++ JSON exporter enumerates
+fields explicitly before assuming the mock fields are safe to add.
 
 **App structure (`docs/validation/cpp/app/`):**
 ```
@@ -1360,6 +1452,8 @@ adapter pattern, same HDF5 backend). To port this validation plan:
 - [x] S-09: `py.typed` marker confirmed present in installed wheel
 - [x] S-09: all types importable from `machine_config` top-level (no internal paths)
 - [x] `docs/validation/python/PASS_FAIL.md` complete
+- [x] `docs/validation/README.md` master summary and scenario matrix updated for Python
+- [x] Validation status cross-linked from `docs/python.md`
 - [ ] CI integration added to `python.yml`
 
 ### Node.js
@@ -1371,6 +1465,8 @@ adapter pattern, same HDF5 backend). To port this validation plan:
 - [ ] S-09: `package.json` `types` field confirmed; `.d.ts` files in tarball
 - [ ] S-09: all types importable from package root (no internal paths)
 - [ ] `docs/validation/nodejs/PASS_FAIL.md` complete
+- [ ] `docs/validation/README.md` master summary and scenario matrix updated for Node.js
+- [ ] Validation status cross-linked from `docs/nodejs.md`
 - [ ] CI integration added to `nodejs.yml`
 
 ### Rust
@@ -1381,6 +1477,8 @@ adapter pattern, same HDF5 backend). To port this validation plan:
 - [ ] AV-09–AV-11 recorded in `docs/validation/rust/results.md`
 - [ ] S-09: all public types re-exported from crate root (no sub-module paths needed)
 - [ ] `docs/validation/rust/PASS_FAIL.md` complete
+- [ ] `docs/validation/README.md` master summary and scenario matrix updated for Rust
+- [ ] Validation status cross-linked from `docs/rust.md`
 - [ ] CI integration added to `rust.yml`
 
 ### Go
@@ -1391,6 +1489,8 @@ adapter pattern, same HDF5 backend). To port this validation plan:
 - [ ] AV-09–AV-11 recorded in `docs/validation/go/results.md`
 - [ ] S-09: all exported types accessible via top-level package (no internal imports)
 - [ ] `docs/validation/go/PASS_FAIL.md` complete
+- [ ] `docs/validation/README.md` master summary and scenario matrix updated for Go
+- [ ] Validation status cross-linked from `docs/go.md`
 - [ ] CI integration added to `go.yml`
 
 ### C++
@@ -1406,9 +1506,14 @@ adapter pattern, same HDF5 backend). To port this validation plan:
 - [ ] CI tarball packaging step added (§8 Step 5)
 - [ ] All S and AV scenarios re-recorded (tarball-consumer run)
 - [ ] `docs/validation/cpp/PASS_FAIL.md` complete
+- [ ] `docs/validation/README.md` master summary and scenario matrix updated for C++
+- [ ] Validation status cross-linked from `docs/cpp.md`
 
 ### Documentation
-- [ ] `docs/validation/README.md` master summary table complete
+- [ ] `docs/validation/README.md` master summary table complete (final check —
+      should already be true if each language's own checklist above was kept
+      current; this is a re-verification, not the first time it's touched)
+- [ ] All five `docs/<lang>.md` files cross-link their validation status
 - [ ] All FAIL verdicts have associated explanation or issue reference
 
 ### Merge gate

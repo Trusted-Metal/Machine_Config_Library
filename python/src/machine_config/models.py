@@ -229,8 +229,11 @@ class MachineConfigMeta:
     file_version: str
     export_date: str
     configuration_hash: str
-    facility_id: Optional[str] = None    # v1.1 addition — absent in v1.0 files
-    config_author: Optional[str] = None  # v1.1 addition — absent in v1.0 files
+    # TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+    # Not a real schema field and not part of any planned version — exercises the
+    # ADDITION category only. Never wired into _config_to_dict() or the JSON schema.
+    facility_id: Optional[str] = None
+    config_author: Optional[str] = None
     extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed root HDF5 attrs
 
 
