@@ -229,6 +229,8 @@ class MachineConfigMeta:
     file_version: str
     export_date: str
     configuration_hash: str
+    facility_id: Optional[str] = None    # v1.1 addition — absent in v1.0 files
+    config_author: Optional[str] = None  # v1.1 addition — absent in v1.0 files
     extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed root HDF5 attrs
 
 

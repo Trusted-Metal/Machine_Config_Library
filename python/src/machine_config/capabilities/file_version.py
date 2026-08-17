@@ -21,6 +21,13 @@ class UnsupportedFileVersion(ValueError):
         )
 
 
+class MissingRequiredGroup(KeyError):
+    """A required HDF5 group is absent in an otherwise valid file."""
+    def __init__(self, path: str) -> None:
+        self.path = path
+        super().__init__(f"Required HDF5 group missing: {path}")
+
+
 def peek_file_version(path: str | Path) -> str:
     """Read only the root File_Version attribute. Does not walk groups."""
     with h5py.File(path, "r") as f:

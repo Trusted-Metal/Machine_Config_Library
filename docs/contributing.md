@@ -15,6 +15,7 @@ the golden file.
 - [Regenerating the golden file after a reader fix](#regenerating-the-golden-file-after-a-reader-fix)
 - [How the cross-check pipeline works](#how-the-cross-check-pipeline-works)
 - [File_Version adapters](#file_version-adapters)
+- [Adding a new file version — release checklist](#adding-a-new-file-version--release-checklist)
 
 ---
 
@@ -247,3 +248,96 @@ Each on-disk version gets its own folder:
 A new `File_Version` (e.g. `1.1`) adds `capabilities/v1_1/` plus a registry
 entry in the capabilities root. Apps keep calling `open_machine_config` /
 `openMachineConfig`.
+
+---
+
+## Adding a new file version — release checklist
+
+Every new `File_Version` must satisfy all four layers before merging.
+
+### 1 — Migration manifest
+
+Create `docs/migrations/v_PREV_to_v_NEW.md` following the format in
+[`docs/migrations/mock_v1_0_to_v1_1.md`](migrations/mock_v1_0_to_v1_1.md).
+
+The manifest is the shared specification — every language team reads the same table
+to implement their adapter. Fill in every field change with its category, source location,
+target location, StableModel field mapping, and whether migration is lossy.
+
+Change categories:
+
+| Category | Definition |
+|---|---|
+| **Addition** | New HDF5 attr/group with no equivalent in the previous version |
+| **Removal** | Existing attr/group dropped; value is lost during forward migration |
+| **Name** | Same group, different attr key; value preserved |
+| **Path** | Same attr key, different HDF5 group; value preserved |
+| **Name+Path** | Both group and key change; value preserved |
+
+### 2 — Structural (all languages)
+
+For each language, the following files must exist and be registered:
+
+```
+capabilities/v1_1/
+    layout.py / layout.ts / layout.rs / layout.hpp / layout.go
+    hdf5.py   / hdf5.ts   / hdf5.rs   / hdf5.hpp   / hdf5.go
+    writer.py / writer.ts / writer.rs / writer.hpp  / writer.go
+```
+
+Python dispatcher registration (both files):
+
+```python
+# python/src/machine_config/reader.py
+_ADAPTERS = {
+    "1.0": Hdf5AdapterV1_0,
+    "1.1": Hdf5AdapterV1_1,   # add here
+}
+
+# python/src/machine_config/writer.py
+_ADAPTERS = {
+    "1.0": Hdf5WriterV1_0,
+    "1.1": Hdf5WriterV1_1,    # add here
+}
+```
+
+### 3 — StableModel rules
+
+`MachineConfig` and its nested dataclasses are the shared contract across all versions
+and all languages. Violating these rules requires a coordinated update across every adapter
+in every language simultaneously.
+
+- **New optional field** — add `field: Optional[T] = None` to the relevant dataclass.
+  All existing adapters automatically return `None` for it. ✅ Safe.
+- **Remove a field** — forbidden without a major breaking change review.
+- **Rename a field** — forbidden; update `layout.py` in the new adapter instead.
+- **New required field** — only if all existing adapters can supply a sensible default.
+
+If a new version introduces a concept that has no place in `MachineConfig`, that is the
+signal to add an optional field to the model — not to work around it via `extra` dicts.
+
+### 4 — Test requirements (Python — template all other languages)
+
+Copy the pattern from `python/tests/test_adapter_migration.py`. Every new version
+must have all of the following passing, with zero regressions in the existing suite:
+
+| Test | Requirement |
+|---|---|
+| `test_vX_Y_read` | All manifest change categories asserted by value |
+| `test_vX_Y_roundtrip` | Write → read → write → read with no drift |
+| `test_vprev_to_vX_Y` | Forward migration from previous version |
+| `test_vX_Y_to_vprev` | Backward migration to previous version |
+| `test_vprev_unaffected` | Previous adapter path is undisturbed |
+| `test_dispatcher_vX_Y_*` | Full public API via `MachineConfigReader`/`MachineConfigWriter` |
+| `test_satisfies_protocol` | `isinstance(reader, ReaderAdapter)` and `isinstance(writer, WriterAdapter)` |
+
+### 5 — Cross-language verification
+
+Run `tools/cross_check.py` with the new version fixture included. All five phases
+must pass for all active languages. See [Running the cross-language check](#running-the-cross-language-check).
+
+### 6 — CHANGELOG entry
+
+Add a `## [1.1.0]` section to `CHANGELOG.md` with a table mirroring the manifest
+(category, field, v1.0 location → v1.1 location, lossy flag). The CHANGELOG is the
+consumer-facing version of the migration manifest.

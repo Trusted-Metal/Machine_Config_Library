@@ -32,6 +32,7 @@ from machine_config.models import (
     Scanner,
     ScannerCard,
 )
+from machine_config.capabilities.file_version import MissingRequiredGroup
 from machine_config.schema import SCHEMA_VERSION
 
 from . import layout
@@ -93,7 +94,10 @@ class Hdf5AdapterV1_0:
     def parse(self) -> MachineConfig:
         """Open the HDF5 file and return a fully-populated :class:`MachineConfig`."""
         with h5py.File(self.path, "r") as f:
-            return self._parse(f)
+            try:
+                return self._parse(f)
+            except KeyError as exc:
+                raise MissingRequiredGroup(str(exc)) from exc
 
     def get_correction_data(self, train_index: int) -> np.ndarray:
         """Return the ``(257, 257, 2)`` float64 galvo correction grid (0-indexed train)."""
@@ -227,7 +231,7 @@ class Hdf5AdapterV1_0:
             manufacturer=str(f.attrs.get("manufacturer", "")),
             model=str(f.attrs.get("model", "")),
             serial_number=str(f.attrs.get("serial_number", "")),
-            file_version=str(f.attrs.get("File_Version", "")),
+            file_version=str(f.attrs.get("File_Version", "")).strip() or "1.0",
             export_date=str(f.attrs.get("Export_Date", "")),
             configuration_hash=str(f.attrs.get("Configuration_Hash", "")),
             extra=_hdf5_attrs_extra(f.attrs, _KNOWN_ROOT_KEYS),

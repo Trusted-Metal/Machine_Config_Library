@@ -5,10 +5,17 @@ On-disk group paths and HDF5 attribute names live in the matching adapter.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from machine_config.capabilities.file_version import UnsupportedFileVersion
 from machine_config.capabilities.v1_0.writer import Hdf5WriterV1_0
 from machine_config.models import MachineConfig
+
+
+@runtime_checkable
+class WriterAdapter(Protocol):
+    """Structural contract every version-specific write adapter must satisfy."""
+    def write(self, path: str | Path) -> None: ...
 
 
 _ADAPTERS = {

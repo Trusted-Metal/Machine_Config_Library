@@ -28,7 +28,7 @@ machine-config = "machine_config.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-machine_config = ["machine_config_v1.schema.json"]
+machine_config = ["machine_config_v1.schema.json", "py.typed"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

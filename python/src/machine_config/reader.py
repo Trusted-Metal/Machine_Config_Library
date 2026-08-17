@@ -6,12 +6,20 @@ On-disk group paths and HDF5 attribute names live in the matching adapter
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from machine_config.capabilities.file_version import (
     UnsupportedFileVersion,
     peek_file_version,
 )
 from machine_config.capabilities.v1_0.hdf5 import Hdf5AdapterV1_0, config_from_dict
+from machine_config.models import MachineConfig
+
+
+@runtime_checkable
+class ReaderAdapter(Protocol):
+    """Structural contract every version-specific read adapter must satisfy."""
+    def parse(self) -> MachineConfig: ...
 
 __all__ = ["MachineConfigReader", "config_from_dict"]
 

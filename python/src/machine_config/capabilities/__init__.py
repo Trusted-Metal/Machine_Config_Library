@@ -12,7 +12,11 @@ from machine_config.capabilities.errors import (
     SessionClosedError,
     capability_error,
 )
-from machine_config.capabilities.file_version import peek_file_version
+from machine_config.capabilities.file_version import (
+    MissingRequiredGroup,
+    UnsupportedFileVersion,
+    peek_file_version,
+)
 from machine_config.capabilities.generated import SetMode
 from machine_config.capabilities.merge import apply_set_mode, snapshot
 from machine_config.capabilities.result import Result, err, ok
@@ -20,7 +24,9 @@ from machine_config.capabilities.v1_0 import MachineConfigFileV1_0
 
 __all__ = [
     "CapabilityError",
+    "MissingRequiredGroup",
     "SessionClosedError",
+    "UnsupportedFileVersion",
     "capability_error",
     "Result",
     "ok",
