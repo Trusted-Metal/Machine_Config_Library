@@ -24,6 +24,7 @@ nodejs/*.tgz
 rust/target/
 go/bin/
 cpp/build/
+docs/validation/cpp/app/build/
 python/dist/
 python/build/
 

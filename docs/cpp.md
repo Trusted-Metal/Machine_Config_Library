@@ -22,6 +22,7 @@ headers directly with no compilation step. All types live in the `machine_config
 - [Quickstart example](#quickstart-example)
 - [Full workflow example](#full-workflow-example)
 - [Running the C++ test suite](#running-the-c-test-suite)
+- [Validation results](#validation-results)
 - [Capability API (stable model facade)](#capability-api-stable-model-facade)
 
 > Use cases 3, 5, and 7 (`config_from_dict`, `ConfigEditor`, `YamlConfigBuilder`) are
@@ -457,12 +458,37 @@ cmake --build cpp/build --config Debug
 ctest --test-dir cpp/build -C Debug --output-on-failure
 ```
 
-Expected: `100% tests passed, 0 tests failed out of 64`
+Expected: `100% tests passed, 0 tests failed out of 79`
 
 | File | Tests | Coverage |
 |---|---|---|
 | `test_models.cpp` | 6 | JSON serialisation, nlohmann ADL round-trips |
-| `test_reader.cpp` | 44 | Root attrs, machine, optical trains, scanner, ClearBox scalars, binary data, OPCUA (absent + all fields), synthetic fixture, `getRawGroup()` |
-| `test_writer.cpp` | 7 | Scalar roundtrip, OPCUA roundtrip (field values + trigger content), OPCUA from-scratch construction, schema spot-check |
+| `test_reader.cpp` | 43 | Root attrs, machine, optical trains, scanner, ClearBox scalars, binary data, OPCUA (absent + all fields), synthetic fixture, `getRawGroup()` |
+| `test_writer.cpp` | 8 | Scalar roundtrip, OPCUA roundtrip (field values + trigger content), OPCUA from-scratch construction, schema spot-check |
 | `test_builder.cpp` | 6 | 1/2-laser roundtrip, plate dims, correction grid shape + value, no-clearbox |
 | `test_schema.cpp` | 3 | Reference fixture validates, MockBuilder output validates, empty object fails |
+| `test_capabilities.cpp` | 8 | Stable model facade: open/create, `SetMode`, `fileVersion`, `save` |
+| `test_adapter_migration.cpp` | 5 | Mock v1.1 adapter (AV-09–11): isolation, roundtrip, forward/backward migration |
+
+---
+
+## Validation results
+
+20 / 20 scenarios pass on this SDK. See the full table in
+[docs/validation/cpp/PASS_FAIL.md](../docs/validation/cpp/PASS_FAIL.md) and verbatim output
+in [docs/validation/cpp/results.md](../docs/validation/cpp/results.md).
+
+Two real, pre-existing library gaps were found and fixed during this validation pass — both
+in the build/packaging surface, not runtime behavior:
+- **No umbrella public header existed.** `#include <machine_config/machine_config.hpp>` — the
+  single include the static tarball and S-09 both require — never existed; every real
+  consumer used several separate includes. Created it (deliberately excluding `schema.hpp`,
+  which requires a consumer-supplied `SCHEMA_DIR` — schema validation stays opt-in).
+- **A `CMAKE_SOURCE_DIR`/`PROJECT_SOURCE_DIR` bug** broke the moment `cpp/` was consumed via
+  `add_subdirectory` from an external project — exactly what any real from-source install
+  does. Fixed; the main test suite (354 assertions, 79 test cases) reconfirmed green.
+
+The C++ static tarball (§10 of `VALIDATION_PLAN.md`) is verified separately — see
+[docs/validation/cpp/results.md](../docs/validation/cpp/results.md) for that run once complete.
+
+For the master cross-language matrix see [docs/validation/README.md](../docs/validation/README.md).

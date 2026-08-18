@@ -270,6 +270,12 @@ struct MachineConfigMeta {
     std::string file_version;
     std::string export_date;
     std::string configuration_hash;
+    // TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+    // Not real schema fields, never serialized — see to_json(MachineConfigMeta)
+    // below, which never lists them. Only the mock v1.1 reader/writer
+    // (test-only, not part of this header set) ever populates them.
+    std::optional<std::string> facility_id;
+    std::optional<std::string> config_author;
     ExtraAttrs extra; // non-typed root HDF5 attrs; empty object when none
 };
 

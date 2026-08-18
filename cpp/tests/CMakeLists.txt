@@ -5,6 +5,7 @@ add_executable(machine_config_tests
   test_builder.cpp          # §4.20
   test_schema.cpp           # §4.21
   test_capabilities.cpp     # stable model facade
+  test_adapter_migration.cpp # mock v1.1 adapter (AV-09-11)
 )
 
 target_link_libraries(machine_config_tests PRIVATE
@@ -15,8 +16,8 @@ target_link_libraries(machine_config_tests PRIVATE
 target_include_directories(machine_config_tests PRIVATE ${picosha2_SOURCE_DIR})
 # Absolute path to shared fixtures so tests can open HDF5 files regardless of cwd.
 target_compile_definitions(machine_config_tests PRIVATE
-  FIXTURES_DIR="${CMAKE_SOURCE_DIR}/../fixtures"
-  SCHEMA_DIR="${CMAKE_SOURCE_DIR}/../schema")
+  FIXTURES_DIR="${PROJECT_SOURCE_DIR}/../fixtures"
+  SCHEMA_DIR="${PROJECT_SOURCE_DIR}/../schema")
 
 include(Catch)
 catch_discover_tests(machine_config_tests)

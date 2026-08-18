@@ -8,8 +8,7 @@
 //
 // Opens examples/dummy_2train.h5 via the stable model facade.
 
-#include "machine_config/capabilities.hpp"
-#include "machine_config/reader.hpp"
+#include "machine_config/machine_config.hpp"
 
 #include <filesystem>
 #include <iostream>

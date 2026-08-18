@@ -772,7 +772,7 @@ Notes per language:
             consumers should not need to import internal sub-packages directly.
   C++     — the tarball `include/` directory must contain ONLY the public header(s);
             internal implementation headers must not be present; consumers must
-            be able to use all types via `#include <machine_config/machine_config.h>`
+            be able to use all types via `#include <machine_config/machine_config.hpp>`
             with no other include paths needed.
 ```
 
@@ -1256,6 +1256,51 @@ go.sum
 **Minimum requirements:** CMake 3.20+, C++17 compiler
 (GCC 10+ / Clang 12+ / MSVC 2019+), HDF5 1.12+ development headers.
 
+**Prerequisite — create the umbrella public header (it does not exist yet):**
+Step 3 below and §10's tarball packaging both require `#include <machine_config/machine_config.hpp>`
+to be the *only* include a consumer needs. That header does not exist in `cpp/include/machine_config/`
+today — the real, currently-working convention (used by `cpp/src/main.cpp` and both
+`examples/*/cpp/main.cpp`) is several separate includes (`reader.hpp`, `writer.hpp`,
+`capabilities.hpp`, etc.). This is not stale documentation to fix; it is a header that must
+be created — a thin file that `#include`s the existing public headers — before S-09 or the
+tarball step can be attempted as written. Do this first, then update the CLI and both
+examples to use it (a good, cheap regression check that it actually re-exports everything).
+
+**Serialization safety (resolved, unlike the generic per-language note under AV-09):** C++
+is safe by construction. `models.hpp` uses manual, explicit ADL `to_json`/`from_json`
+functions (nlohmann's customization-point idiom) — e.g. `to_json(json&, const MachineConfigMeta&)`
+lists each field by name — not an intrusive all-fields macro. Adding `facility_id`/
+`config_author` to `MachineConfigMeta` will not leak into JSON output unless explicitly added
+to that function, the same guarantee Python's hand-written `_config_to_dict()` gives. No
+annotation or extra step is needed here, unlike Rust's required `#[serde(skip_serializing_if...)]`.
+
+**No dispatch registry — same situation as Rust:** `MachineConfigReader::adapter()` in
+`reader.hpp` is a single hardcoded `if (ver != "1.0") throw ...`, not a table, so there is no
+seam to inject a mock adapter into the public `MachineConfigReader`/`MachineConfigWriter`
+facade. AV-09–11 should call the mock adapter directly, exactly as decided for Rust in §9.3 —
+this is stated explicitly here so it isn't rediscovered mid-implementation.
+
+**No typed exception hierarchy:** every error path in `reader.hpp`/`writer.hpp`/
+`capabilities/v1_0/hdf5.hpp` throws a bare `std::runtime_error` or `std::out_of_range` —
+there is no C++ equivalent of Rust's `MachineConfigError` enum for the plain reader/writer
+(the `CapabilityError` struct in `capabilities/errors.hpp` belongs only to the separate
+stable-facade API). AV-01/03/04/05 will need to catch `std::exception` and inspect `.what()`
+for the version string / field name, closer to Node's generic-`Error` situation than Rust's
+typed variants — don't expect or add a typed hierarchy to make these scenarios pass.
+
+**HighFive supports the delegate-then-patch mock design**, verified against the vendored
+source at `cpp/build/_deps/highfive-src/include/highfive/` (already fetched by a prior
+build), not assumed: `File::ReadWrite` (reopen read-write), `AnnotateTraits::deleteAttribute`/
+`createAttribute`, and `NodeTraits::createGroup`/`getGroup` are all real, stable public API —
+the same three operations the Node.js and Rust mocks needed, confirmed present here too.
+
+**Mock adapter placement is simpler than both other languages:** the library is header-only
+(`add_library(machine_config INTERFACE)`) and `tests/CMakeLists.txt` already compiles one
+Catch2 binary from an explicit `.cpp` file list — there's no Rust-style flat-file-vs-subdirectory
+registration gotcha, and no visibility barrier to design around, since every header under
+`include/machine_config/` is already reachable from any test file. Add a `test_adapter_migration.cpp`
+(and a `mock_v1_1.hpp` it includes) to that list; no CMake restructuring needed.
+
 **Step 1 — Create external project and write `CMakeLists.txt` for from-source install:**
 ```bash
 mkdir -p "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_cpp_validation/src"
@@ -1282,29 +1327,34 @@ cmake --build build
 **Step 3 — Verify S-09 single-header compile test:**
 The standalone app's `main.cpp` must only include the one public header:
 ```cpp
-#include <machine_config/machine_config.h>  // only include allowed
+#include <machine_config/machine_config.hpp>  // only include allowed
 ```
 Temporarily add `-Werror` to `CMakeLists.txt` and rebuild. If it compiles
 clean, the public header is self-contained. If not, identify which types
 require additional includes and record each as S-09 FAIL in `results.md`.
 
-**Note on builder:** C++ has `MockConfigBuilder` in `cpp/src/builder.cpp`.
-S-06 is fully supported.
+**Note on builder:** C++ has `MockConfigBuilder` in `cpp/include/machine_config/builder.hpp`
+(header-only, like the rest of the library — there is no `cpp/src/builder.cpp`; `src/`
+contains only `main.cpp`, the CLI). S-06 is fully supported.
 
-**Type export verification:** The public header (`machine_config/machine_config.h`)
+**Type export verification:** The public header (`machine_config/machine_config.hpp`)
 must expose all consumer-facing types — `MachineConfig`, `Scanner`, `OpticalTrain`,
 etc. — without requiring `#include` of any internal header. Verify by writing the
-standalone app with only `#include <machine_config/machine_config.h>` and confirming
+standalone app with only `#include <machine_config/machine_config.hpp>` and confirming
 it compiles cleanly. If any type requires an additional include, that is a public
 API gap. Record in `results.md` under S-09. This check is run twice: once from
 source, and once from the static tarball (§8 Step 4).
 
 **Scenarios to execute:** S-01 through S-09, AV-01 through AV-11
 
-**AV-09–AV-11 (C++):** Implement mock v1.1 adapter as test-only `.cpp` files linked only
-in the test binary. Verify adapter satisfies the reader/writer abstract interface.
-See "Serialization safety" under AV-09 (§8) — confirm the C++ JSON exporter enumerates
-fields explicitly before assuming the mock fields are safe to add.
+**AV-09–AV-11 (C++):** Implement the mock v1.1 adapter as a test-only header
+(`tests/mock_v1_1.hpp`) plus a `test_adapter_migration.cpp` added to `tests/CMakeLists.txt`'s
+source list, calling the mock directly rather than through `MachineConfigReader`/
+`MachineConfigWriter` (see "No dispatch registry" above). Mirror the delegate-then-patch
+design already verified for Node.js and Rust: delegate to the real v1.0 adapter/writer for
+everything unchanged, then patch the 10 documented differences via HighFive's own
+`deleteAttribute`/`createGroup`/`createAttribute` (verified above). The serialization-safety
+question is already resolved above — C++ is safe by construction, no annotation needed.
 
 **App structure (`docs/validation/cpp/app/`):**
 ```
@@ -1395,7 +1445,7 @@ Internal implementation headers must not appear here. A consumer who can
 `#include <machine_config/internal/models.hpp>` and construct library types
 directly has bypassed the adapter layer — that is a packaging bug, not a
 consumer error. Verify during Step 4 that the standalone app compiles and runs
-with only `#include <machine_config/machine_config.h>` and no other includes.
+with only `#include <machine_config/machine_config.hpp>` and no other includes.
 
 ### Step 4 — Verify locally as external consumer
 
@@ -1594,20 +1644,35 @@ in §9.3 before implementation began, not a gap discovered mid-work.
 - [ ] CI integration added to `go.yml`
 
 ### C++
-- [ ] Standalone app written externally and verified (from source)
-- [ ] App ported to `docs/validation/cpp/app/`
-- [ ] All S-01–S-09 and AV-01–AV-08 scenarios recorded (from-source run) in `docs/validation/cpp/results.md`
-- [ ] AV-09–AV-11: mock v1.1 adapter implemented as test-only `.cpp` and passing
-- [ ] AV-09–AV-11 recorded in `docs/validation/cpp/results.md`
-- [ ] S-09: standalone app compiles with only `#include <machine_config/machine_config.h>`
-- [ ] Static tarball built and verified locally (§8 Steps 1–4)
+- [x] Standalone app written externally and verified (from source) (`C:\Users\ChrisParham\Desktop\Practice\machineconfiglibrarytesting\Cpp`)
+- [x] App ported to `docs/validation/cpp/app/` (its own standalone CMake project, `add_subdirectory`-consuming `cpp/`)
+- [x] All S-01–S-09 and AV-01–AV-08 scenarios recorded (from-source run) in `docs/validation/cpp/results.md`
+- [x] AV-09–AV-11: mock v1.1 adapter implemented in `cpp/tests/mock_v1_1.hpp`, test-only, and passing (`cpp/tests/test_adapter_migration.cpp`, 5 tests)
+- [x] AV-09–AV-11 recorded in `docs/validation/cpp/results.md`
+- [x] S-09: standalone app compiles with only `#include <machine_config/machine_config.hpp>` — this required *creating* that header; it did not exist before this pass
+- [ ] Static tarball built and verified locally (§10 Steps 1–4)
 - [ ] S-09: tarball `include/` contains NO internal headers — verified by inspection
 - [ ] Tarball consumer run recorded in `docs/validation/cpp/tarball/results.md`
-- [ ] CI tarball packaging step added (§8 Step 5)
+- [ ] CI tarball packaging step added (§10 Step 5)
 - [ ] All S and AV scenarios re-recorded (tarball-consumer run)
-- [ ] `docs/validation/cpp/PASS_FAIL.md` complete
-- [ ] `docs/validation/README.md` master summary and scenario matrix updated for C++
-- [ ] Validation status cross-linked from `docs/cpp.md`
+- [x] `docs/validation/cpp/PASS_FAIL.md` complete — 20/20
+- [x] `docs/validation/README.md` master summary and scenario matrix updated for C++
+- [x] Validation status cross-linked from `docs/cpp.md`
+
+**Bugs found and fixed during this pass (see `docs/validation/cpp/results.md` for full detail):**
+- No umbrella public header (`machine_config/machine_config.hpp`) existed, even though §8 S-09
+  and §10 both require it — created it, and wired the CLI and both examples to it as a
+  regression check.
+- `cpp/CMakeLists.txt` and `cpp/tests/CMakeLists.txt` used `CMAKE_SOURCE_DIR` (top of the
+  whole CMake project tree) where `PROJECT_SOURCE_DIR` (anchored to this library's own
+  `project()` call) was needed — it broke the instant `cpp/` was consumed via
+  `add_subdirectory` from an external project, exactly what §9.5 Step 1's own template does.
+  Fixed; caught a subtly-wrong first attempt (`CMAKE_CURRENT_SOURCE_DIR`, wrong specifically
+  inside `tests/CMakeLists.txt`) by re-running the full suite rather than trusting the fix —
+  it had silently broken 57 of 74 test cases.
+- No runtime/serialization defects were found, unlike Node.js's pass (which found two: an
+  `attrFloat` silent-null and a `meta.extra` double-write). This library's error paths and
+  the mock's `meta.extra` handling were already correct.
 
 ### Documentation
 - [ ] `docs/validation/README.md` master summary table complete (final check —

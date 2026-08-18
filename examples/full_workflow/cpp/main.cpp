@@ -8,8 +8,7 @@
 //
 // Load examples/dummy_2train.h5, apply new scanner offsets via setScanner(Merge).
 
-#include "machine_config/capabilities.hpp"
-#include "machine_config/reader.hpp"
+#include "machine_config/machine_config.hpp"
 
 #include <array>
 #include <filesystem>

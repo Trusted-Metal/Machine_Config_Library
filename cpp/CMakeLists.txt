@@ -75,16 +75,16 @@ target_link_libraries(machine_config_cli PRIVATE machine_config CLI11::CLI11)
 target_include_directories(machine_config_cli PRIVATE ${picosha2_SOURCE_DIR})
 
 # §4.17: full_workflow example
-add_executable(full_workflow ${CMAKE_SOURCE_DIR}/../examples/full_workflow/cpp/main.cpp)
+add_executable(full_workflow ${PROJECT_SOURCE_DIR}/../examples/full_workflow/cpp/main.cpp)
 target_link_libraries(full_workflow PRIVATE machine_config)
 target_compile_definitions(full_workflow PRIVATE
-  EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/../examples")
+  EXAMPLES_DIR="${PROJECT_SOURCE_DIR}/../examples")
 
 # §4.18: quickstart example
-add_executable(quickstart ${CMAKE_SOURCE_DIR}/../examples/quickstart/cpp/main.cpp)
+add_executable(quickstart ${PROJECT_SOURCE_DIR}/../examples/quickstart/cpp/main.cpp)
 target_link_libraries(quickstart PRIVATE machine_config)
 target_compile_definitions(quickstart PRIVATE
-  EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/../examples")
+  EXAMPLES_DIR="${PROJECT_SOURCE_DIR}/../examples")
 
 # Examples — uncomment in §4.18 (quickstart)
 # add_subdirectory(examples)
