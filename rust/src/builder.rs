@@ -57,6 +57,8 @@ impl MockConfigBuilder {
             file_version: "1.0".to_owned(),
             export_date: MOCK_EXPORT_DATE.to_owned(),
             configuration_hash: "0".repeat(64),
+            facility_id: None,
+            config_author: None,
             extra: Default::default(),
         };
 

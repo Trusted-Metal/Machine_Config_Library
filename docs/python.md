@@ -514,7 +514,7 @@ including every version-dispatch edge case and the mock v1.1 adapter migration
 tests.
 
 **Result:** ✅ 20/20 scenarios passing. See
-[docs/validation/python/PASS_FAIL.md](../validation/python/PASS_FAIL.md) for
+[docs/validation/python/PASS_FAIL.md](../docs/validation/python/PASS_FAIL.md) for
 the full verdict list and
-[docs/validation/python/results.md](../validation/python/results.md) for
+[docs/validation/python/results.md](../docs/validation/python/results.md) for
 verbatim output.

@@ -414,6 +414,8 @@ impl Hdf5AdapterV1_0 {
             file_version: read_required_str(f, "File_Version")?,
             export_date: read_required_str(f, "Export_Date")?,
             configuration_hash: read_required_str(f, "Configuration_Hash")?,
+            facility_id: None,
+            config_author: None,
             extra: collect_extra(f, KNOWN_ROOT_KEYS)?,
         };
 

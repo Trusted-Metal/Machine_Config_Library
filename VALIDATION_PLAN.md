@@ -1080,9 +1080,46 @@ S-06 is fully supported.
 
 **Scenarios to execute:** S-01 through S-09, AV-01 through AV-11
 
-**AV-09–AV-11 (Rust):** Implement mock v1.1 adapter in a `#[cfg(test)]` module in
-`rust/tests/` following the same 10 HDF5 changes. Use `MockV1_1Layout` constants,
-`MockV1_1Reader`, `MockV1_1Writer` structs. Verify adapter trait satisfaction.
+**AV-09–AV-11 (Rust):** Implement the mock v1.1 adapter as plain modules under
+`rust/tests/` — e.g. `rust/tests/mock_v1_1.rs` (layout constants + `MockV1_1Reader`/
+`MockV1_1Writer`, mirroring `nodejs/tests/mockV1_1.ts`'s delegate-then-patch design:
+call the real, public `Hdf5AdapterV1_0::parse`/`Hdf5WriterV1_0::write` for the
+subcomponents that don't change, then patch the 10 documented differences) plus
+`rust/tests/adapter_migration_test.rs` (the `#[test]` functions). **Not** a
+`#[cfg(test)]` module — that attribute is for code living inside `src/` that needs
+private/`pub(crate)` access; `rust/tests/` is already a separate integration-test
+crate, compiled only for `cargo test`, that can only see the library's `pub` items.
+Verified this is sufficient: `Hdf5AdapterV1_0::parse` and `Hdf5WriterV1_0::write`
+are already fully `pub` (`rust/src/capabilities/v1_0/hdf5.rs`,
+`rust/src/capabilities/v1_0/writer.rs`), reachable from `rust/tests/` exactly the
+way `rust/tests/integration_test.rs` already reaches them today — no new `pub`
+exports needed to build the mock.
+
+**Dispatch-injection is not available in Rust — resolve this before implementing,
+don't rediscover it mid-work:** unlike Python's `_ADAPTERS` dict (monkeypatchable)
+and Node's exported `_READERS`/`_WRITERS` (temporarily mutable), Rust's dispatcher
+is a hardcoded `match version.as_str() { "1.0" => ..., other => Err(...) }` in
+`rust/src/reader.rs` and `rust/src/writer.rs` — there is no registry to inject a
+`"1.1-mock"` entry into. Adding a real match arm for it would put test-only logic
+in shipped dispatch code; refactoring the dispatcher into a registry solely to
+enable this test would be architecture change the task doesn't otherwise need.
+Given that, AV-09–AV-11 for Rust test the mock adapter directly — call
+`MockV1_1Reader`/`MockV1_1Writer` as plain structs, not through the public
+`MachineConfigReader`/`MachineConfigWriter` facade. AV-09's actual rationale
+("adding v1.1 doesn't require modifying the v1.0 adapter") is satisfied by the
+mock living in its own file with zero edits to `capabilities/v1_0/` and the full
+existing test suite re-run green after it's added — that already proves the claim
+without needing literal dispatch-table injection.
+
+**Verify the HDF5 binding's mutation API before committing to a mock design:**
+the crate in use is `hdf5-metno` (`rust/Cargo.toml`), not h5wasm — its support for
+deleting an attribute and reopening an already-written file in read/write mode
+(the two operations the delegate-then-patch design depends on) has not been
+checked. Do not assume parity with h5wasm's API; write a small standalone spike
+against `hdf5-metno` first, the same way a standalone h5wasm spike preceded the
+Node.js mock, and adjust the design if the binding doesn't support one of these
+operations directly.
+
 See "Serialization safety" under AV-09 (§8) — the mock fields **require** an explicit
 `#[serde(skip_serializing_if = "Option::is_none", default)]` annotation or they will
 leak into every JSON export, not just the mock's, and break `cross_check.py`.
@@ -1484,7 +1521,7 @@ adapter pattern, same HDF5 backend). To port this validation plan:
 - [x] S-09: all types importable from package root (no internal paths)
 - [x] `docs/validation/nodejs/PASS_FAIL.md` complete — 20/20
 - [x] `docs/validation/README.md` master summary and scenario matrix updated for Node.js
-- [ ] Validation status cross-linked from `docs/nodejs.md`
+- [x] Validation status cross-linked from `docs/nodejs.md`
 - [ ] CI integration added to `nodejs.yml`
 
 **Bugs found and fixed during this pass (see `docs/validation/nodejs/results.md` for full detail):**
@@ -1514,16 +1551,35 @@ TypeScript's constructor-parameter-property shorthand, which Node's native
 type-stripping cannot handle.
 
 ### Rust
-- [ ] Standalone app written externally and verified
-- [ ] App ported to `docs/validation/rust/app/`
-- [ ] All S-01–S-09 and AV-01–AV-08 scenarios recorded in `docs/validation/rust/results.md`
-- [ ] AV-09–AV-11: mock v1.1 adapter implemented in `rust/tests/` and passing
-- [ ] AV-09–AV-11 recorded in `docs/validation/rust/results.md`
-- [ ] S-09: all public types re-exported from crate root (no sub-module paths needed)
-- [ ] `docs/validation/rust/PASS_FAIL.md` complete
-- [ ] `docs/validation/README.md` master summary and scenario matrix updated for Rust
-- [ ] Validation status cross-linked from `docs/rust.md`
+- [x] Standalone app written externally and verified (`C:\Users\ChrisParham\Desktop\Practice\machineconfiglibrarytesting\Rust`) for S-01–09/AV-01–08
+- [x] App ported to `docs/validation/rust/app/` (its own standalone Cargo workspace — see results.md; AV-09–11 cannot live here at all, not just "were written directly in-repo" as with Node.js — see below)
+- [x] All S-01–S-09 and AV-01–AV-08 scenarios recorded in `docs/validation/rust/results.md`
+- [x] AV-09–AV-11: mock v1.1 adapter implemented in `rust/tests/mock_v1_1/mod.rs` and passing (`rust/tests/adapter_migration_test.rs`, 5 tests)
+- [x] AV-09–AV-11 recorded in `docs/validation/rust/results.md`
+- [x] S-09: all public types re-exported from crate root (no sub-module paths needed) — this was a real gap closed during this pass, not already true; see `rust/src/lib.rs`
+- [x] `docs/validation/rust/PASS_FAIL.md` complete — 20/20
+- [x] `docs/validation/README.md` master summary and scenario matrix updated for Rust
+- [x] Validation status cross-linked from `docs/rust.md`
 - [ ] CI integration added to `rust.yml`
+
+**Bugs found and fixed during this pass (see `docs/validation/rust/results.md` for full detail):**
+- S-09 revealed a real, pre-existing library gap: no public type (`MachineConfig`, `Scanner`,
+  `MockConfigBuilder`, etc.) was re-exported from the crate root — consumers needed
+  `machine_config::models::MachineConfig` instead of `machine_config::MachineConfig`. Fixed by
+  adding `pub use` re-exports to `rust/src/lib.rs`, matching Python's `__init__.py` and Node's
+  `index.ts`. Unlike Node.js, no runtime/serialization defect was found — AV-04/AV-05 already
+  returned typed errors from the start, and the mock's `meta.extra` handling was written
+  correctly on the first pass (the equivalent bug had already surfaced in Node's pass earlier
+  in this effort).
+
+**Note on AV-09–11 placement:** unlike Node.js, where these three scenarios were merely
+*written* directly in-repo rather than developed externally first, Rust's AV-09–11 cannot
+exist in the external app at all, at any point — Rust's dispatcher is a hardcoded `match` in
+`reader.rs`/`writer.rs`, not a registry, so there is no dispatch-table injection seam for a
+mock adapter to hook into the public `MachineConfigReader`/`Writer` facade. The mock
+(`rust/tests/mock_v1_1/mod.rs`) is exercised directly by `rust/tests/adapter_migration_test.rs`
+via `cargo test`, never through the external app. This was a deliberate decision documented
+in §9.3 before implementation began, not a gap discovered mid-work.
 
 ### Go
 - [ ] Standalone app written externally and verified

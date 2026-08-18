@@ -287,6 +287,17 @@ pub struct MachineConfigMeta {
     pub file_version: String,
     pub export_date: String,
     pub configuration_hash: String,
+    /// TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+    /// Not a real schema field, never serialized for a v1.0 config — only the
+    /// mock v1.1 reader/writer (test-only, not part of this crate) ever
+    /// populates it. `skip_serializing_if` keeps it out of every real JSON
+    /// export unless explicitly set, matching Python's/Node's behavior for
+    /// the same fixture fields.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub facility_id: Option<String>,
+    /// TEST FIXTURE for the mock v1.1 adapter — see `facility_id` above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub config_author: Option<String>,
     /// Preserves any non-typed root HDF5 attrs.
     #[serde(default)]
     pub extra: ExtraAttrs,
@@ -480,6 +491,8 @@ mod tests {
                 file_version: "1.0".into(),
                 export_date: "2026-06-09T19:01:02.123Z".into(),
                 configuration_hash: "9".repeat(64),
+                facility_id: None,
+                config_author: None,
                 extra: IndexMap::new(),
             },
             machine: Machine {

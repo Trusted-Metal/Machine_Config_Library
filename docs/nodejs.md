@@ -24,6 +24,7 @@ so there is no native compilation step and no system HDF5 library required on an
 - [Quickstart example](#quickstart-example)
 - [Full workflow example](#full-workflow-example)
 - [Running the Node.js test suite](#running-the-nodejs-test-suite)
+- [Validation results](#validation-results)
 
 > Use cases 3, 5, and 7 (reconstruct-from-JSON, `ConfigEditor`, `YamlConfigBuilder`) are
 > Python-only conveniences with no Node.js port.
@@ -409,7 +410,7 @@ Source: [examples/full_workflow/nodejs/main.mjs](../examples/full_workflow/nodej
 ```bash
 # From the nodejs/ directory
 cd nodejs
-npm test           # 130 tests: 82 reader + 6 schema + 24 writer + 18 builder
+npm test           # 151 tests: 84 reader + 6 schema + 27 writer + 18 builder + 8 capabilities + 8 adapterMigration
 ```
 
 ```powershell
@@ -419,7 +420,23 @@ Push-Location nodejs ; npm test ; Pop-Location
 
 | Suite | Tests | What it covers |
 |---|---|---|
-| `reader.test.ts` | 82 | All 3 fixtures; meta, machine geometry, optical trains, scanner, ClearBox, SFCF, correction data shape/NaN, OPCUA (13 tests), JSON serialisation, Ajv schema validation |
+| `reader.test.ts` | 84 | All 3 fixtures; meta, machine geometry, optical trains, scanner, ClearBox, SFCF, correction data shape/NaN, OPCUA (13 tests), JSON serialisation, Ajv schema validation |
 | `schema.test.ts` | 6 | Schema loads; `validate()` rejects empty/invalid; accepts minimal valid document |
-| `writer.test.ts` | 24 | Reference fixture roundtrip; OPCUA roundtrip incl. trigger field values; synthetic 2-laser roundtrip |
+| `writer.test.ts` | 27 | Reference fixture roundtrip; OPCUA roundtrip incl. trigger field values; synthetic 2-laser roundtrip |
 | `builder.test.ts` | 18 | `build()` in-memory; `save()` + read-back; correction grid shape/peak; no-clearbox path; schema validity |
+| `capabilities.test.ts` | 8 | Capability API: `openMachineConfig`, `createMachineConfig`, `SetMode`, `fileVersion`, `save` |
+| `adapterMigration.test.ts` | 8 | Mock v1.1 adapter isolation (AV-09), forward migration v1.0→v1.1 (AV-10), backward migration v1.1→v1.0 (AV-11) |
+
+---
+
+## Validation results
+
+20 / 20 scenarios pass on this SDK. See the full table in
+[docs/validation/nodejs/PASS_FAIL.md](../docs/validation/nodejs/PASS_FAIL.md) and verbatim
+output in [docs/validation/nodejs/results.md](../docs/validation/nodejs/results.md).
+
+Two real defects were found and fixed during the validation pass:
+- **AV-05** — `attrFloat()` silently returned `null` for a corrupt attribute instead of throwing; fixed to throw `TypeError`.
+- **AV-10/11** — `meta.extra` accumulated typed addition fields (`facility_id`/`config_author`) because the v1.0 base parser's `KNOWN_ROOT` set didn't know they were typed; fixed by stripping those keys from `extra` before assigning the typed fields.
+
+For the master cross-language matrix see [docs/validation/README.md](../docs/validation/README.md).
