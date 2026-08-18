@@ -1,21 +1,5 @@
 #include "scenarios/common.hpp"
-#include "scenarios/s01_read_scalars.hpp"
-#include "scenarios/s02_read_binary.hpp"
-#include "scenarios/s03_read_real.hpp"
-#include "scenarios/s04_write_modify.hpp"
-#include "scenarios/s05_binary_roundtrip.hpp"
-#include "scenarios/s06_builder.hpp"
-#include "scenarios/s07_opcua.hpp"
-#include "scenarios/s08_drastic_change.hpp"
-#include "scenarios/s09_type_exports.hpp"
-#include "scenarios/av01_unknown_version.hpp"
-#include "scenarios/av02_missing_version.hpp"
-#include "scenarios/av03_future_version.hpp"
-#include "scenarios/av04_missing_group.hpp"
-#include "scenarios/av05_corrupt_scalar.hpp"
-#include "scenarios/av06_whitespace_version.hpp"
-#include "scenarios/av07_empty_version.hpp"
-#include "scenarios/av08_version_fidelity.hpp"
+#include "scenarios/scenarios.hpp"
 
 #include <iostream>
 #include <vector>

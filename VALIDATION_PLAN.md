@@ -909,29 +909,22 @@ The validation app scenarios for AV-09–AV-11 are thin wrappers that invoke the
 **App structure (`docs/validation/python/app/`):**
 ```
 main.py          ← runs all scenarios sequentially, prints results
-scenarios/
-  s01_read_scalars.py
-  s02_read_binary.py
-  s03_read_real.py
-  s04_write_modify.py
-  s05_binary_roundtrip.py
-  s06_builder.py
-  s07_opcua.py
-  s08_drastic_change.py
-  av01_unknown_version.py
-  av02_missing_version.py
-  av03_future_version.py
-  av04_missing_group.py
-  av05_corrupt_scalar.py
-  av06_whitespace_version.py
-  av07_empty_version.py
-  av08_version_fidelity.py
-  av09_mock_adapter_isolation.py
-  av10_forward_migration.py
-  av11_backward_migration.py
-  s09_type_exports.py
+scenarios.py     ← all 20 run_sXX/run_avXX functions (S-01–09, AV-01–11)
 requirements.txt ← pinned to exact library version tested
 ```
+Consolidated from one-file-per-scenario (22 files: `__init__.py` + 21
+scenario modules) down to one file per app (§0 "condense per-scenario test
+files" decision, applied consistently across all five languages) — no
+`scenarios/` package directory needed once it's a single flat module.
+`main.py` needed only its import line and `SCENARIOS` table updated to the
+new flat function names (`run_s01` instead of `s01_read_scalars.run`).
+Two things to watch when re-merging: (1) every scenario file defined its own
+`def run(...)`, so each had to be renamed uniquely (`run_s01`, `run_av09`,
+etc.) to avoid collisions once flattened into one module; (2) AV-09–11's
+`sys.path.insert(0, str(Path(__file__).parent...))` walk to reach
+`python/tests/` needed one fewer `.parent` — the file moved one directory
+level shallower (out of `scenarios/`), so the relative walk to the repo root
+got one segment shorter.
 
 **After app is green locally:** port into `docs/validation/python/app/`, commit,
 verify it runs in CI.
@@ -998,14 +991,20 @@ See "Serialization safety" under AV-09 (§8) — verify the mock fields never le
 **App structure (`docs/validation/nodejs/app/`):**
 ```
 main.mts
-scenarios/
-  s01_read_scalars.mts
-  s02_read_binary.mts
-  ... (same pattern as Python)
-  s09_type_exports.mts
+scenarios.mts    ← all 20 runSXX/runAvXX functions (S-01–09, AV-01–11)
 package.json
 tsconfig.json
 ```
+Consolidated from one-file-per-scenario (21 files: 20 scenario modules +
+`main.mts`) down to one file per app (§0 "condense per-scenario test files"
+decision, applied consistently across all five languages) — no `scenarios/`
+directory needed once it's a single flat module. `main.mts` needed only its
+import line and `SCENARIOS` table updated to the new function names
+(`runS01` instead of a namespace import per file). Verified `tsc --noEmit`
+still passes with zero errors after merging (S-09's actual point). One
+relative-path adjustment: AV-09–11's import of the mock adapter
+(`nodejs/tests/mockV1_1.js`) needed one fewer `../` segment, since the file
+moved one directory level shallower (out of `scenarios/`).
 
 **After app is green locally:** port into `docs/validation/nodejs/app/`, commit.
 
@@ -1128,13 +1127,20 @@ leak into every JSON export, not just the mock's, and break `cross_check.py`.
 ```
 src/
   main.rs
+  scenarios.rs
   scenarios/
-    mod.rs
-    s01_read_scalars.rs
-    ... (same pattern)
-    s09_type_exports.rs
+    common.rs
 Cargo.toml
 ```
+Consolidated from one-file-per-scenario (20 files) down to one file per app
+(§0 "condense per-scenario test files" decision, applied consistently across
+all five languages) — `scenarios.rs` holds all 17 `run_sXX`/`run_avXX`
+functions (S-01–09, AV-01–08) in ID order and declares `mod common;`, which
+resolves to the sibling `scenarios/common.rs` (Rust's file-with-sibling-
+submodule-directory convention — no `mod.rs` needed once `scenarios/` no
+longer needs to BE the module root). `main.rs` needed only its
+`scenario_list` table updated to the new flat function names
+(`scenarios::run_s01` instead of `scenarios::s01_read_scalars::run`).
 
 **After app is green locally:** port into `docs/validation/rust/app/`, commit.
 
@@ -1351,29 +1357,17 @@ the real (non-mock) model, the same caution already flagged for Rust's serde.
 main.go
 scenarios/
   common.go
-  s01_read_scalars.go
-  s02_read_binary.go
-  s03_read_real.go
-  s04_write_modify.go
-  s05_binary_roundtrip.go
-  s06_builder.go
-  s07_opcua.go
-  s08_drastic_change.go
-  s09_type_exports.go
-  av01_unknown_version.go
-  av02_missing_version.go
-  av03_future_version.go
-  av04_missing_group.go
-  av05_corrupt_scalar.go
-  av06_whitespace_version.go
-  av07_empty_version.go
-  av08_version_fidelity.go
+  scenarios.go
 go.mod
-go.sum
 ```
-Mirrors `docs/validation/rust/app/` file-for-file (verified by reading it): one file
-per scenario, each exposing a `run(fixturesDir, realDir string) (ok bool, detail string)`
-function; `main.go` holds an ordered `[]struct{ id string; run runFn }` table, prints
+Consolidated from one-file-per-scenario (19 files) down to one file per app
+(§0 "condense per-scenario test files" decision, applied consistently across
+all five languages) — `scenarios.go` holds all 17 `RunXxx` functions (S-01–09,
+AV-01–08) in ID order, `common.go` keeps the shared helpers (fixture-path
+resolution, hashing, NaN-aware equality) separate since that's infrastructure,
+not scenario logic. `main.go` is unchanged by the merge — Go function
+references are package-scoped, not file-scoped, so `main.go`'s
+`[]struct{ id string; run runFn }` table needed zero edits. `main.go` prints
 `[PASS]`/`[FAIL] <id>: <detail>` per scenario plus a final `N passed, M failed`
 summary line, and exits non-zero on any failure. AV-01/02/04/05/06/07 read their
 fixtures from the shared, language-agnostic `docs/validation/fixtures/` directory
@@ -1526,10 +1520,33 @@ CMakeLists.txt
 src/
   main.cpp
   scenarios/
-    s01_read_scalars.cpp
-    s02_read_binary.cpp
-    ... (same pattern)
+    common.hpp
+    scenarios.hpp
+    scenarios.cpp
 ```
+Consolidated from one-file-per-scenario (36 files: 17 `.hpp`/`.cpp` pairs +
+`common.hpp` + `main.cpp`) down to one `.hpp`/`.cpp` pair per app (§0
+"condense per-scenario test files" decision, applied consistently across all
+five languages) — C++ saw the largest cut of the five since it was the only
+language paying the header/source split tax per scenario on top of the
+per-scenario file split itself. Each scenario keeps its own namespace
+(`s01`, `av05`, etc.) inside the merged files, exactly as before — this
+means `main.cpp`'s `scenarioList` (`{"S-01", s01::run}`, etc.) needed **zero**
+changes, only its 18 `#include "scenarios/sXX_....hpp"` lines collapsing to
+one `#include "scenarios/scenarios.hpp"`. `CMakeLists.txt`'s
+`add_executable(validation_app ...)` source list shrank from 18 `.cpp` files
+to 2 (`main.cpp`, `scenarios/scenarios.cpp`).
+
+Rebuilding after the merge surfaced a real, pre-existing bug unrelated to the
+consolidation itself: `common.hpp`'s `avFixture()` used
+`fixturesDir.parent_path()`, which has the exact same trailing-separator
+quirk as Go's `filepath.Dir()` (§9.4) — a `fixturesDir` ending in `/` makes
+the final path component empty, so `parent_path()` has nothing to "drop" and
+returns the path unchanged, breaking every AV fixture lookup. Fixed with the
+same technique as Go: `(fixturesDir / "..").lexically_normal()` instead of
+`.parent_path()`, which resolves `..` correctly regardless of a trailing
+separator. `common.hpp` itself was otherwise untouched — verified via `git
+diff` before attributing the bug to something other than the merge.
 
 **After app is green from source:** proceed to §8 (static tarball).
 After tarball is verified, rebuild the app against the tarball and record

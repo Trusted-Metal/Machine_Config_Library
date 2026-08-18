@@ -65,6 +65,25 @@ matches all three exactly.
 
 ---
 
+## App file consolidation (post-hoc)
+
+The standalone app's 36 files (17 `.hpp`/`.cpp` scenario pairs + `common.hpp` + `main.cpp`) were
+consolidated into a single `scenarios.hpp`/`scenarios.cpp` pair, matching the same one-file-per-app
+decision applied to all five languages' apps. Each scenario kept its own namespace (`s01`, `av05`,
+etc.), so `main.cpp`'s `scenarioList` needed zero changes — only its 18 `#include` lines collapsed to
+one. `CMakeLists.txt`'s source list shrank from 18 `.cpp` files to 2.
+
+Rebuilding after the merge surfaced a real, pre-existing bug, unrelated to the consolidation itself
+(`common.hpp` was not touched — verified via `git diff` before attributing it elsewhere):
+`avFixture()`'s `fixturesDir.parent_path()` has the same trailing-separator quirk as Go's
+`filepath.Dir()` (§9.4) — a `fixturesDir` ending in `/` makes the final path component empty, so
+`parent_path()` had nothing to "drop" and returned the path unchanged, breaking every AV-01–07 fixture
+lookup (`AV-01`/`AV-03`/`AV-06` failed outright; `AV-02`/`AV-04`/`AV-05`/`AV-07` "passed" only because
+they treat any exception as an acceptable/expected outcome). Fixed with the same technique as Go:
+`(fixturesDir / "..").lexically_normal()` instead of `.parent_path()`. Re-verified 17/17 after the fix.
+
+---
+
 ## Library bugs found and fixed during this validation pass
 
 Two real, pre-existing gaps were found — both while working through §9.5's own prerequisites, before

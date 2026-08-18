@@ -47,7 +47,15 @@ inline std::string sha256Hex(const std::vector<double>& data) {
 // from fixturesDir — same convention already used by every other language's
 // AV scenario files.
 inline std::filesystem::path avFixture(const std::filesystem::path& fixturesDir, const std::string& name) {
-    return fixturesDir.parent_path() / "docs" / "validation" / "fixtures" / name;
+    // (fixturesDir / "..").lexically_normal() instead of fixturesDir.parent_path():
+    // when fixturesDir carries a trailing separator (as it does when invoked from
+    // CI/locally with ".../fixtures/"), parent_path() returns fixturesDir
+    // unchanged instead of its parent — the trailing separator makes the final
+    // path component empty, so there is nothing for parent_path() to "drop".
+    // Appending ".." and normalizing lexically resolves it correctly regardless
+    // of a trailing separator (same bug, same fix, already applied to Go's
+    // filepath.Dir() equivalent — see VALIDATION_PLAN.md §9.4).
+    return (fixturesDir / "..").lexically_normal() / "docs" / "validation" / "fixtures" / name;
 }
 
 // A unique path in the OS temp dir. Not an open handle (HighFive's File
