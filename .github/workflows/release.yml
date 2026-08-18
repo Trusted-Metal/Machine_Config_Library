@@ -54,23 +54,33 @@ jobs:
         id: hdf5-cache
         with:
           path: ${{ github.workspace }}/hdf5-install
-          key: hdf5-1.14.6-no-zlib-ubuntu-latest
+          key: hdf5-1.14.6-no-zlib-v2-ubuntu-latest
 
       - name: Set HDF5_INSTALL env var
         run: echo "HDF5_INSTALL=${{ github.workspace }}/hdf5-install" >> $GITHUB_ENV
 
+      # Ninja + the extra HDF5_BUILD_*/BUILD_TESTING=OFF flags below (added
+      # after the from-source build was observed taking ~50min on a cold
+      # cache) skip compiling HDF5's C++/Fortran/Java wrappers and its own
+      # test suite — none of which this project ever links against — and use
+      # a faster build system than the default Unix Makefiles.
       - name: Build and install HDF5 1.14.6
         if: steps.hdf5-cache.outputs.cache-hit != 'true'
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build
           git clone --depth 1 --branch hdf5_1.14.6 \
             https://github.com/HDFGroup/hdf5.git hdf5-src
-          cmake -S hdf5-src -B hdf5-build \
+          cmake -S hdf5-src -B hdf5-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/hdf5-install \
+            -DBUILD_TESTING=OFF \
             -DHDF5_BUILD_EXAMPLES=OFF \
             -DHDF5_BUILD_TOOLS=OFF \
             -DHDF5_BUILD_TESTS=OFF \
             -DHDF5_BUILD_HL_LIB=OFF \
+            -DHDF5_BUILD_CPP_LIB=OFF \
+            -DHDF5_BUILD_FORTRAN=OFF \
+            -DHDF5_BUILD_JAVA=OFF \
             -DHDF5_ENABLE_Z_LIB_SUPPORT=OFF
           cmake --build hdf5-build -j$(nproc)
           cmake --install hdf5-build

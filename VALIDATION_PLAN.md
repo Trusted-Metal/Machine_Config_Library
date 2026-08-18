@@ -1152,6 +1152,15 @@ Cargo.toml
 
 ### 9.4 Go
 
+> **Audited against the real `go/` tree before writing this section** (the codebase
+> is far more built-out than the previous draft assumed: a `capabilities/` stable-facade
+> layer, a real CGo/HDF5 binding in `internal/h5c/`, an existing `_test.go` suite for
+> reader/writer/builder/capabilities, and a CLI at `go/cmd/machine-config-cli/`). The
+> corrections below replace unverified assumptions with facts read directly from
+> `go/reader.go`, `go/writer.go`, `go/builder.go`, `go/file_version.go`,
+> `go/models.go`, `go/internal/models/models.go`, `go/internal/h5c/h5c.go`,
+> `go/capabilities/**`, and `.github/workflows/go.yml`.
+
 **Step 1 — Create external project:**
 ```bash
 mkdir -p "/c/Users/ChrisParham/Desktop/Practice/machineconfiglibrarytesting/mcl_go_validation"
@@ -1163,7 +1172,7 @@ go mod init mcl_go_validation
 ```
 module mcl_go_validation
 
-go 1.24
+go 1.22
 
 require machine-config-go v0.0.0
 
@@ -1171,71 +1180,221 @@ require machine-config-go v0.0.0
 // module proxy. Use absolute path. On Windows use forward slashes.
 replace machine-config-go => /absolute/path/to/repo/go
 ```
+`go/go.mod` itself declares `go 1.22` (verified) — that's the module's minimum
+language version, not a CI mismatch: `go.yml` installs toolchain `1.24.x` to build
+it, which is fully compatible. Match the external project's directive to whatever
+`go version` reports locally; it does not need to equal `1.22`.
 Remove the `replace` directive and use a tagged version once the branch is merged.
 
-**Step 3 — CGo environment setup:**
+**Step 3 — CGo environment setup.** `go/internal/h5c/h5c.go` is the entire HDF5
+I/O layer (read + write) via CGo; its cgo directives are:
+```c
+#cgo linux pkg-config: hdf5
+#cgo linux CFLAGS: -I/usr/include/hdf5/serial
+#cgo linux LDFLAGS: -L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5
+#cgo windows CFLAGS: -I/mingw64/include
+#cgo windows LDFLAGS: -L/mingw64/lib -lhdf5
+```
 
 *Linux:*
 ```bash
-sudo apt-get install -y libhdf5-dev  # Ubuntu/Debian
+sudo apt-get install -y libhdf5-dev pkg-config  # matches go.yml exactly
 export CGO_ENABLED=1
 go build ./...
 ```
 
-*Windows (MSYS2 MinGW64 shell — NOT PowerShell):*
+*Windows — must run inside an actual MSYS2 MinGW64 shell, not PowerShell/Git-Bash,
+because `/mingw64/include` and `/mingw64/lib` above are POSIX paths gcc resolves
+against its own sysroot, not the Windows filesystem root* (verified against
+`go.yml`'s working, CI-green recipe — reproduced here verbatim, no changes needed):
 ```bash
-export MSYSTEM=MINGW64
-export PATH="/mingw64/bin:/c/Program Files/Go/bin:$PATH"
 export CGO_ENABLED=1
 export CC=$(cygpath -w /mingw64/bin/gcc.exe)
+export CXX=$(cygpath -w /mingw64/bin/g++.exe)
 go build ./...
 ```
+On this dev machine specifically, MSYS2 is installed at `C:\msys64`, so launch
+`C:\msys64\usr\bin\bash.exe --login` (or `C:\msys64\mingw64.exe`) first so `/mingw64/...`
+resolves to `C:\msys64\mingw64\...` — `go.yml`'s `msys2/setup-msys2@v2` action sets up
+the identical `/mingw64` root in CI, so the recipe is unchanged between local and CI.
 Document the full environment setup in `results.md` under "Environment Setup" —
 this is part of the consumer experience record.
 
-**Step 4 — Verify S-09 type exports:**
+**Step 4 — Verify S-09 type exports.** `go/models.go` re-exports the model surface via
+Go type aliases (`type MachineConfig = internal/models.MachineConfig`, etc. — Go's
+equivalent of Rust's `pub use`). Confirmed by reading `go/models.go` in full: **18
+aliased types**, all resolvable from the module root with no `internal/` import:
+`CorrectionData, MachineConfig, MachineConfigMeta, BuildPlate, Machine, OpticalTrain,
+Scanner, AxisConfig, LightSource, Collimator, ScannerCard, OptionalComponents,
+ClearBox, ScanFieldCorrectionFile, OpcuaConfig, OpcuaClientConfig, OpcuaPipeConfig,
+OpcuaTrigger` — plus four scalar-pointer helpers (`StrPtr`, `Float64Ptr`, `IntPtr`,
+`BoolPtr`). `MachineConfigReader`, `MachineConfigWriter`, `MockConfigBuilder`,
+`ParseOptions`, and `UnsupportedFileVersionError` need **no alias at all** — `reader.go`,
+`writer.go`, and `builder.go` already declare `package machineconfig` directly, so
+they're already at the root. Verify all of the above import cleanly:
 ```go
 import mc "machine-config-go"
-// All consumer-facing types must be accessible here.
-// Never import machine-config-go/internal/... in the standalone app.
 var cfg *mc.MachineConfig
 var scanner *mc.Scanner
+var reader *mc.MachineConfigReader   // concrete struct, not an interface — see below
 ```
-If a type requires `machine-config-go/internal/models`, that is a public API gap.
+No public type currently requires `machine-config-go/internal/...` — S-09 has no
+known gap.
 
-**Note on builder:** Go has `MockConfigBuilder` in `go/builder.go`.
-S-06 is fully supported.
+> **Open question to resolve before writing S-09, not silently decided here:**
+> `BuildPlate` (`go/internal/models/models.go`) is a real, aliased, exported type —
+> but it is **never constructed or referenced anywhere** in `reader.go`, `writer.go`,
+> `builder.go`, or any existing test. `Machine` carries build-plate dimensions as its
+> own flat `BuildPlateX/Y/Z *float64` fields (matching Rust/C++/Node's convention), not
+> a nested `BuildPlate` value — confirmed by reading `internal/models/models.go`'s
+> `Machine` struct and every test that touches build-plate fields (e.g.
+> `reader_test.go`'s `TestReadMachineBuildPlate`, which — despite its name — asserts
+> against `cfg.Machine.BuildPlateX`, not a `BuildPlate` struct instance). It appears
+> to be dead/vestigial code from an earlier design. Two options: (a) type-annotate it
+> anyway in S-09 per this plan's own precedent (Rust's S-09 does exactly this for
+> `OpcuaConfig`, a type the mock builder never populates — "construct OR
+> type-annotate" is explicitly allowed, §8), or (b) flag `BuildPlate` for removal as
+> dead code before writing S-09, shrinking the export checklist by one type. Pick one
+> before implementing; don't let the app quietly paper over unused exported surface.
 
-**Scenarios to execute:** S-01 through S-09, AV-01 through AV-11
+**Note on builder:** `go/builder.go`'s `MockConfigBuilder` is fully built out and
+already has its own passing unit tests (`go/builder_test.go`) that hand S-06 its exact
+expected values for free: 2 trains by default, rotations `0.0`/`180.0`, machine_name
+`"MockMachine"`, a 257×257×2 Gaussian correction grid whose centre cell is `≈2.0`
+(matching the Rust builder's documented formula exactly — `2*exp(-(x²+y²)/0.5)`), and
+inverse-grid ratio `0.9`. S-06 is fully supported; no new logic needed, only the
+validation-app scenario wrapper.
 
-**AV-09–AV-11 (Go):** Implement mock v1.1 adapter in `go/`'s `_test.go` files following
-the same 10 HDF5 changes. Verify the adapter satisfies the reader/writer interfaces.
-See "Serialization safety" under AV-09 (§8) — confirm Go's JSON exporter enumerates
-fields explicitly before assuming the mock fields are safe to add.
+**Version dispatch mechanism — verified, matches Rust/C++, not Python/Node:**
+`reader.go`'s `ParseWithOptions`/`GetCorrectionData`/`GetInverseCorrectionData` and
+`writer.go`'s `Write` all dispatch via a hardcoded `switch fv { case "1.0": ...;
+default: return &UnsupportedFileVersionError{...} }` — not a registry/map like
+Python's `_ADAPTERS` or Node's `_READERS`/`_WRITERS`. `capabilities/file.go`'s
+`OpenMachineConfig`/`CreateMachineConfig` and `SupportedFileVersions()` are the same:
+a direct `if fv != v1_0.FileVersion` check and a literal `[]string{v1_0.FileVersion}`,
+not a lookup table. This has the identical consequence already documented for Rust
+in §9.3: **there is no dispatch-table entry to inject a mock `"1.1-mock"` adapter
+into.**
+
+**Error-type mapping for AV scenarios — verified against real code, not assumed:**
+- `PeekFileVersion` (`go/file_version.go`) reads `File_Version` and: on read failure
+  (attribute missing) → returns `"1.0", nil` (**no error** — silently defaults);
+  after `strings.TrimSpace`, an empty string → also returns `"1.0", nil`. This means
+  **AV-02 (absent version) and AV-07 (empty version) are already handled, by
+  construction, as "treat as v1.0"** — not an error path at all. Confirm this is the
+  intended cross-language behavior before writing the scenario (Rust's AV-02/AV-07
+  titles say "handles ... predictably" / "handles empty string" without committing to
+  error-vs-default; check `results.md` for the other three languages' actual choice
+  and make sure Go's is being recorded as consistent, not silently divergent).
+- Whitespace (AV-06): also handled inside `PeekFileVersion` via `strings.TrimSpace`
+  before the empty-check — a whitespace-only `File_Version` normalizes to `"1.0"`
+  the same way an empty one does.
+- Unknown version, e.g. `"2.0"` (AV-01) / future version (AV-03): returns
+  `*machineconfig.UnsupportedFileVersionError{Version: fv}` from the public reader,
+  and `*capabilities.Error{Code: capabilities.ErrUnsupportedVersion}` from the
+  stable-facade layer — both confirmed via `reader_test.go`'s
+  `TestUnknownFileVersionDoesNotUseV1Layout`, which already exercises this exact path
+  end-to-end (both layers) and can be lifted almost directly into the AV-01/AV-03
+  scenario files.
+- Missing required group (AV-04): `capabilities/v1_0/hdf5/hdf5.go`'s `parse()` calls
+  `f.Group("Machine")`, which (per `h5c.go`) returns a **plain, untyped**
+  `fmt.Errorf("H5Gopen2(%s) failed", path)` on failure — there is no
+  `MissingGroupError` type. Assert `err != nil` with the message recorded, mirroring
+  Rust's AV-04 (`Err(e) => (true, format!("... {e}"))`) rather than matching a
+  specific error variant.
+- Corrupt required scalar (AV-05): not yet read against `readRequiredStr`/
+  `readFloatAttr` in `hdf5.go` — verify the exact failure mode (panic vs. wrapped
+  `error`) before writing this scenario; do not assume it matches AV-04's shape.
+- File_Version roundtrip fidelity (AV-08): trivial by construction —
+  `writer.go` writes `cfg.Meta.FileVersion` (or defaults to `"1.0"` if blank) and
+  `PeekFileVersion` reads it back verbatim after `TrimSpace`; should pass without new
+  code, same as Rust's AV-08.
+
+**Scenarios to execute:** S-01 through S-09, AV-01 through AV-08 via the standalone
+app; AV-09 through AV-11 in `go/`'s own test tree (see below) — **not** the app, for
+the same structural reason as Rust.
+
+**AV-09–AV-11 (Go):** Mirror Rust's `rust/tests/mock_v1_1/` + `adapter_migration_test.rs`
+design exactly, adapted to Go idiom — same "delegate-then-patch" shape as both Rust's
+and Node's mocks: a `MockV1_1Reader`/`MockV1_1Writer` pair that calls the real, public
+`v1_0hdf5.Parse`/`v1_0hdf5.Write` (already fully exported from
+`machine-config-go/capabilities/v1_0/hdf5`, reachable exactly the way `reader.go`/
+`writer.go` already reach them — no new exports needed) for every subcomponent that
+doesn't change, then patches the same 10 documented differences. Put it in
+`go/mock_v1_1_test.go` or a `go/internal/mockv11/` package imported only from
+`_test.go` files — Go has no `tests/`-directory convention like Cargo; an internal
+test-only package under `go/internal/` is invisible to real consumers, which is the
+property that matters here, not file location. Since — as established above — Go's
+dispatcher is a hardcoded `switch`, not a registry, this test calls
+`MockV1_1Reader`/`MockV1_1Writer` **directly**, not through the public
+`MachineConfigReader`/`MachineConfigWriter` facade, exactly like Rust. AV-09's actual
+rationale ("adding v1.1 doesn't require modifying the v1.0 adapter") is satisfied by
+zero edits to `capabilities/v1_0/` plus the full pre-existing suite (`go test ./...`)
+staying green after the mock is added.
+Define the mock's ADDITION fields (`facility_id`, `config_author` — confirmed absent
+from `MachineConfigMeta` today) as typed `*string` fields on a **mock-only** meta
+struct, not by stuffing them into the real `MachineConfigMeta.Extra map[string]any` —
+matching how Rust/Node/Python keep the mock's typed fields separate from the real
+model.
+**Serialization safety (§8, AV-09):** Go's `encoding/json` is annotation-based like
+Rust's serde, **not** enumerate-based like Python's manual dict construction — it
+reflects over every exported struct field with a `json:"..."` tag and serializes it
+unless the value is a nil/zero-value pointer with `omitempty`. Every existing optional
+field in `internal/models/models.go` is already a pointer with `omitempty` (verified
+by reading the struct definitions), so this is not a new risk *if* any future real
+`facility_id`/`config_author` fields are added to `MachineConfigMeta` the same way —
+but it must be verified explicitly for those two fields when/if they're ever added to
+the real (non-mock) model, the same caution already flagged for Rust's serde.
 
 **App structure (`docs/validation/go/app/`):**
 ```
 main.go
 scenarios/
+  common.go
   s01_read_scalars.go
   s02_read_binary.go
-  ... (same pattern)
+  s03_read_real.go
+  s04_write_modify.go
+  s05_binary_roundtrip.go
+  s06_builder.go
+  s07_opcua.go
+  s08_drastic_change.go
   s09_type_exports.go
+  av01_unknown_version.go
+  av02_missing_version.go
+  av03_future_version.go
+  av04_missing_group.go
+  av05_corrupt_scalar.go
+  av06_whitespace_version.go
+  av07_empty_version.go
+  av08_version_fidelity.go
 go.mod
 go.sum
 ```
+Mirrors `docs/validation/rust/app/` file-for-file (verified by reading it): one file
+per scenario, each exposing a `run(fixturesDir, realDir string) (ok bool, detail string)`
+function; `main.go` holds an ordered `[]struct{ id string; run runFn }` table, prints
+`[PASS]`/`[FAIL] <id>: <detail>` per scenario plus a final `N passed, M failed`
+summary line, and exits non-zero on any failure. AV-01/02/04/05/06/07 read their
+fixtures from the shared, language-agnostic `docs/validation/fixtures/` directory
+(`v2_0_unknown.h5`, `missing_version.h5`, `missing_machine_group.h5`,
+`corrupt_scalar.h5`, `version_whitespace.h5`, `empty_version.h5` — confirmed present,
+generated by `docs/validation/fixtures/generate_fixtures.py`); AV-03 uses
+`v1_1_simulated.h5` from the same directory.
 
 **After app is green locally:** port into `docs/validation/go/app/`, commit.
 
-**CI integration:** add to `go.yml`:
+**CI integration:** add to `go.yml`, after the existing `Test (Linux)`/`Test (Windows)`
+steps (both already set up `CGO_ENABLED=1`/`CC` correctly — reuse that, don't
+reintroduce a second HDF5 setup):
 ```yaml
 - name: Run Go validation app (Linux)
   if: runner.os == 'Linux'
-  shell: bash
   run: |
     CGO_ENABLED=1 go run ./docs/validation/go/app/ \
       "$PWD/fixtures/" "$PWD/Reference Materials/" \
       2>&1 | tee "$RUNNER_TEMP/go_validation.txt"
+  working-directory: .
 
 - name: Run Go validation app (Windows)
   if: runner.os == 'Windows'
@@ -1243,11 +1402,16 @@ go.sum
   run: |
     export CGO_ENABLED=1
     export CC=$(cygpath -w /mingw64/bin/gcc.exe)
+    export CXX=$(cygpath -w /mingw64/bin/g++.exe)
     go run ./docs/validation/go/app/ \
       "$(cygpath -w "$PWD/fixtures/")" \
       "$(cygpath -w "$PWD/Reference Materials/")" \
       2>&1 | tee "$RUNNER_TEMP/go_validation.txt"
 ```
+(Path fixed relative to repo root, matching how the existing `Test (Linux)`/`Test
+(Windows)` steps in `go.yml` already `cd go` before running — the validation app step
+should run from repo root instead, since `docs/validation/go/app/` is its own module
+outside `go/`.)
 
 ---
 
@@ -1661,16 +1825,48 @@ via `cargo test`, never through the external app. This was a deliberate decision
 in §9.3 before implementation began, not a gap discovered mid-work.
 
 ### Go
-- [ ] Standalone app written externally and verified
-- [ ] App ported to `docs/validation/go/app/`
-- [ ] All S-01–S-09 and AV-01–AV-08 scenarios recorded in `docs/validation/go/results.md`
-- [ ] AV-09–AV-11: mock v1.1 adapter implemented in `go/` `_test.go` files and passing
-- [ ] AV-09–AV-11 recorded in `docs/validation/go/results.md`
-- [ ] S-09: all exported types accessible via top-level package (no internal imports)
-- [ ] `docs/validation/go/PASS_FAIL.md` complete
-- [ ] `docs/validation/README.md` master summary and scenario matrix updated for Go
-- [ ] Validation status cross-linked from `docs/go.md`
-- [ ] CI integration added to `go.yml`
+- [x] Standalone app written externally and verified (`C:\Users\ChrisParham\Desktop\Practice\machineconfiglibrarytesting\Go`) for S-01–09/AV-01–08
+- [x] App ported to `docs/validation/go/app/` (its own standalone Go module, `replace machine-config-go => ../../../../go`)
+- [x] All S-01–S-09 and AV-01–AV-08 scenarios recorded in `docs/validation/go/results.md`
+- [x] AV-09–AV-11: mock v1.1 adapter implemented in `go/internal/mockv1_1/` + `go/mock_v1_1_test.go` and passing (5 tests)
+- [x] AV-09–AV-11 recorded in `docs/validation/go/results.md`
+- [x] S-09: all exported types accessible via top-level package (no internal imports) — already true, no gap found
+- [x] `docs/validation/go/PASS_FAIL.md` complete — 20/20
+- [x] `docs/validation/README.md` master summary and scenario matrix updated for Go
+- [x] Validation status cross-linked from `docs/validation/README.md` (see note below on `docs/go.md`)
+- [ ] CI integration added to `go.yml` (consistent with Python/Node/Rust/C++ — none of the five have this yet; not Go-specific)
+
+**Production code changes made during this pass (see `docs/validation/go/results.md` for full detail):**
+- `go/internal/h5c/h5c.go` gained two new primitives — `OpenRW` (open existing file
+  read/write without truncating) and `(g *Group) DeleteAttr` — needed for the mock v1.1
+  writer's delegate-then-patch design. Rust's/Node's underlying HDF5 libraries already
+  expose equivalent operations; Go's `internal/h5c` is the project's own minimal CGo
+  wrapper, so these had to be added. Raised explicitly with the user before implementing
+  (the alternative — building the mock file from scratch instead of patching a real
+  v1.0-written file — was rejected because it would stop exercising the real v1.0 writer
+  for unchanged subcomponents, undermining AV-09's actual point).
+- `go/internal/models/models.go`'s `MachineConfigMeta` gained two new `omitempty` pointer
+  fields, `FacilityID`/`ConfigAuthor`, explicitly marked test-fixture-only and never
+  populated by the real v1.0 read path — mirroring the identical fields already present in
+  `python/src/machine_config/models.py` and `rust/src/models.rs`.
+
+**Note on AV-09–11 placement:** same structural reason as Rust — Go's dispatcher
+(`reader.go`/`writer.go`/`capabilities/file.go`) is a hardcoded `switch`, not a registry, so
+there is no dispatch-table injection seam for a mock adapter to hook into the public
+`MachineConfigReader`/`Writer` facade. The mock (`go/internal/mockv1_1/`) is exercised
+directly by `go/mock_v1_1_test.go` via `go test`, never through the external app. This
+mirrors §9.4's design section, written and confirmed before implementation began.
+
+**Open item, deliberately left unresolved:** `BuildPlate` (`go/internal/models/models.go`)
+is exported and aliased at the module root but never constructed anywhere in the real
+codebase. S-09 type-annotates it without constructing it (matching Rust's own precedent for
+`OpcuaConfig`). Whether to keep it as reserved public surface or remove it as dead code was
+explicitly raised with the user, who chose to flag it and decide later rather than resolve
+it as a side effect of this pass.
+
+**Note on `docs/go.md` cross-link:** not yet checked whether `docs/go.md` has an equivalent
+"Validation results" section to the ones added to `docs/rust.md`/`docs/cpp.md` — flagged as a
+follow-up, not done in this pass.
 
 ### C++
 - [x] Standalone app written externally and verified (from source) (`C:\Users\ChrisParham\Desktop\Practice\machineconfiglibrarytesting\Cpp`)

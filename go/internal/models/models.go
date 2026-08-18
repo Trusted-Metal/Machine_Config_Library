@@ -38,7 +38,15 @@ type MachineConfigMeta struct {
 	FileVersion       string         `json:"file_version"`
 	ExportDate        string         `json:"export_date"`
 	ConfigurationHash string         `json:"configuration_hash"`
-	Extra             map[string]any `json:"extra"`
+	// TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+	// Not a real schema field, never populated for a v1.0 config — only the
+	// mock v1.1 reader/writer (test-only, in go/*_test.go) ever sets it.
+	// omitempty keeps it out of every real JSON export unless explicitly set,
+	// matching Python's/Rust's/Node's behavior for the same fixture fields.
+	FacilityID *string `json:"facility_id,omitempty"`
+	// TEST FIXTURE for the mock v1.1 adapter — see FacilityID above.
+	ConfigAuthor *string        `json:"config_author,omitempty"`
+	Extra        map[string]any `json:"extra"`
 }
 
 // BuildPlate holds build-plate dimensions from the Machine/Build_Plate/ HDF5 subgroup.

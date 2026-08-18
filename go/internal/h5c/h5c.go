@@ -142,6 +142,20 @@ func Create(path string) (*File, error) {
 	return &File{id: id}, nil
 }
 
+// OpenRW opens an existing HDF5 file for in-place read/write, without
+// truncating it (unlike Create). Used by test-only code that patches an
+// already-written file in place (see go/internal/mockv1_1).
+func OpenRW(path string) (*File, error) {
+	C.H5Eset_auto2(C.H5E_DEFAULT, nil, nil)
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+	id := C.H5Fopen(cpath, C.H5F_ACC_RDWR, C.H5P_DEFAULT)
+	if id < 0 {
+		return nil, fmt.Errorf("H5Fopen(%s, RDWR) failed", path)
+	}
+	return &File{id: id}, nil
+}
+
 // Close closes the file.
 func (f *File) Close() error {
 	if f == nil || f.id < 0 {
@@ -203,6 +217,21 @@ func (g *Group) HasAttr(name string) bool {
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
 	return C.H5Aexists(g.id, cname) > 0
+}
+
+// DeleteAttr deletes an attribute if present; a no-op if absent. Used by
+// test-only code that renames/moves an attribute by writing the new one and
+// deleting the old (see go/internal/mockv1_1).
+func (g *Group) DeleteAttr(name string) error {
+	if !g.HasAttr(name) {
+		return nil
+	}
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	if C.H5Adelete(g.id, cname) < 0 {
+		return fmt.Errorf("H5Adelete(%s) failed", name)
+	}
+	return nil
 }
 
 // ReadStringAttr reads a scalar string attribute (fixed or variable length).
