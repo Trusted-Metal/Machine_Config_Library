@@ -488,7 +488,13 @@ in the build/packaging surface, not runtime behavior:
   `add_subdirectory` from an external project — exactly what any real from-source install
   does. Fixed; the main test suite (354 assertions, 79 test cases) reconfirmed green.
 
-The C++ static tarball (§10 of `VALIDATION_PLAN.md`) is verified separately — see
-[docs/validation/cpp/results.md](../docs/validation/cpp/results.md) for that run once complete.
+**C++ packaging (§10 of `VALIDATION_PLAN.md`) is also done, but not as originally planned.**
+§10 originally described a fully self-contained static tarball bundling HDF5 itself; that was
+changed to a "thin", `find_package`-based package instead — the shape a future vcpkg port
+would actually need, since vcpkg ports declare dependencies rather than bundling them. Verified
+locally as a genuinely fresh external consumer (no reference to this repo's source tree). Full
+reasoning, the two real CMake errors hit while building it, and the verbatim consumer-run
+output are in [docs/validation/cpp/tarball/results.md](../docs/validation/cpp/tarball/results.md).
+The CI packaging step (§10 Step 5) is not yet added.
 
 For the master cross-language matrix see [docs/validation/README.md](../docs/validation/README.md).

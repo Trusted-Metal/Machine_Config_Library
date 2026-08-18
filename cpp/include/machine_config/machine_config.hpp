@@ -19,3 +19,4 @@
 #include "machine_config/writer.hpp"
 #include "machine_config/builder.hpp"
 #include "machine_config/capabilities.hpp"
+#include "machine_config/version.hpp"

@@ -38,6 +38,49 @@ jobs:
       - name: Install Python build frontend
         run: pip install build
 
+      # -----------------------------------------------------------------------
+      # C++ packaging prerequisite (VALIDATION_PLAN.md §10; see
+      # docs/validation/cpp/tarball/results.md for the full design). Mirrors
+      # cpp.yml's Ubuntu leg exactly: apt ships HDF5 1.10.10, HighFive >= 2.10
+      # requires >= 1.12, so it's built from source and cached. The actual
+      # `cmake` configure/install/package sequence runs inside
+      # scripts/package-cpp.sh, called from publishCmd below — deliberately
+      # AFTER sync-version.mjs (prepareCmd) has already bumped the version,
+      # not here, so the packaged version.hpp carries the real release
+      # version rather than whatever was configured before the bump.
+      # -----------------------------------------------------------------------
+      - name: Cache HDF5 1.14.6 install
+        uses: actions/cache@v4
+        id: hdf5-cache
+        with:
+          path: ${{ github.workspace }}/hdf5-install
+          key: hdf5-1.14.6-no-zlib-ubuntu-latest
+
+      - name: Set HDF5_INSTALL env var
+        run: echo "HDF5_INSTALL=${{ github.workspace }}/hdf5-install" >> $GITHUB_ENV
+
+      - name: Build and install HDF5 1.14.6
+        if: steps.hdf5-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch hdf5_1.14.6 \
+            https://github.com/HDFGroup/hdf5.git hdf5-src
+          cmake -S hdf5-src -B hdf5-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/hdf5-install \
+            -DHDF5_BUILD_EXAMPLES=OFF \
+            -DHDF5_BUILD_TOOLS=OFF \
+            -DHDF5_BUILD_TESTS=OFF \
+            -DHDF5_BUILD_HL_LIB=OFF \
+            -DHDF5_ENABLE_Z_LIB_SUPPORT=OFF
+          cmake --build hdf5-build -j$(nproc)
+          cmake --install hdf5-build
+
+      - name: Cache CMake FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: cpp/build/_deps
+          key: cmake-deps-v3-ubuntu-latest-${{ hashFiles('cpp/CMakeLists.txt', 'cpp/tests/CMakeLists.txt') }}
+
       - name: Configure deploy key for git push
         env:
           RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}

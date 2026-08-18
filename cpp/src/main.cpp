@@ -22,6 +22,7 @@ int main(int argc, char* argv[]) {
 #endif
 
     CLI::App app{"Machine Config Library CLI"};
+    app.set_version_flag("--version", std::string(machine_config::kVersionString));
     app.require_subcommand(1);
 
     // §4.8: export-json <path>

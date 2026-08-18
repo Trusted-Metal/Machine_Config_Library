@@ -137,10 +137,81 @@ jobs:
       - name: Build
         run: cmake --build cpp/build --config Release
 
-      # 46 Catch2 tests across models, meta, machine, trains, scanner,
-      # ClearBox, binary data, OpcuaConfig, and JSON serialisation.
+      # 79 Catch2 tests across models, meta, machine, trains, scanner,
+      # ClearBox, binary data, OpcuaConfig, JSON serialisation, the stable
+      # capability facade, and the mock v1.1 adapter migration (AV-09-11).
       - name: Run Catch2 tests
         run: ctest --test-dir cpp/build -C Release --output-on-failure
+
+      # -----------------------------------------------------------------------
+      # C++ package (VALIDATION_PLAN.md §10) — "thin", find_package-based, not
+      # a self-contained tarball (that design was abandoned; see
+      # docs/validation/cpp/tarball/results.md for why). Installs
+      # machine_config's own headers plus a generated MachineConfigConfig.cmake
+      # that find_dependency()s HighFive/nlohmann_json (HDF5 comes transitively
+      # through HighFive) — nothing is bundled. Reuses this job's already-
+      # configured cpp/build, so HDF5 resolution (vcpkg on Windows, the
+      # from-source install on Ubuntu) doesn't need a second implementation
+      # here — the install step just packages what that same build already
+      # resolved. This is a verification check only (fires on every push/PR,
+      # produces nothing persisted) — a real distributable artifact is a
+      # separate, not-yet-written piece; see the conversation this was
+      # designed in for why that's deliberately deferred.
+      # -----------------------------------------------------------------------
+      - name: Install machine_config package
+        run: cmake --install cpp/build --config Release --prefix ${{ github.workspace }}/cpp/pkg-install
+
+      - name: Configure C++ package consumer (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S docs/validation/cpp/tarball/consumer -B docs/validation/cpp/tarball/consumer/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$HDF5_INSTALL;${{ github.workspace }}/cpp/pkg-install"
+
+      - name: Configure C++ package consumer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cmakeArgs = @(
+            '-S', 'docs/validation/cpp/tarball/consumer',
+            '-B', 'docs/validation/cpp/tarball/consumer/build',
+            '-DCMAKE_BUILD_TYPE=Release',
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake",
+            "-DCMAKE_PREFIX_PATH=$env:GITHUB_WORKSPACE\cpp\pkg-install"
+          )
+          cmake @cmakeArgs
+
+      - name: Build C++ package consumer
+        run: cmake --build docs/validation/cpp/tarball/consumer/build --config Release
+
+      - name: Run C++ package consumer against reference fixture
+        shell: bash
+        run: |
+          bin="docs/validation/cpp/tarball/consumer/build/consumer_app"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="docs/validation/cpp/tarball/consumer/build/Release/consumer_app.exe"
+          output=$("$bin" fixtures/reference_config.h5)
+          echo "$output"
+          if [[ "$output" != "[PASS]"* ]]; then
+            echo "::error::C++ package consumer check failed"
+            exit 1
+          fi
+
+          # Prove the whole version pipeline actually resolved to what it
+          # should have, the same way "Confirm HDF5 version found by CMake"
+          # (above) does for HDF5 — don't just build it, verify it resolved
+          # to what was expected. Catches a stale cached install silently
+          # reporting an old version as if nothing needed to change.
+          # sed, not grep -P: PCRE support is locale-dependent and not
+          # guaranteed portable across grep builds — verified directly, this
+          # exact -P invocation failed on this machine's Git Bash grep even
+          # with LC_ALL=C forced. sed with a basic-regex capture group has
+          # no such dependency.
+          expected=$(sed -n 's/.*MACHINE_CONFIG_FULL_VERSION[[:space:]]*"\([^"]*\)".*/\1/p' cpp/cmake/Version.cmake)
+          if [[ "$output" != *"package_version=\"$expected\""* ]]; then
+            echo "::error::C++ package consumer reported a different version than cpp/cmake/Version.cmake declares (expected '$expected'): $output"
+            exit 1
+          fi
+          echo "Package version resolved correctly: $expected"
 
       - name: Full workflow example (smoke test)
         shell: bash

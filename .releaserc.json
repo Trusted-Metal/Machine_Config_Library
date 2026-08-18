@@ -44,7 +44,7 @@
       "@semantic-release/exec",
       {
         "prepareCmd": "npm run sync-version",
-        "publishCmd": "(cd nodejs && npm pack) && python -m build python/"
+        "publishCmd": "(cd nodejs && npm pack) && python -m build python/ && bash scripts/package-cpp.sh"
       }
     ],
     [
@@ -67,7 +67,8 @@
         "assets": [
           { "path": "nodejs/*.tgz",         "label": "Node.js package (.tgz)" },
           { "path": "python/dist/*.whl",     "label": "Python wheel (.whl)" },
-          { "path": "python/dist/*.tar.gz",  "label": "Python source distribution (.tar.gz)" }
+          { "path": "python/dist/*.tar.gz",  "label": "Python source distribution (.tar.gz)" },
+          { "path": "cpp/machine-config-cpp-*.tar.gz", "label": "C++ package (.tar.gz, find_package-based — see docs/cpp.md)" }
         ],
         "successComment": false,
         "failComment": false,

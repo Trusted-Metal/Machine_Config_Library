@@ -45,6 +45,19 @@ jobs:
         run: cargo test
         working-directory: rust
 
+      # Verification only — not a distribution step. A bare .crate file isn't
+      # cargo-installable the way a wheel/tgz is pip/npm-installable (it only
+      # means something inside a registry index); this exists purely to
+      # catch real packaging-manifest problems early (file inclusion rules,
+      # metadata), the same way `cargo publish` itself would, without
+      # actually publishing anywhere. The real "how to depend on this" story
+      # for Rust is the git-tag dependency already documented in
+      # docs/rust.md's Installation section — see VALIDATION_PLAN.md and the
+      # conversation this was scoped in for the full reasoning.
+      - name: Verify cargo package (packaging + isolated rebuild, not published)
+        run: cargo package
+        working-directory: rust
+
       - name: Build release binary
         run: cargo build --release
         working-directory: rust

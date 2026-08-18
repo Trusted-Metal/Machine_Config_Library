@@ -67,7 +67,7 @@ SD-1684 is ready to merge to `main` when ALL of the following are true:
 - [ ] All adapter/versioning error scenarios pass and are recorded for all five languages
 - [ ] At least one real machine config file (AconityMIDI, from `Reference Materials/`)
       read, modified, written, and re-read successfully in every language
-- [ ] C++ static tarball verified locally and CI packaging step added
+- [x] C++ package (thin, `find_package`-based — see §10) verified locally and CI verification step added (artifact-*producing* step still open — see §10 Step 5)
 - [ ] Mock v1.1 adapter migration tests passing in all five languages (AV-09–AV-11)
 - [ ] `docs/validation/README.md` master summary complete
 
@@ -1383,110 +1383,139 @@ that in `results.md` as a separate "tarball consumer" run.
 
 ---
 
-## 10. C++ Static Tarball
+## 10. C++ Packaging (thin, vcpkg-oriented — supersedes the original "static tarball" design)
 
-**When:** After the C++ standalone app is green from source (§7.5 done-gate met).
+**When:** After the C++ standalone app is green from source (§9.5 done-gate met).
 
-**Goal:** A self-contained tarball that a C++ consumer can use without installing
-HDF5 separately. Contains headers, static library, and CMake config.
+> **Design change, recorded here rather than silently overwritten:** this section originally
+> described a fully self-contained static tarball — headers, a static `.a`/`.lib`, and a
+> bundled copy of HDF5 itself, so a consumer needs nothing else installed. That design was
+> abandoned in favor of the "thin" one below. Full reasoning, the two real CMake errors hit
+> while building it, and the verbatim fresh-consumer proof are all in
+> `docs/validation/cpp/tarball/results.md` — read that first if anything below is unclear.
+> Short version: the reason a C++ package is wanted at all is the eventual possibility of a
+> vcpkg port, and vcpkg ports *declare* their dependencies rather than bundling them — a
+> self-contained bundle would fight that model, not prepare for it.
 
-### Step 1 — Build HDF5 statically
+**Goal (revised):** `machine_config`'s own headers, installed, plus a generated
+`MachineConfigConfig.cmake` that asks a consumer's CMake to `find_dependency(HighFive)` and
+`find_dependency(nlohmann_json)` (HDF5 resolves transitively through HighFive's own config) —
+**not** a tarball that bundles those dependencies' files. A consumer still needs HighFive,
+nlohmann_json, and HDF5 separately discoverable (today: built/installed by hand; eventually:
+a vcpkg environment). That is intentional, not a gap to close later.
+
+### Step 1 — Add install()/export infrastructure to `cpp/CMakeLists.txt`
+
+No HDF5-specific build step is needed for this design (HDF5 is `find_dependency`'d, not
+bundled). What's needed instead, all inside `cpp/CMakeLists.txt`:
+
+- `set(JSON_Install ON CACHE BOOL "" FORCE)` before `FetchContent_MakeAvailable(nlohmann_json)`
+  — its own `install()`/export rules default off when it's a sub-project, not the top-level
+  CMake project (`${MAIN_PROJECT}` check).
+- `target_include_directories(machine_config INTERFACE ...)` must use the
+  `$<BUILD_INTERFACE:...>` / `$<INSTALL_INTERFACE:...>` generator-expression pair, not a bare
+  relative path — the bare form works for this repo's own build but `install(EXPORT ...)`
+  rejects it (real error hit; see results.md).
+- `install(TARGETS machine_config EXPORT MachineConfigTargets)`
+- `install(DIRECTORY include/machine_config DESTINATION include)`
+- `install(EXPORT MachineConfigTargets FILE MachineConfigTargets.cmake NAMESPACE MachineConfig:: DESTINATION lib/cmake/MachineConfig)`
+- `configure_package_config_file(cmake/MachineConfigConfig.cmake.in ...)` +
+  `write_basic_package_version_file(...)` (both via `CMakePackageConfigHelpers`), each
+  installed to `lib/cmake/MachineConfig`.
+
+`cmake/MachineConfigConfig.cmake.in`:
+```cmake
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+find_dependency(HighFive)
+find_dependency(nlohmann_json)
+include("${CMAKE_CURRENT_LIST_DIR}/MachineConfigTargets.cmake")
+```
+
+### Step 2 — Build and install
 
 ```bash
-# Linux
-cmake -S hdf5-src -B hdf5-static-build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX=./hdf5-static-install \
-  -DBUILD_SHARED_LIBS=OFF \
-  -DHDF5_BUILD_EXAMPLES=OFF \
-  -DHDF5_BUILD_TOOLS=OFF \
-  -DHDF5_BUILD_TESTS=OFF \
-  -DHDF5_BUILD_HL_LIB=OFF \
-  -DHDF5_ENABLE_Z_LIB_SUPPORT=OFF
-cmake --build hdf5-static-build -j$(nproc)
-cmake --install hdf5-static-build
+cmake -S cpp -B cpp/pkg-build -DCMAKE_INSTALL_PREFIX=cpp/pkg-install
+cmake --install cpp/pkg-build
 ```
 
-```pwsh
-# Windows — vcpkg static triplet
-vcpkg install hdf5:x64-windows-static
-```
+No `--target machine_config` build step is needed (or possible) — it's `INTERFACE`-only, so
+there is nothing to compile; only the install step matters.
 
-### Step 2 — Build machine_config statically against it
+### Step 3 — Package (deferred; not needed for local verification)
+
+A literal tarball (`tar -czf ...` around the install prefix) is straightforward once Step 2's
+output exists, but wasn't produced in this pass — the fresh-consumer test in Step 4 pointed
+`CMAKE_PREFIX_PATH` directly at the install prefix, which is sufficient to prove the packaging
+works. Produce the actual archive when wiring up Step 5's CI job.
+
+**On "public headers only":** unlike the original design, this is largely a non-issue here —
+this library is header-only with no enforced internal/public split beyond the
+`machine_config.hpp` umbrella-header convention (see §9.5), so installing all of
+`include/machine_config/` verbatim is correct; there is no `internal/` subdirectory to exclude.
+
+### Step 4 — Verify locally as a genuinely fresh external consumer
 
 ```bash
-cmake -S cpp -B cpp/static-build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_SHARED_LIBS=OFF \
-  -DCMAKE_PREFIX_PATH=./hdf5-static-install \
-  -DCMAKE_INSTALL_PREFIX=./machine-config-install
-cmake --build cpp/static-build --target machine_config
-cmake --install cpp/static-build
-```
-
-### Step 3 — Package the tarball
-
-```bash
-tar -czf machine-config-cpp-v$(VERSION)-$(PLATFORM)-$(ARCH).tar.gz \
-  -C machine-config-install .
-```
-
-Contents of tarball:
-```
-include/machine_config/    ← public headers ONLY (no internal/ subdirectory)
-lib/libmachine_config.a    ← static library (HDF5 linked in)
-cmake/MachineConfigConfig.cmake
-cmake/MachineConfigConfigVersion.cmake
-README.md
-```
-
-**Critical:** `include/machine_config/` must contain only the public-facing header(s).
-Internal implementation headers must not appear here. A consumer who can
-`#include <machine_config/internal/models.hpp>` and construct library types
-directly has bypassed the adapter layer — that is a packaging bug, not a
-consumer error. Verify during Step 4 that the standalone app compiles and runs
-with only `#include <machine_config/machine_config.hpp>` and no other includes.
-
-### Step 4 — Verify locally as external consumer
-
-```bash
-# Fresh directory, no repo context
-mkdir ~/tarball_test && cd ~/tarball_test
-tar -xzf /path/to/machine-config-cpp-*.tar.gz -C ./machine-config
-# Write minimal CMakeLists.txt:
-#   find_package(MachineConfig REQUIRED)
-#   target_link_libraries(test_app PRIVATE MachineConfig::machine_config)
-cmake -S . -B build -DCMAKE_PREFIX_PATH=./machine-config
+# A separate location, no add_subdirectory, no reference to this repo's source tree.
+# (Distinct from the from-source app used for S-01–09/AV-01–08, which does use
+# add_subdirectory — this one proves the installed package doesn't secretly need it.)
+cd .../machineconfiglibrarytesting/CppTarballConsumer
+cmake -S . -B build -DCMAKE_PREFIX_PATH=<path to cpp/pkg-install>
 cmake --build build
-./build/test_app fixtures/reference_config.h5
+./build/consumer_app fixtures/reference_config.h5
 ```
 
-**Record the output in `docs/validation/cpp/tarball/results.md`.**
-
-### Step 5 — Add to CI (cpp.yml or release.yml)
-
-```yaml
-- name: Build C++ static tarball (Linux)
-  if: runner.os == 'Linux'
-  run: |
-    cmake -S cpp -B cpp/static-build \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DBUILD_SHARED_LIBS=OFF \
-      -DCMAKE_INSTALL_PREFIX=cpp/install
-    cmake --build cpp/static-build --target machine_config
-    cmake --install cpp/static-build
-    tar -czf machine-config-cpp-linux-x86_64.tar.gz -C cpp/install .
-
-- name: Upload C++ tarball artifact
-  uses: actions/upload-artifact@v4
-  with:
-    name: machine-config-cpp-${{ matrix.os }}
-    path: machine-config-cpp-*.tar.gz
+CMakeLists.txt for that consumer is exactly:
+```cmake
+find_package(MachineConfig REQUIRED)
+add_executable(consumer_app src/main.cpp)
+target_link_libraries(consumer_app PRIVATE MachineConfig::machine_config)
 ```
 
-**Note:** Windows tarball uses `hdf5:x64-windows-static` vcpkg triplet.
-Produce separate artifacts per platform. Fire on merge to `main` or on
-release tag — not on every PR.
+**Recorded, verbatim, in `docs/validation/cpp/tarball/results.md`** — configure output, the
+one real fix required, and the final `[PASS]` run against the real reference fixture.
+
+### Step 5 — CI verification: done. CD artifact production: done.
+
+**Verification (every push/PR).** `cpp.yml`'s existing `test` job installs `machine_config`
+from that job's own already-configured `cpp/build` — no separate HDF5/HighFive/nlohmann_json
+resolution needed, since that build already resolved them per-platform (vcpkg on Windows,
+from-source on Ubuntu) a few steps earlier — then configures, builds, and runs the ported
+fresh-consumer check (`docs/validation/cpp/tarball/consumer/`) against it, failing the job on
+anything but a `[PASS]` whose reported version also matches `cpp/cmake/Version.cmake` (added
+once `version.hpp`/`kVersionString` existed — see below). Verified locally against the real
+`cpp/build` directory specifically, using the exact commands the YAML runs.
+
+**Artifact production (release only).** `.releaserc.json`'s `publishCmd` now also runs
+`scripts/package-cpp.sh` (after Node's `npm pack` / Python's `python -m build`), producing
+`cpp/machine-config-cpp-<version>.tar.gz`, uploaded via `@semantic-release/github`'s `assets`.
+`release.yml` gained the same HDF5-from-source build+cache `cpp.yml`'s Ubuntu leg already has
+(the `release` job had zero C++ setup before this). Deliberately **not** failure-guarded — a
+broken C++ package blocks the whole release exactly the way a broken Node/Python package
+already does today (checked: their existing `publishCmd` has never had a guard either). This
+was a real decision, not a default: semantic-release's own `publish` lifecycle step is the one
+step that does *not* set `settleAll: true` (verified by reading
+`lib/definitions/plugins.js`/`lib/plugins/pipeline.js` directly), so a thrown error there skips
+every later plugin in the same run — `git` and `github` are both listed after `exec` in the
+plugins array. Chose loud failure over swallowing it, on request.
+
+A real correctness bug was found and fixed before any of this could work at all: writing the
+repo's actual current version (`0.2.0-rc.4`) into `project(... VERSION ...)` would have hard-
+errored on every future `cmake` configure — CMake's `VERSION` field only accepts numeric
+components, confirmed by direct test. Fixed by truncating for that field while preserving the
+full version separately via a new `cpp/cmake/Version.cmake` → `configure_file()` →
+`include/machine_config/version.hpp` (`machine_config::kVersionString`) → a new
+`machine_config_cli --version` flag. Full account, including why CMake's *comparison*
+operators (not just its parser) have no prerelease-ordering concept either — checked directly
+in CMake's own `BasicConfigVersion-AnyNewerVersion.cmake.in` — is in
+`docs/validation/cpp/tarball/results.md`.
+
+**What could not be verified locally:** an actual `npx semantic-release` run (needs a real git
+tag/token/release context) and the Ubuntu-CI HDF5-from-source path specifically (this machine
+resolves HDF5 via the HDF Group's own installer, not a from-source build). Both disclosed, not
+hidden — the first real signal is the next push to `main`, which releases as an `rc.N`
+prerelease per `.releaserc.json`'s branch config, not a distant `release`-branch-only event.
 
 ---
 
@@ -1650,11 +1679,30 @@ in §9.3 before implementation began, not a gap discovered mid-work.
 - [x] AV-09–AV-11: mock v1.1 adapter implemented in `cpp/tests/mock_v1_1.hpp`, test-only, and passing (`cpp/tests/test_adapter_migration.cpp`, 5 tests)
 - [x] AV-09–AV-11 recorded in `docs/validation/cpp/results.md`
 - [x] S-09: standalone app compiles with only `#include <machine_config/machine_config.hpp>` — this required *creating* that header; it did not exist before this pass
-- [ ] Static tarball built and verified locally (§10 Steps 1–4)
-- [ ] S-09: tarball `include/` contains NO internal headers — verified by inspection
-- [ ] Tarball consumer run recorded in `docs/validation/cpp/tarball/results.md`
-- [ ] CI tarball packaging step added (§10 Step 5)
-- [ ] All S and AV scenarios re-recorded (tarball-consumer run)
+- [x] C++ package built and verified locally as a fresh external consumer — **design changed
+      from §10's original self-contained static tarball to a "thin", `find_package`-based
+      package** (see `docs/validation/cpp/tarball/results.md` for full reasoning and the two
+      real CMake errors hit while building it)
+- [x] S-09 (no internal headers): non-issue for this design — header-only with no
+      internal/public split beyond the `machine_config.hpp` umbrella-header convention, so
+      installing `include/machine_config/` verbatim is correct by construction
+- [x] Consumer run recorded, verbatim, in `docs/validation/cpp/tarball/results.md`
+- [x] CI *verification* step added to `cpp.yml` — installs `machine_config` from that job's
+      already-configured `cpp/build` (no separate HDF5/vcpkg resolution needed), builds and
+      runs the ported consumer, fails the job if it doesn't print `[PASS]`. Fires on every
+      push/PR; produces/persists nothing. Verified locally beforehand with the exact commands
+      the YAML runs, against the real `cpp/build` dev directory specifically (not just the
+      earlier `cpp/pkg-build` proof) — see `docs/validation/cpp/tarball/results.md`.
+- [x] A real, distributable artifact: `.releaserc.json`'s `publishCmd` runs
+      `scripts/package-cpp.sh`, producing `cpp/machine-config-cpp-<version>.tar.gz`, uploaded
+      via `@semantic-release/github`'s `assets`. `release.yml` gained the HDF5 setup this
+      needed (previously zero C++ awareness). Deliberately not failure-guarded — matches
+      Node/Python's existing, equally-unguarded `publishCmd` steps, per explicit decision.
+- [x] Literal tarball archive (`tar -czf`) produced — built and verified locally end-to-end
+      (extracted, confirmed the correct version baked into the packaged `version.hpp`); the
+      real `npx semantic-release` run itself is the one thing that couldn't be exercised
+      locally (needs a real tag/token/release context) — first real signal is the next push
+      to `main`
 - [x] `docs/validation/cpp/PASS_FAIL.md` complete — 20/20
 - [x] `docs/validation/README.md` master summary and scenario matrix updated for C++
 - [x] Validation status cross-linked from `docs/cpp.md`
@@ -1673,6 +1721,14 @@ in §9.3 before implementation began, not a gap discovered mid-work.
 - No runtime/serialization defects were found, unlike Node.js's pass (which found two: an
   `attrFloat` silent-null and a `meta.extra` double-write). This library's error paths and
   the mock's `meta.extra` handling were already correct.
+- **Packaging pass (§10, separate from the above):** `cpp/CMakeLists.txt` had zero `install()`
+  rules of any kind before this — the entire packaging story §10 assumed existed had never
+  been built. While building it: `target_include_directories(machine_config INTERFACE include)`
+  used a bare relative path, which `install(EXPORT ...)` rejects (real error, real fix — the
+  same `$<BUILD_INTERFACE:...>`/`$<INSTALL_INTERFACE:...>` pattern HighFive's own CMakeLists.txt
+  already uses); and `nlohmann_json`'s `JSON_Install` option defaults off as a sub-project,
+  silently skipping its own export setup until forced on. Full account in
+  `docs/validation/cpp/tarball/results.md`.
 
 ### Documentation
 - [ ] `docs/validation/README.md` master summary table complete (final check —
