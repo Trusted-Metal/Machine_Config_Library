@@ -187,10 +187,18 @@ const KNOWN_ROOT = new Set([
 const KNOWN_CLIENT = new Set([
   "Server_URL", "Auth_Mode", "Security_Mode", "Security_Policy",
   "BFS_Max_Depth", "Publish_Interval", "Sampling_Interval", "Session_Timeout",
+  "Keep_Alive_Count", "Lifetime_Count", "Machine_Profile", "Queue_Policy",
+  "Queue_Size_Data_Change", "Queue_Size_Events", "Reconnect_Interval", "Root_Node",
+  "Sync_Loop_Interval_Initial", "Sync_Loop_Interval_Settled",
 ]);
-const KNOWN_PIPE = new Set(["Pipe_Enabled", "Buffer_Size"]);
+const KNOWN_PIPE = new Set([
+  "Pipe_Enabled", "Buffer_Size", "Configure_Client", "Inbound_Rate_Limit",
+  "Max_Inbound_Message_Size", "Min_Integrity_Level", "Pipe_Name", "User_Access_Level",
+]);
 const KNOWN_TRIGGER = new Set([
   "ID", "Signal", "Subsystem", "Rule_Enabled", "Start_Value", "Stop_Value",
+  "Case_Sensitivity", "Component", "Cooldown_Period", "Event",
+  "Max_Fires_Per_Job", "Trigger_Label",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -498,6 +506,16 @@ function parseOpcua(f: h5wasm.File): OpcuaConfig | undefined {
     publish_interval: attrInt(ca, "Publish_Interval") ?? 0,
     sampling_interval: attrInt(ca, "Sampling_Interval") ?? 0,
     session_timeout: attrInt(ca, "Session_Timeout") ?? 0,
+    keep_alive_count: attrInt(ca, "Keep_Alive_Count"),
+    lifetime_count: attrInt(ca, "Lifetime_Count"),
+    machine_profile: attrStr(ca, "Machine_Profile"),
+    queue_policy: attrStr(ca, "Queue_Policy"),
+    queue_size_data_change: attrInt(ca, "Queue_Size_Data_Change"),
+    queue_size_events: attrInt(ca, "Queue_Size_Events"),
+    reconnect_interval: attrInt(ca, "Reconnect_Interval"),
+    root_node: attrStr(ca, "Root_Node"),
+    sync_loop_interval_initial: attrInt(ca, "Sync_Loop_Interval_Initial"),
+    sync_loop_interval_settled: attrInt(ca, "Sync_Loop_Interval_Settled"),
     extra: attrExtra(ca, KNOWN_CLIENT),
   };
 
@@ -506,11 +524,18 @@ function parseOpcua(f: h5wasm.File): OpcuaConfig | undefined {
   const pipe: OpcuaPipeConfig = {
     pipe_enabled: attrBool(pa, "Pipe_Enabled") ?? false,
     buffer_size: attrInt(pa, "Buffer_Size") ?? 0,
+    configure_client: attrBool(pa, "Configure_Client"),
+    inbound_rate_limit: attrInt(pa, "Inbound_Rate_Limit"),
+    max_inbound_message_size: attrInt(pa, "Max_Inbound_Message_Size"),
+    min_integrity_level: attrStr(pa, "Min_Integrity_Level"),
+    pipe_name: attrStr(pa, "Pipe_Name"),
+    user_access_level: attrStr(pa, "User_Access_Level"),
     extra: attrExtra(pa, KNOWN_PIPE),
   };
 
   const triggersGrp = asGroup(opcuaEnt.get("Triggers"), "OPCUA/Triggers");
   const triggers_enabled = attrBool(triggersGrp.attrs, "Triggers_Enabled");
+  const trigger_stop_ceiling_layers = attrInt(triggersGrp.attrs, "Trigger_Stop_Ceiling_Layers");
   const triggers: Record<string, OpcuaTrigger> = {};
   for (const name of triggersGrp.keys()) {
     const tGrp = asGroup(triggersGrp.get(name), `OPCUA/Triggers/${name}`);
@@ -522,11 +547,17 @@ function parseOpcua(f: h5wasm.File): OpcuaConfig | undefined {
       rule_enabled: attrBool(ta, "Rule_Enabled"),
       start_value: attrStr(ta, "Start_Value"),
       stop_value: attrStr(ta, "Stop_Value"),
+      case_sensitivity: attrStr(ta, "Case_Sensitivity"),
+      component: attrStr(ta, "Component"),
+      cooldown_period: attrInt(ta, "Cooldown_Period"),
+      event: attrStr(ta, "Event"),
+      max_fires_per_job: attrInt(ta, "Max_Fires_Per_Job"),
+      trigger_label: attrStr(ta, "Trigger_Label"),
       extra: attrExtra(ta, KNOWN_TRIGGER),
     };
   }
 
-  return { client, pipe, triggers_enabled, triggers };
+  return { client, pipe, triggers_enabled, trigger_stop_ceiling_layers, triggers };
 }
 
 function parseFile(f: h5wasm.File, opts: ReadOptions): MachineConfig {

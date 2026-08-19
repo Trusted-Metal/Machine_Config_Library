@@ -280,7 +280,7 @@ def test_roundtrip_json_opcua(tmp_path, reference_reader):
                 rule_enabled=True,
                 start_value="false",
                 stop_value="true",
-                extra={"Event": "SensorEvents"},
+                event="SensorEvents",
             )
         },
         triggers_enabled=True,
@@ -301,4 +301,110 @@ def test_roundtrip_json_opcua(tmp_path, reference_reader):
     t = rt.opcua.triggers["Interlock"]
     assert t.id == "il1"
     assert t.rule_enabled is True
-    assert t.extra["Event"] == "SensorEvents"
+    # Event is now a typed field, not swept into extra.
+    assert t.event == "SensorEvents"
+    assert "Event" not in t.extra
+
+
+# ---------------------------------------------------------------------------
+# Test 11: every one of the 22 promoted fields (plus trigger_stop_ceiling_layers)
+# has its real value from reference_config_opcua.h5 — verified directly via
+# h5py before writing this test — and none of them land in `extra` anymore.
+# ---------------------------------------------------------------------------
+
+def test_promoted_fields_have_real_values(opcua_reader):
+    config = opcua_reader.parse()
+    opcua = config.opcua
+
+    c = opcua.client
+    assert c.keep_alive_count == 240
+    assert c.lifetime_count == 2400
+    assert c.machine_profile == "Aconity"
+    assert c.queue_policy == "DropOldest"
+    assert c.queue_size_data_change == 100
+    assert c.queue_size_events == 7200
+    assert c.reconnect_interval == 10000
+    assert c.root_node == "MachineFleet"
+    assert c.sync_loop_interval_initial == 1000
+    assert c.sync_loop_interval_settled == 30000
+    assert c.extra == {}
+
+    p = opcua.pipe
+    assert p.configure_client is True
+    assert p.inbound_rate_limit == -1
+    assert p.max_inbound_message_size == 65536
+    assert p.min_integrity_level == "0x2000"
+    assert p.pipe_name == "\\\\.\\pipe\\opc_ua_client_pipe"
+    assert p.user_access_level == "AnyLocalUser"
+    assert p.extra == {}
+
+    assert opcua.trigger_stop_ceiling_layers == 3
+
+    laser = opcua.triggers["Laser Emission Interlock"]
+    assert laser.case_sensitivity == "Exact"
+    assert laser.component == "machine_state_indicator"
+    assert laser.cooldown_period == 0
+    assert laser.event == "SensorEvents"
+    assert laser.max_fires_per_job == 0
+    assert laser.trigger_label == "Laser Emission Interlock"
+    assert laser.extra == {}
+
+    oxygen = opcua.triggers["Chamber Oxygen Level"]
+    assert oxygen.component == "process_chamber::gas_management::oxygen_sensor::1"
+    assert oxygen.event == "SensorEvents"
+    assert oxygen.trigger_label == "Chamber Oxygen Level"
+    assert oxygen.extra == {}
+
+
+# ---------------------------------------------------------------------------
+# Test 12: opcua_missing_required.h5 (Phase 0) removes all seven Phase-2-
+# required attributes. The reader must stay permissive (facade-only
+# enforcement — see OPCUA_FIELD_PROMOTION_PLAN.md): parsing succeeds, the
+# removed fields read back None, and the per-trigger Event asymmetry is
+# exactly as the fixture intends.
+# ---------------------------------------------------------------------------
+
+def test_missing_required_fixture_parses_gracefully(opcua_missing_required_reader):
+    config = opcua_missing_required_reader.parse()
+    opcua = config.opcua
+    assert opcua is not None
+
+    assert opcua.client.machine_profile is None
+    assert opcua.client.root_node is None
+    assert opcua.pipe.configure_client is None
+    assert opcua.pipe.pipe_name is None
+    assert opcua.triggers_enabled is None
+    assert opcua.trigger_stop_ceiling_layers is None
+
+    laser = opcua.triggers["Laser Emission Interlock"]
+    assert laser.event is None, "Event was deliberately removed from this trigger only"
+    oxygen = opcua.triggers["Chamber Oxygen Level"]
+    assert oxygen.event == "SensorEvents", "the other trigger must be unaffected"
+
+    # Untouched fields elsewhere confirm the rest of the file is unaffected.
+    assert opcua.client.server_url
+    assert opcua.client.keep_alive_count == 240
+    assert opcua.pipe.buffer_size == 65536
+    assert laser.trigger_label == "Laser Emission Interlock"
+
+
+# ---------------------------------------------------------------------------
+# Test 13: trigger_stop_ceiling_layers round-trips through a temp file, both
+# when populated and when None — the one field with no `extra` bucket to
+# fall back on if the write/read pairing were mismatched.
+# ---------------------------------------------------------------------------
+
+def test_roundtrip_trigger_stop_ceiling_layers_none_and_some(tmp_path, opcua_reader):
+    config = opcua_reader.parse()
+    assert config.opcua.trigger_stop_ceiling_layers == 3
+
+    out_some = tmp_path / "ceiling_some.h5"
+    MachineConfigWriter(config).write(out_some)
+    rt_some = MachineConfigReader(out_some).parse()
+    assert rt_some.opcua.trigger_stop_ceiling_layers == 3
+
+    config.opcua.trigger_stop_ceiling_layers = None
+    out_none = tmp_path / "ceiling_none.h5"
+    MachineConfigWriter(config).write(out_none)
+    rt_none = MachineConfigReader(out_none).parse()
+    assert rt_none.opcua.trigger_stop_ceiling_layers is None

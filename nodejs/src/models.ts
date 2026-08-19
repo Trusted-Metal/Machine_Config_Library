@@ -225,12 +225,28 @@ export interface OpcuaClientConfig {
   publish_interval: number;
   sampling_interval: number;
   session_timeout: number;
+  keep_alive_count: number | null;
+  lifetime_count: number | null;
+  machine_profile: string | null;
+  queue_policy: string | null;
+  queue_size_data_change: number | null;
+  queue_size_events: number | null;
+  reconnect_interval: number | null;
+  root_node: string | null;
+  sync_loop_interval_initial: number | null;
+  sync_loop_interval_settled: number | null;
   extra: Record<string, unknown>;
 }
 
 export interface OpcuaPipeConfig {
   pipe_enabled: boolean;
   buffer_size: number;
+  configure_client: boolean | null;
+  inbound_rate_limit: number | null;
+  max_inbound_message_size: number | null;
+  min_integrity_level: string | null;
+  pipe_name: string | null;
+  user_access_level: string | null;
   extra: Record<string, unknown>;
 }
 
@@ -241,6 +257,12 @@ export interface OpcuaTrigger {
   rule_enabled: boolean | null;
   start_value: string | null;
   stop_value: string | null;
+  case_sensitivity: string | null;
+  component: string | null;
+  cooldown_period: number | null;
+  event: string | null;
+  max_fires_per_job: number | null;
+  trigger_label: string | null;
   extra: Record<string, unknown>;
 }
 
@@ -248,6 +270,7 @@ export interface OpcuaConfig {
   client: OpcuaClientConfig;
   pipe: OpcuaPipeConfig;
   triggers_enabled: boolean | null;
+  trigger_stop_ceiling_layers: number | null;
   triggers: Record<string, OpcuaTrigger>;
 }
 

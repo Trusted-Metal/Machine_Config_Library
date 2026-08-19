@@ -199,6 +199,70 @@ describe('MachineConfigWriter — OPC-UA roundtrip', () => {
     expect(rtT.start_value).toBe(orig.start_value);
     expect(rtT.stop_value).toBe(orig.stop_value);
   });
+
+  // Newly-promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — the
+  // 22 promoted fields survive a real write→read cycle, not just parsing.
+  it('client promoted fields survive roundtrip', () => {
+    const orig = referenceOpcua.opcua!.client;
+    const rtC  = rt.opcua!.client;
+    expect(rtC.keep_alive_count).toBe(orig.keep_alive_count);
+    expect(rtC.lifetime_count).toBe(orig.lifetime_count);
+    expect(rtC.machine_profile).toBe(orig.machine_profile);
+    expect(rtC.queue_policy).toBe(orig.queue_policy);
+    expect(rtC.queue_size_data_change).toBe(orig.queue_size_data_change);
+    expect(rtC.queue_size_events).toBe(orig.queue_size_events);
+    expect(rtC.reconnect_interval).toBe(orig.reconnect_interval);
+    expect(rtC.root_node).toBe(orig.root_node);
+    expect(rtC.sync_loop_interval_initial).toBe(orig.sync_loop_interval_initial);
+    expect(rtC.sync_loop_interval_settled).toBe(orig.sync_loop_interval_settled);
+  });
+
+  it('pipe promoted fields survive roundtrip', () => {
+    const orig = referenceOpcua.opcua!.pipe;
+    const rtP  = rt.opcua!.pipe;
+    expect(rtP.configure_client).toBe(orig.configure_client);
+    expect(rtP.inbound_rate_limit).toBe(orig.inbound_rate_limit);
+    expect(rtP.max_inbound_message_size).toBe(orig.max_inbound_message_size);
+    expect(rtP.min_integrity_level).toBe(orig.min_integrity_level);
+    expect(rtP.pipe_name).toBe(orig.pipe_name);
+    expect(rtP.user_access_level).toBe(orig.user_access_level);
+  });
+
+  it('"Laser Emission Interlock" trigger promoted fields survive roundtrip', () => {
+    const orig = referenceOpcua.opcua!.triggers['Laser Emission Interlock']!;
+    const rtT  = rt.opcua!.triggers['Laser Emission Interlock']!;
+    expect(rtT.case_sensitivity).toBe(orig.case_sensitivity);
+    expect(rtT.component).toBe(orig.component);
+    expect(rtT.cooldown_period).toBe(orig.cooldown_period);
+    expect(rtT.event).toBe(orig.event);
+    expect(rtT.max_fires_per_job).toBe(orig.max_fires_per_job);
+    expect(rtT.trigger_label).toBe(orig.trigger_label);
+  });
+
+  it('trigger_stop_ceiling_layers survives roundtrip (value = 3)', () => {
+    expect(referenceOpcua.opcua!.trigger_stop_ceiling_layers).toBe(3);
+    expect(rt.opcua!.trigger_stop_ceiling_layers).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// trigger_stop_ceiling_layers — dedicated null/non-null roundtrip
+// ---------------------------------------------------------------------------
+
+describe('MachineConfigWriter — trigger_stop_ceiling_layers roundtrip', () => {
+  it('round-trips a real value (3)', async () => {
+    const rt = await roundtrip(referenceOpcua);
+    expect(rt.opcua!.trigger_stop_ceiling_layers).toBe(3);
+  });
+
+  it('round-trips null when cleared', async () => {
+    const cleared: MachineConfig = {
+      ...referenceOpcua,
+      opcua: { ...referenceOpcua.opcua!, trigger_stop_ceiling_layers: null },
+    };
+    const rt = await roundtrip(cleared);
+    expect(rt.opcua!.trigger_stop_ceiling_layers).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

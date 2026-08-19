@@ -20,6 +20,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SYNTHETIC       = join(__dirname, '../../fixtures/synthetic_2laser.h5');
 const REFERENCE       = join(__dirname, '../../fixtures/reference_config.h5');
 const REFERENCE_OPCUA = join(__dirname, '../../fixtures/reference_config_opcua.h5');
+const OPCUA_MISSING_REQUIRED = join(
+  __dirname, '../../docs/validation/fixtures/opcua_missing_required.h5'
+);
 
 // ---------------------------------------------------------------------------
 // Shared parsed configs — each fixture opened once for the whole suite
@@ -28,12 +31,14 @@ const REFERENCE_OPCUA = join(__dirname, '../../fixtures/reference_config_opcua.h
 let synthetic: MachineConfig;
 let reference: MachineConfig;
 let referenceOpcua: MachineConfig;
+let opcuaMissingRequired: MachineConfig;
 
 beforeAll(async () => {
-  [synthetic, reference, referenceOpcua] = await Promise.all([
+  [synthetic, reference, referenceOpcua, opcuaMissingRequired] = await Promise.all([
     new MachineConfigReader(SYNTHETIC).parse(),
     new MachineConfigReader(REFERENCE).parse(),
     new MachineConfigReader(REFERENCE_OPCUA).parse(),
+    new MachineConfigReader(OPCUA_MISSING_REQUIRED).parse(),
   ]);
 }, 60_000);   // generous timeout to cover h5wasm WASM init on a cold run
 
@@ -470,6 +475,94 @@ describe('MachineConfigReader — OPCUA', () => {
     expect(t.signal).toBe('oxygen_level');
     expect(t.start_value).toBe('700');
     expect(t.stop_value).toBe('1000');
+  });
+
+  // -------------------------------------------------------------------------
+  // Promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — every one of
+  // the 22 promoted fields checked against reference_config_opcua.h5's real
+  // values (verified via h5py before writing this test), plus
+  // trigger_stop_ceiling_layers, plus confirmation none of them land in extra.
+  // -------------------------------------------------------------------------
+
+  it('client promoted fields have real values and are not in extra (reference_opcua)', () => {
+    const c = referenceOpcua.opcua!.client;
+    expect(c.keep_alive_count).toBe(240);
+    expect(c.lifetime_count).toBe(2400);
+    expect(c.machine_profile).toBe('Aconity');
+    expect(c.queue_policy).toBe('DropOldest');
+    expect(c.queue_size_data_change).toBe(100);
+    expect(c.queue_size_events).toBe(7200);
+    expect(c.reconnect_interval).toBe(10000);
+    expect(c.root_node).toBe('MachineFleet');
+    expect(c.sync_loop_interval_initial).toBe(1000);
+    expect(c.sync_loop_interval_settled).toBe(30000);
+    expect(c.extra).toEqual({});
+  });
+
+  it('pipe promoted fields have real values and are not in extra (reference_opcua)', () => {
+    const p = referenceOpcua.opcua!.pipe;
+    expect(p.configure_client).toBe(true);
+    expect(p.inbound_rate_limit).toBe(-1);
+    expect(p.max_inbound_message_size).toBe(65536);
+    expect(p.min_integrity_level).toBe('0x2000');
+    expect(p.pipe_name).toBe('\\\\.\\pipe\\opc_ua_client_pipe');
+    expect(p.user_access_level).toBe('AnyLocalUser');
+    expect(p.extra).toEqual({});
+  });
+
+  it('trigger_stop_ceiling_layers is 3 (reference_opcua)', () => {
+    expect(referenceOpcua.opcua!.trigger_stop_ceiling_layers).toBe(3);
+  });
+
+  it('"Laser Emission Interlock" trigger promoted fields have real values and are not in extra (reference_opcua)', () => {
+    const t = referenceOpcua.opcua!.triggers['Laser Emission Interlock'];
+    expect(t.case_sensitivity).toBe('Exact');
+    expect(t.component).toBe('machine_state_indicator');
+    expect(t.cooldown_period).toBe(0);
+    expect(t.event).toBe('SensorEvents');
+    expect(t.max_fires_per_job).toBe(0);
+    expect(t.trigger_label).toBe('Laser Emission Interlock');
+    expect(t.extra).toEqual({});
+  });
+
+  it('"Chamber Oxygen Level" trigger promoted fields have real values (reference_opcua)', () => {
+    const t = referenceOpcua.opcua!.triggers['Chamber Oxygen Level'];
+    expect(t.component).toBe('process_chamber::gas_management::oxygen_sensor::1');
+    expect(t.event).toBe('SensorEvents');
+    expect(t.trigger_label).toBe('Chamber Oxygen Level');
+    expect(t.extra).toEqual({});
+  });
+
+  // -------------------------------------------------------------------------
+  // opcua_missing_required.h5 (Phase 0) removes all seven Phase-2-required
+  // attributes. The reader must stay permissive (facade-only enforcement —
+  // see OPCUA_FIELD_PROMOTION_PLAN.md): parsing succeeds, the removed fields
+  // read back null, and the per-trigger Event asymmetry is exactly as the
+  // fixture intends.
+  // -------------------------------------------------------------------------
+
+  it('opcua_missing_required.h5 parses gracefully with removed fields null', () => {
+    const o = opcuaMissingRequired.opcua!;
+    expect(o.client.machine_profile).toBeNull();
+    expect(o.client.root_node).toBeNull();
+    expect(o.pipe.configure_client).toBeNull();
+    expect(o.pipe.pipe_name).toBeNull();
+    expect(o.triggers_enabled).toBeNull();
+    expect(o.trigger_stop_ceiling_layers).toBeNull();
+  });
+
+  it('opcua_missing_required.h5 removes Event from only one trigger', () => {
+    const o = opcuaMissingRequired.opcua!;
+    expect(o.triggers['Laser Emission Interlock'].event).toBeNull();
+    expect(o.triggers['Chamber Oxygen Level'].event).toBe('SensorEvents');
+  });
+
+  it('opcua_missing_required.h5 leaves unrelated fields untouched', () => {
+    const o = opcuaMissingRequired.opcua!;
+    expect(o.client.server_url).toBeTruthy();
+    expect(o.client.keep_alive_count).toBe(240);
+    expect(o.pipe.buffer_size).toBe(65536);
+    expect(o.triggers['Laser Emission Interlock'].trigger_label).toBe('Laser Emission Interlock');
   });
 });
 

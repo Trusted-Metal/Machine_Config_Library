@@ -2,11 +2,18 @@
 
 **Status:** Required/optional split confirmed (see "The 23 fields" table and "Required/optional
 list — confirmed" at the bottom). Phase 0's shared artifacts are done and verified (schema,
-reference fixture, `opcua_missing_required.h5` — see Phase 0 below). **Rust is fully done** —
-Phase 1, Phase 2, and validation-app coverage all complete and verified (125/125 crate tests,
-19/19 validation-app scenarios). Python is next — Phase 1 → Phase 2 → validation-app coverage —
-then Node.js → Go → C++ in turn, each language completing all three steps before the next
-language starts.
+reference fixture, `opcua_missing_required.h5` — see Phase 0 below). **Rust, Python, and Node.js
+are all fully done** — Phase 1, Phase 2, and validation-app coverage all complete and verified for
+each (Rust: 125/125 crate tests, 19/19 validation-app scenarios; Python: 321/321 tests, 22/22
+validation-app scenarios; Node.js: 169/169 tests, 22/22 validation-app scenarios). Go is next —
+Phase 1 → Phase 2 → validation-app coverage — then C++, each language completing all three steps
+before the next language starts.
+
+**Note on cross-language CI during this rollout:** `tools/cross_check.py`'s Phase 2 (Read Parity)
+will show expected, temporary failures between whichever languages have completed their OPCUA
+Phase 1 and whichever haven't — Rust and Python now agree with each other but disagree with
+Node.js/Go/C++ until each of those completes its own Phase 1. This is not a regression; it
+resolves language by language as the rollout proceeds and fully resolves once all five are done.
 
 **Scope:** promote 22 attributes currently swept into `extra` on `OpcuaClientConfig`/
 `OpcuaPipeConfig`/`OpcuaTrigger` to named, typed fields, add one new field
@@ -246,25 +253,147 @@ confirmed passing before the full-suite run.
 
 ### Python
 
-- [ ] `python/src/machine_config/models.py` — add fields (`Optional[T] = None`).
-- [ ] `python/src/machine_config/capabilities/v1_0/hdf5.py` — add reads in `_parse_opcua`; add
-      names to `_KNOWN_CLIENT_KEYS`/`_KNOWN_PIPE_KEYS`/`_KNOWN_TRIGGER_KEYS`; read
-      `Trigger_Stop_Ceiling_Layers`.
-- [ ] `python/src/machine_config/capabilities/v1_0/writer.py` — add writes via existing `_s`/
-      `_f`/`_i`/`_b` helpers.
-- [ ] No existing breaking test (confirmed via grep across `python/tests/`).
-- [ ] **New tests** — same three categories as Rust.
+**Status: done and verified, 2026-08-19.**
+
+- [x] `python/src/machine_config/models.py` — added all 23 fields (`Optional[T] = None`) to
+      `OpcuaClientConfig`/`OpcuaPipeConfig`/`OpcuaTrigger`/`OpcuaConfig`, placed after each
+      class's existing non-default fields and before `extra` (dataclass field-ordering rule:
+      defaults must follow non-defaults — all 23 already have `= None`, so no ordering conflict).
+- [x] `python/src/machine_config/capabilities/v1_0/hdf5.py` — added `self._read_str`/`_read_int`/
+      `_read_bool_from_int` calls per field in `_parse_opcua`; added all 22 promoted names to
+      `_KNOWN_CLIENT_KEYS`/`_KNOWN_PIPE_KEYS`/`_KNOWN_TRIGGER_KEYS`; read
+      `Trigger_Stop_Ceiling_Layers` alongside `Triggers_Enabled`.
+- [x] `python/src/machine_config/capabilities/v1_0/writer.py` — added `self._s`/`_i`/`_b` calls
+      per field in `_write_opcua`, all existing helpers, no new ones added.
+- [x] **Found two additional construction/serialisation sites the plan didn't name** — Python
+      hand-writes its JSON round-trip (no serde-equivalent auto-derive), so beyond the three files
+      the plan called out, `hdf5.py` also has:
+  - `_opcua_to_dict` (the `to_json()` path) — needed all 23 fields added to its dict output.
+  - `_opcua_from_dict` (module-level, the `config_from_dict()`/`from_json()` path) — needed all
+    23 fields added to its dict-to-dataclass reconstruction.
+
+    Missing either one would have made `.parse()` return the new fields correctly while
+    `to_json()`/`config_from_dict()` silently dropped them — found by grepping every
+    `OpcuaClientConfig(`/`OpcuaPipeConfig(`/`OpcuaTrigger(`/`OpcuaConfig(` construction site
+    across `python/src/` up front, the same discipline that caught Rust's duplicate
+    `reader.rs`/`writer.rs` tests, rather than trusting the plan's file list as exhaustive.
+- [x] **The plan's "no existing breaking test" claim was wrong** — found and fixed a real
+      breaking test: `python/tests/test_opcua_roundtrip.py::test_roundtrip_json_opcua` hand-built
+      an `OpcuaTrigger` with `extra={"Event": "SensorEvents"}` and asserted
+      `t.extra["Event"] == "SensorEvents"` after a full write→read→`to_json()`→`config_from_dict()`
+      cycle. Now that `Event` is a typed field, it no longer lands in `extra` — the assertion
+      raised `KeyError: 'Event'`, caught by running the file before touching anything else, not
+      by trusting the plan's grep. Fixed to construct via `event="SensorEvents"` and assert
+      `t.event == "SensorEvents"` **and** `"Event" not in t.extra`.
+- [x] **New tests**, all in `python/tests/test_opcua_roundtrip.py` (added an
+      `opcua_missing_required_reader` fixture to `conftest.py` alongside the existing
+      `opcua_reader`):
+  - [x] `test_promoted_fields_have_real_values` — every one of the 22 promoted fields checked
+        against `reference_config_opcua.h5`'s real values, plus `trigger_stop_ceiling_layers`,
+        plus explicit `extra == {}` assertions on both structs and both triggers.
+  - [x] `test_missing_required_fixture_parses_gracefully` — parses `opcua_missing_required.h5`
+        without error; all seven deliberately-removed fields read back `None`; the per-trigger
+        `Event` asymmetry confirmed (`Laser Emission Interlock` → `None`,
+        `Chamber Oxygen Level` → still `"SensorEvents"`); a few untouched fields spot-checked.
+  - [x] `test_roundtrip_trigger_stop_ceiling_layers_none_and_some` — both the `3` case (real
+        fixture) and the `None` case (mutated in memory, re-written, re-read) through a temp file.
+
+**Verification:** full `pytest python/tests/` run: **318 passed, 0 failed** (up from 315 — one
+existing test fixed, three new tests added), zero warnings. The 13 OPCUA-specific tests in
+`test_opcua_roundtrip.py` individually confirmed passing before the full-suite run, along with
+standalone smoke tests of the reader, the JSON to-dict/from-dict cycle, and a real write→read
+cycle against the fixture.
 
 ### Node.js
 
-- [ ] `nodejs/src/models.ts` — add fields (`field: T | null`) to the three interfaces.
-- [ ] `nodejs/src/capabilities/v1_0/hdf5.ts` — add `attrStr`/`attrInt`/`attrBool` calls; add names
-      to `KNOWN_CLIENT`/`KNOWN_PIPE`/`KNOWN_TRIGGER`; read `Trigger_Stop_Ceiling_Layers`.
-- [ ] `nodejs/src/capabilities/v1_0/writer.ts` — add `ws`/`wi`/`wf`/`wb` calls.
-- [ ] No existing breaking test (confirmed).
-- [ ] **New tests** — same three categories. Reminder: TS object literals must list every
-      property unless a field is `?:`, so any hand-built test fixture needs the new fields
-      listed explicitly.
+**Status: done and verified, 2026-08-19.**
+
+- [x] `nodejs/src/models.ts` — added all 23 fields (`field: T | null`) to
+      `OpcuaClientConfig`/`OpcuaPipeConfig`/`OpcuaTrigger`/`OpcuaConfig`. None of these interfaces
+      use `?:` optional-property syntax (they use `T | null` on required properties), so — same as
+      Rust's compiler-enforced discipline — every existing object-literal construction site missing
+      one of the new required properties became a real `tsc` error (`TS2740`/`TS2741`) the moment
+      the interfaces changed, confirming every site was found rather than assumed.
+- [x] `nodejs/src/capabilities/v1_0/hdf5.ts` — added `attrStr`/`attrInt`/`attrBool` calls per
+      field in `parseOpcua`; added all 22 promoted names to `KNOWN_CLIENT`/`KNOWN_PIPE`/
+      `KNOWN_TRIGGER`; read `Trigger_Stop_Ceiling_Layers` alongside `Triggers_Enabled`.
+- [x] `nodejs/src/capabilities/v1_0/writer.ts` — added `ws`/`wi`/`wb` calls per field in
+      `writeOpcua`, all existing helpers, no new ones added.
+- [x] **Confirmed no hidden third site, unlike Python** — Python hand-writes a JSON
+      to-dict/from-dict layer that needed separate updates (see Python's section above); Node.js's
+      equivalent (`asJson()` in `capabilities/v1_0/file.ts`) is a pure type-cast
+      (`config as unknown as Json`), not a field-by-field mapper, so it picks up new `MachineConfig`
+      fields automatically. Verified by reading it directly rather than assuming parity with
+      Python's architecture.
+- [x] **No existing breaking test found** — this claim, unlike Python's, held up: grepped
+      `nodejs/tests/` for every promoted on-disk attribute name and for `.extra[` lookups; every
+      OPCUA test reads properties off an already-parsed fixture rather than hand-constructing
+      `OpcuaTrigger`/`OpcuaClientConfig`/etc. object literals with `extra: {...}` the way Python's
+      broken test did, so none could have this failure mode.
+- [x] **New tests**, all in `nodejs/tests/reader.test.ts` and `nodejs/tests/writer.test.ts` (the
+      existing homes of the OPCUA `describe` blocks, extended alongside them; added an
+      `OPCUA_MISSING_REQUIRED` fixture path + parsed config to `reader.test.ts`'s shared
+      `beforeAll`):
+  - [x] `reader.test.ts` — every one of the 22 promoted fields checked against
+        `reference_config_opcua.h5`'s real values across 4 new tests (client, pipe,
+        `trigger_stop_ceiling_layers`, both triggers), each also asserting `extra` is `{}`.
+  - [x] `reader.test.ts` — 3 new tests parsing `opcua_missing_required.h5`: all seven
+        deliberately-removed fields read back `null`; the per-trigger `event` asymmetry confirmed
+        (`Laser Emission Interlock` → `null`, `Chamber Oxygen Level` → still `'SensorEvents'`); a
+        few untouched fields spot-checked.
+  - [x] `writer.test.ts` — extended the existing OPC-UA roundtrip `describe` block with 4 new
+        tests covering all 22 promoted fields surviving a real write→read cycle, plus a dedicated
+        `describe` block round-tripping `trigger_stop_ceiling_layers` both as `3` (real fixture)
+        and as `null` (built via an object spread that clears it, then re-written/re-read).
+
+**Verification:** `npx tsc --noEmit` clean across the whole project (src + tests); `npm run build`
+clean, zero warnings. Full `npx vitest run`: **166 passed** (up from 152 — 14 new tests, 0 fixed
+since nothing was broken), 0 failures. `reader.test.ts` and `writer.test.ts` individually confirmed
+passing before the full-suite run, along with a standalone smoke test of the built reader against
+the real fixture.
+
+### Node.js
+
+**Status: done and verified, 2026-08-19.**
+
+- [x] `nodejs/src/capabilities/errors.ts` — added an optional `details?: string[]` field to the
+      `CapabilityError` interface, and a matching optional `details` parameter to the
+      `capabilityError(code, message, details?)` helper. Every existing call goes through that
+      helper (confirmed via grep — no call site constructs a `CapabilityError` object literal
+      directly outside `errors.ts` itself), so all pre-existing call sites needed zero changes.
+- [x] `nodejs/src/capabilities/v1_0/file.ts`'s `opcua()` — implemented the same 4-step mechanism
+      as Rust/Python: 6 single-instance checks (reading `this.data['opcua']` cast to the existing
+      `OpcuaModel` type for typed dot-access, the same dict-like-data architecture Python uses —
+      confirmed by reading `asJson()`/`this.data` directly rather than assuming), the per-trigger
+      `event` loop producing `` `${name}.Event` `` entries, and a combined-list `ValidationError`
+      with `details` populated only when non-empty. Missing-field names use the same on-disk HDF5
+      attribute spelling as Rust/Python. Renamed a local variable to `current` (not `model`) to
+      avoid shadowing the pre-existing `setModel(model, ...)` parameter name in the same method
+      scope. `setModel`-equivalent mutation was left untouched, matching the other languages'
+      scoping decision.
+- [x] **New tests**, all in `nodejs/tests/capabilities.test.ts` (the existing home of the
+      `'opcua NotPresent vs present'` test, extended alongside them; added a
+      `FIXTURE_OPCUA_MISSING_REQUIRED` path constant and imported `MachineConfigWriter`):
+  - [x] `'opcua() Ok when all required fields present on reference_opcua fixture'` — plus
+        spot-checks on two of the fields the check depends on.
+  - [x] `'opcua() reports all seven missing required fields at once'` — `details` (compared as a
+        `Set`, order-independent) equals exactly the seven expected items, including
+        `'Laser Emission Interlock.Event'` and explicitly **not** any `'Chamber Oxygen Level'`
+        entry.
+  - [x] `'opcua() never reports an optional field, even when genuinely absent'` — same
+        non-tautology fix applied as Rust/Python: `opcua_missing_required.h5` never removes any
+        optional field, so parsed it with the low-level `MachineConfigReader`, cleared
+        `keep_alive_count` in memory too, re-wrote it via `MachineConfigWriter` to a temp file
+        (cleaned up in a `finally` block, matching this file's existing `mkdtempSync`/`rmSync`
+        convention), and confirmed `details` still names exactly the same 7 items on the re-opened
+        facade — not 8.
+
+**Verification:** `npx tsc --noEmit` clean; `npm run build` clean, zero warnings. Full
+`npx vitest run`: **169 passed** (up from 166), 0 failures. `capabilities.test.ts` individually
+confirmed passing (11/11) before the full-suite run; a standalone smoke test against both fixtures
+(`reference_config_opcua.h5` → `ok: true`, `opcua_missing_required.h5` → `ok: false` naming
+exactly the seven expected fields) was also run directly against the built `dist/` output before
+the vitest pass.
 
 ### Go
 
@@ -363,6 +492,48 @@ For each language, extend the existing `.opcua()`/`get_opcua()`/`getOpcua()` acc
 integration tests + 2 doc-tests = **125 tests, 0 failures**. All 4 OPCUA-facade tests in
 `capabilities_test.rs` individually confirmed passing before the full-suite run.
 
+### Python
+
+**Status: done and verified, 2026-08-19.**
+
+- [x] `python/src/machine_config/capabilities/errors.py` — added `details: Optional[list[str]] =
+      None` to the `CapabilityError` dataclass, and a matching optional `details` parameter to the
+      `capability_error(code, message, details=None)` helper. Every existing call goes through
+      that helper (confirmed via grep — no call site constructs `CapabilityError(...)` directly
+      outside `errors.py` itself), so all pre-existing call sites needed zero changes — the new
+      parameter's default kept them working unchanged.
+- [x] `python/src/machine_config/capabilities/v1_0/file.py`'s `opcua()` — implemented the same
+      4-step mechanism as Rust, adapted to Python's facade architecture: unlike Rust's `OpcuaConfig`
+      dataclass, Python's facade operates on the **dict** representation produced by
+      `_config_to_dict()` (`self._data["opcua"]`), not a parsed dataclass — so the check reads
+      `opcua_data["client"].get("machine_profile")` etc. rather than attribute access, but is
+      otherwise identical: 6 single-instance checks, the per-trigger `event` loop producing
+      `f"{name}.Event"`-qualified entries, and a combined-list `ValidationError` with `details`
+      populated only when non-empty. Missing-field names use the same on-disk HDF5 attribute
+      spelling as Rust (`"Machine_Profile"`), for cross-language consistency. `set_opcua`-equivalent
+      mutation (via `_NodeHandle.set_model`) was left untouched, matching Rust's scoping decision.
+- [x] **New tests**, all in `python/tests/test_capabilities.py` (the existing home of
+      `test_opcua_not_present_vs_present`, extended alongside them):
+  - [x] `test_opcua_required_fields_present_on_reference_fixture` — `.opcua()` → `Ok` on
+        `reference_config_opcua.h5`, plus spot-checks on two of the fields the check depends on.
+  - [x] `test_opcua_missing_required_fields_reports_all_seven_at_once` — `.opcua()` →
+        `Err(ValidationError)` on `opcua_missing_required.h5`; `details` (compared as a `set`, so
+        order-independent) equals exactly the seven expected items, including
+        `"Laser Emission Interlock.Event"` and explicitly **not** any `"Chamber Oxygen Level"`
+        entry.
+  - [x] `test_opcua_optional_field_never_appears_in_missing_details` — same non-tautology fix
+        applied as Rust: `opcua_missing_required.h5` never removes any optional field, so checking
+        an optional field's absence from `details` there would trivially pass either way. Instead
+        parsed the fixture with the low-level `MachineConfigReader`, cleared `keep_alive_count` in
+        memory too, re-wrote it via `MachineConfigWriter` to a temp file, and confirmed `details`
+        still names exactly the same 7 items on the re-opened facade — not 8.
+
+**Verification:** full `pytest python/tests/` run: **321 passed, 0 failed** (up from 318), zero
+warnings. All 3 new OPCUA-facade tests plus the pre-existing `test_opcua_not_present_vs_present`
+individually confirmed passing before the full-suite run; a standalone smoke test against both
+fixtures (`reference_config_opcua.h5` → `Ok`, `opcua_missing_required.h5` → `Err` naming exactly
+the seven expected fields) was also run directly before the pytest pass.
+
 ---
 
 ## Validation-app coverage
@@ -441,6 +612,92 @@ exercised). Ran the built binary against the real fixture set
 Re-ran the full `rust/` crate's `cargo test` afterward as a regression check: still 125/125
 passing, confirming the validation-app changes (a separate standalone Cargo workspace consuming
 `machine-config` as a path dependency) didn't require or trigger any change to the library itself.
+
+### Python
+
+**Status: done and verified, 2026-08-19.**
+
+- [x] `docs/validation/python/app/scenarios.py` — added `run_av12`/`run_av13`, wired into
+      `docs/validation/python/app/main.py`'s `SCENARIOS` list (now 22 scenarios, up from 20 —
+      Python's app already included AV-09–11, unlike Rust, since Python's dispatcher is a real
+      registry). New imports: `machine_config.capabilities.open_machine_config` — this app had
+      never touched the `capabilities` module before.
+  - [x] `run_av12` — opens `reference_config_opcua.h5` via `open_machine_config`, calls
+        `.opcua()`, confirms `Ok` and prints five of the newly-promoted/new fields (read from the
+        returned node's `get_model()` dict) to prove they're actually readable, not just present.
+  - [x] `run_av13` — opens `opcua_missing_required.h5` via `open_machine_config`, confirms
+        `.opcua()` returns `Err` with `code == "ValidationError"`, and asserts `details` (compared
+        as a `set`, order-independent) equals exactly the seven expected entries — including
+        `"Laser Emission Interlock.Event"` and, implicitly, the absence of any
+        `"Chamber Oxygen Level"` entry.
+- [x] **S-07 extended** (`run_s07`) — added roundtrip assertions for `machine_profile`,
+      `root_node`, `pipe_name`, `trigger_stop_ceiling_layers`, and (on the existing
+      `Chamber Oxygen Level` trigger check) `event`/`trigger_label`, proving the Phase 1 fields
+      survive a real write→read cycle through the plain public `MachineConfigReader`/`Writer`
+      API, not just via `pytest`.
+- [x] S-09 unchanged, per plan (no new top-level type introduced).
+
+**Verification:** ran the app directly against the real fixture set (this app runs against the
+editable-installed `machine_config` package, so no separate build step was needed —
+`PYTHONIOENCODING=utf-8 python docs/validation/python/app/main.py fixtures "Reference Materials"`;
+the `PYTHONIOENCODING` override is only needed for this Windows console's cp1252 default and is
+pre-existing behavior unrelated to this change — S-02's `≠` character needs it too):
+
+```
+[PASS] S-07: OPCUA roundtrip OK: 2 triggers, url='opc.tcp://172.17.20.240:62541/TM_OPCUA_DevTemplate_V0.1/TelemetryServer', machine_profile='Aconity'
+[PASS] AV-12: opcua() Ok: machine_profile='Aconity', root_node='MachineFleet', pipe_name='\\\\.\\pipe\\opc_ua_client_pipe', triggers_enabled=True, trigger_stop_ceiling_layers=3
+[PASS] AV-13: ValidationError with details=['Configure_Client', 'Laser Emission Interlock.Event', 'Machine_Profile', 'Pipe_Name', 'Root_Node', 'Trigger_Stop_Ceiling_Layers', 'Triggers_Enabled']
+
+22 scenarios: 22 passed, 0 failed
+```
+
+Re-ran the full `pytest python/tests/` suite afterward as a regression check: still 321/321
+passing, confirming the validation-app changes didn't require or trigger any change to the
+library itself. Also imported `scenarios.py` under `python -W error` to confirm no warnings.
+
+### Node.js
+
+**Status: done and verified, 2026-08-19.**
+
+- [x] `docs/validation/nodejs/app/scenarios.mts` — added `runAv12`/`runAv13`, wired into
+      `docs/validation/nodejs/app/main.mts`'s `SCENARIOS` list (now 22 scenarios, up from 20 —
+      Node's app already included AV-09–11, like Python, since Node's dispatcher is also a real
+      registry, not Rust/C++'s hardcoded match). New import: `openMachineConfig` from
+      `machine-config-library` (the app's `file:../../../../nodejs` dependency, resolved via a
+      symlink into `nodejs/dist` — confirmed the symlink exists and rebuilt with `npm run build`
+      before running the app, rather than assuming a stale `dist/` would pick up the change).
+  - [x] `runAv12` — opens `reference_config_opcua.h5` via `openMachineConfig`, calls `.opcua()`,
+        confirms `.ok` and prints five of the newly-promoted/new fields (read from the returned
+        handle's `getModel()`) to prove they're actually readable, not just present.
+  - [x] `runAv13` — opens `opcua_missing_required.h5` via `openMachineConfig`, confirms `.opcua()`
+        returns a non-`ok` result with `error.code === 'ValidationError'`, and asserts `details`
+        (compared as a `Set`, order-independent) equals exactly the seven expected entries —
+        including `'Laser Emission Interlock.Event'` and, implicitly, the absence of any
+        `'Chamber Oxygen Level'` entry.
+- [x] **S-07 extended** (`runS07`) — added roundtrip assertions for `machine_profile`,
+      `root_node`, `pipe_name`, `trigger_stop_ceiling_layers`, and (on the existing
+      `Chamber Oxygen Level` trigger check) `event`/`trigger_label`, proving the Phase 1 fields
+      survive a real write→read cycle through the plain public `MachineConfigReader`/`Writer`
+      API, not just via `vitest`.
+- [x] S-09 unchanged, per plan (no new top-level type introduced).
+
+**Verification:** rebuilt `nodejs/` (`npm run build`, clean) so the app's symlinked dependency
+picked up every prior change, then ran the app directly via `npx tsx main.mts` (no separate
+compile step needed — `tsx` runs the `.mts` file directly):
+
+```
+[PASS] S-07: OPCUA roundtrip OK: 2 triggers, url='opc.tcp://172.17.20.240:62541/TM_OPCUA_DevTemplate_V0.1/TelemetryServer', machine_profile='Aconity'
+[PASS] AV-12: opcua() Ok: machine_profile='Aconity', root_node='MachineFleet', pipe_name='\\.\pipe\opc_ua_client_pipe', triggers_enabled=true, trigger_stop_ceiling_layers=3
+[PASS] AV-13: ValidationError with details=["Configure_Client","Laser Emission Interlock.Event","Machine_Profile","Pipe_Name","Root_Node","Trigger_Stop_Ceiling_Layers","Triggers_Enabled"]
+
+22 scenarios: 22 passed, 0 failed
+```
+
+`npx tsc --noEmit` clean in the app directory both after extending S-07 and after adding AV-12/13.
+Re-ran the full `npx vitest run` suite in `nodejs/` afterward as a regression check: still
+169/169 passing, confirming the validation-app changes (a separate npm package consuming
+`machine-config-library` as a `file:` dependency) didn't require or trigger any change to the
+library itself.
 
 ---
 

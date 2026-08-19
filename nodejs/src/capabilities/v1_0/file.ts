@@ -231,11 +231,43 @@ export class MachineConfigFileV1_0 implements MachineConfigFile {
     };
   }
 
+  /**
+   * Returns the OPCUA node, or `Err(ValidationError)` if OPCUA is present
+   * but missing one or more required fields. Collects every missing field
+   * at once (in `details`) rather than failing on the first one — see
+   * OPCUA_FIELD_PROMOTION_PLAN.md's "Why facade-only enforcement". The
+   * low-level reader/writer stay fully permissive; this is the one place
+   * "required" is enforced.
+   */
   opcua(): Result<OpcuaHandle, CapabilityError> {
     this.assertOpen();
-    if (this.data['opcua'] == null) {
+    const opcuaData = this.data['opcua'];
+    if (opcuaData == null) {
       return err(capabilityError('NotPresent', 'OPCUA group is not present'));
     }
+
+    const current = opcuaData as unknown as OpcuaModel;
+    const missing: string[] = [];
+    if (current.client.machine_profile == null) missing.push('Machine_Profile');
+    if (current.client.root_node == null) missing.push('Root_Node');
+    if (current.pipe.configure_client == null) missing.push('Configure_Client');
+    if (current.pipe.pipe_name == null) missing.push('Pipe_Name');
+    if (current.triggers_enabled == null) missing.push('Triggers_Enabled');
+    if (current.trigger_stop_ceiling_layers == null) missing.push('Trigger_Stop_Ceiling_Layers');
+    for (const [name, trigger] of Object.entries(current.triggers)) {
+      if (trigger.event == null) missing.push(`${name}.Event`);
+    }
+
+    if (missing.length > 0) {
+      return err(
+        capabilityError(
+          'ValidationError',
+          `OPCUA is present but missing required field(s): ${missing.join(', ')}`,
+          missing,
+        ),
+      );
+    }
+
     return ok({
       getModel: (): OpcuaModel => snapshot(this.data['opcua']) as OpcuaModel,
       setModel: (model, mode = SetMode.Merge): Result<void, CapabilityError> => {

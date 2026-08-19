@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 CapabilityErrorCode = Literal[
     "UnsupportedVersion",
@@ -19,10 +19,16 @@ CapabilityErrorCode = Literal[
 class CapabilityError:
     code: CapabilityErrorCode
     message: str
+    # Names every individual violation at once (e.g. every missing required
+    # OPCUA field) rather than only the first one encountered. None for
+    # validation failures with nothing more specific to list.
+    details: Optional[list[str]] = None
 
 
-def capability_error(code: CapabilityErrorCode, message: str) -> CapabilityError:
-    return CapabilityError(code=code, message=message)
+def capability_error(
+    code: CapabilityErrorCode, message: str, details: Optional[list[str]] = None
+) -> CapabilityError:
+    return CapabilityError(code=code, message=message, details=details)
 
 
 class SessionClosedError(RuntimeError):

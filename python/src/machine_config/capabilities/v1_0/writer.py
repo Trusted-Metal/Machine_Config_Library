@@ -322,6 +322,16 @@ class Hdf5WriterV1_0:
         cg.attrs["Publish_Interval"]  = int(c.publish_interval)
         cg.attrs["Sampling_Interval"] = int(c.sampling_interval)
         cg.attrs["Session_Timeout"]   = int(c.session_timeout)
+        cg.attrs["Keep_Alive_Count"]           = self._i(c.keep_alive_count)
+        cg.attrs["Lifetime_Count"]             = self._i(c.lifetime_count)
+        cg.attrs["Machine_Profile"]            = self._s(c.machine_profile)
+        cg.attrs["Queue_Policy"]               = self._s(c.queue_policy)
+        cg.attrs["Queue_Size_Data_Change"]     = self._i(c.queue_size_data_change)
+        cg.attrs["Queue_Size_Events"]          = self._i(c.queue_size_events)
+        cg.attrs["Reconnect_Interval"]         = self._i(c.reconnect_interval)
+        cg.attrs["Root_Node"]                  = self._s(c.root_node)
+        cg.attrs["Sync_Loop_Interval_Initial"] = self._i(c.sync_loop_interval_initial)
+        cg.attrs["Sync_Loop_Interval_Settled"] = self._i(c.sync_loop_interval_settled)
         for k, v in c.extra.items():
             cg.attrs[k] = v
 
@@ -330,6 +340,12 @@ class Hdf5WriterV1_0:
         p  = opcua.pipe
         pg.attrs["Pipe_Enabled"] = 1 if p.pipe_enabled else 0
         pg.attrs["Buffer_Size"]  = int(p.buffer_size)
+        pg.attrs["Configure_Client"]         = self._b(p.configure_client)
+        pg.attrs["Inbound_Rate_Limit"]       = self._i(p.inbound_rate_limit)
+        pg.attrs["Max_Inbound_Message_Size"] = self._i(p.max_inbound_message_size)
+        pg.attrs["Min_Integrity_Level"]      = self._s(p.min_integrity_level)
+        pg.attrs["Pipe_Name"]                = self._s(p.pipe_name)
+        pg.attrs["User_Access_Level"]        = self._s(p.user_access_level)
         for k, v in p.extra.items():
             pg.attrs[k] = v
 
@@ -337,6 +353,7 @@ class Hdf5WriterV1_0:
         tg = f.require_group(layout.OPCUA_TRIGGERS)
         if opcua.triggers_enabled is not None:
             tg.attrs["Triggers_Enabled"] = np.float64(1.0 if opcua.triggers_enabled else 0.0)
+        tg.attrs["Trigger_Stop_Ceiling_Layers"] = self._i(opcua.trigger_stop_ceiling_layers)
 
         for name, trigger in opcua.triggers.items():
             sg = tg.require_group(name)
@@ -346,6 +363,12 @@ class Hdf5WriterV1_0:
             sg.attrs["Rule_Enabled"] = self._b(trigger.rule_enabled)
             sg.attrs["Start_Value"]  = self._s(trigger.start_value)
             sg.attrs["Stop_Value"]   = self._s(trigger.stop_value)
+            sg.attrs["Case_Sensitivity"]  = self._s(trigger.case_sensitivity)
+            sg.attrs["Component"]         = self._s(trigger.component)
+            sg.attrs["Cooldown_Period"]   = self._i(trigger.cooldown_period)
+            sg.attrs["Event"]             = self._s(trigger.event)
+            sg.attrs["Max_Fires_Per_Job"] = self._i(trigger.max_fires_per_job)
+            sg.attrs["Trigger_Label"]     = self._s(trigger.trigger_label)
             for k, v in trigger.extra.items():
                 sg.attrs[k] = v
 

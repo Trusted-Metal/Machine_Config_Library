@@ -46,20 +46,26 @@ _KNOWN_ROOT_KEYS: frozenset[str] = frozenset(
 # HDF5 attribute names that are modelled as typed fields on OpcuaTrigger.
 # Any attribute NOT in this set is collected into OpcuaTrigger.extra.
 _KNOWN_TRIGGER_KEYS: frozenset[str] = frozenset(
-    {"ID", "Signal", "Subsystem", "Rule_Enabled", "Start_Value", "Stop_Value"}
+    {"ID", "Signal", "Subsystem", "Rule_Enabled", "Start_Value", "Stop_Value",
+     "Case_Sensitivity", "Component", "Cooldown_Period", "Event",
+     "Max_Fires_Per_Job", "Trigger_Label"}
 )
 
 # HDF5 attribute names that are modelled as typed fields on OpcuaClientConfig.
 # Any attribute NOT in this set is collected into OpcuaClientConfig.extra.
 _KNOWN_CLIENT_KEYS: frozenset[str] = frozenset(
     {"Server_URL", "Auth_Mode", "Security_Mode", "Security_Policy",
-     "BFS_Max_Depth", "Publish_Interval", "Sampling_Interval", "Session_Timeout"}
+     "BFS_Max_Depth", "Publish_Interval", "Sampling_Interval", "Session_Timeout",
+     "Keep_Alive_Count", "Lifetime_Count", "Machine_Profile", "Queue_Policy",
+     "Queue_Size_Data_Change", "Queue_Size_Events", "Reconnect_Interval", "Root_Node",
+     "Sync_Loop_Interval_Initial", "Sync_Loop_Interval_Settled"}
 )
 
 # HDF5 attribute names that are modelled as typed fields on OpcuaPipeConfig.
 # Any attribute NOT in this set is collected into OpcuaPipeConfig.extra.
 _KNOWN_PIPE_KEYS: frozenset[str] = frozenset(
-    {"Pipe_Enabled", "Buffer_Size"}
+    {"Pipe_Enabled", "Buffer_Size", "Configure_Client", "Inbound_Rate_Limit",
+     "Max_Inbound_Message_Size", "Min_Integrity_Level", "Pipe_Name", "User_Access_Level"}
 )
 
 
@@ -534,6 +540,16 @@ class Hdf5AdapterV1_0:
             publish_interval=int(ca.get("Publish_Interval", 0)),
             sampling_interval=int(ca.get("Sampling_Interval", 0)),
             session_timeout=int(ca.get("Session_Timeout", 0)),
+            keep_alive_count=self._read_int(ca, "Keep_Alive_Count"),
+            lifetime_count=self._read_int(ca, "Lifetime_Count"),
+            machine_profile=self._read_str(ca, "Machine_Profile"),
+            queue_policy=self._read_str(ca, "Queue_Policy"),
+            queue_size_data_change=self._read_int(ca, "Queue_Size_Data_Change"),
+            queue_size_events=self._read_int(ca, "Queue_Size_Events"),
+            reconnect_interval=self._read_int(ca, "Reconnect_Interval"),
+            root_node=self._read_str(ca, "Root_Node"),
+            sync_loop_interval_initial=self._read_int(ca, "Sync_Loop_Interval_Initial"),
+            sync_loop_interval_settled=self._read_int(ca, "Sync_Loop_Interval_Settled"),
             extra=_hdf5_attrs_extra(ca, _KNOWN_CLIENT_KEYS),
         )
 
@@ -542,12 +558,19 @@ class Hdf5AdapterV1_0:
         pipe = OpcuaPipeConfig(
             pipe_enabled=bool(int(pa.get("Pipe_Enabled", 0))),
             buffer_size=int(pa.get("Buffer_Size", 0)),
+            configure_client=self._read_bool_from_int(pa, "Configure_Client"),
+            inbound_rate_limit=self._read_int(pa, "Inbound_Rate_Limit"),
+            max_inbound_message_size=self._read_int(pa, "Max_Inbound_Message_Size"),
+            min_integrity_level=self._read_str(pa, "Min_Integrity_Level"),
+            pipe_name=self._read_str(pa, "Pipe_Name"),
+            user_access_level=self._read_str(pa, "User_Access_Level"),
             extra=_hdf5_attrs_extra(pa, _KNOWN_PIPE_KEYS),
         )
 
         # ---- Triggers ------------------------------------------------------------
         triggers_grp = f[layout.OPCUA_TRIGGERS]
         triggers_enabled = self._read_bool_from_int(triggers_grp.attrs, "Triggers_Enabled")
+        trigger_stop_ceiling_layers = self._read_int(triggers_grp.attrs, "Trigger_Stop_Ceiling_Layers")
 
         triggers: dict[str, OpcuaTrigger] = {}
         for name in triggers_grp.keys():
@@ -560,6 +583,12 @@ class Hdf5AdapterV1_0:
                 rule_enabled=self._read_bool_from_int(ta, "Rule_Enabled"),
                 start_value=self._read_str(ta, "Start_Value"),
                 stop_value=self._read_str(ta, "Stop_Value"),
+                case_sensitivity=self._read_str(ta, "Case_Sensitivity"),
+                component=self._read_str(ta, "Component"),
+                cooldown_period=self._read_int(ta, "Cooldown_Period"),
+                event=self._read_str(ta, "Event"),
+                max_fires_per_job=self._read_int(ta, "Max_Fires_Per_Job"),
+                trigger_label=self._read_str(ta, "Trigger_Label"),
                 extra=extra,
             )
 
@@ -568,6 +597,7 @@ class Hdf5AdapterV1_0:
             pipe=pipe,
             triggers=triggers,
             triggers_enabled=triggers_enabled,
+            trigger_stop_ceiling_layers=trigger_stop_ceiling_layers,
         )
 
     # ------------------------------------------------------------------
@@ -810,14 +840,31 @@ class Hdf5AdapterV1_0:
                 "publish_interval": opcua.client.publish_interval,
                 "sampling_interval": opcua.client.sampling_interval,
                 "session_timeout": opcua.client.session_timeout,
+                "keep_alive_count": opcua.client.keep_alive_count,
+                "lifetime_count": opcua.client.lifetime_count,
+                "machine_profile": opcua.client.machine_profile,
+                "queue_policy": opcua.client.queue_policy,
+                "queue_size_data_change": opcua.client.queue_size_data_change,
+                "queue_size_events": opcua.client.queue_size_events,
+                "reconnect_interval": opcua.client.reconnect_interval,
+                "root_node": opcua.client.root_node,
+                "sync_loop_interval_initial": opcua.client.sync_loop_interval_initial,
+                "sync_loop_interval_settled": opcua.client.sync_loop_interval_settled,
                 "extra": opcua.client.extra,
             },
             "pipe": {
                 "pipe_enabled": opcua.pipe.pipe_enabled,
                 "buffer_size": opcua.pipe.buffer_size,
+                "configure_client": opcua.pipe.configure_client,
+                "inbound_rate_limit": opcua.pipe.inbound_rate_limit,
+                "max_inbound_message_size": opcua.pipe.max_inbound_message_size,
+                "min_integrity_level": opcua.pipe.min_integrity_level,
+                "pipe_name": opcua.pipe.pipe_name,
+                "user_access_level": opcua.pipe.user_access_level,
                 "extra": opcua.pipe.extra,
             },
             "triggers_enabled": opcua.triggers_enabled,
+            "trigger_stop_ceiling_layers": opcua.trigger_stop_ceiling_layers,
             "triggers": {
                 name: {
                     "id": t.id,
@@ -826,6 +873,12 @@ class Hdf5AdapterV1_0:
                     "rule_enabled": t.rule_enabled,
                     "start_value": t.start_value,
                     "stop_value": t.stop_value,
+                    "case_sensitivity": t.case_sensitivity,
+                    "component": t.component,
+                    "cooldown_period": t.cooldown_period,
+                    "event": t.event,
+                    "max_fires_per_job": t.max_fires_per_job,
+                    "trigger_label": t.trigger_label,
                     "extra": t.extra,
                 }
                 for name, t in opcua.triggers.items()
@@ -1076,12 +1129,28 @@ def _opcua_from_dict(d: dict) -> OpcuaConfig:
         publish_interval=c["publish_interval"],
         sampling_interval=c["sampling_interval"],
         session_timeout=c["session_timeout"],
+        keep_alive_count=c.get("keep_alive_count"),
+        lifetime_count=c.get("lifetime_count"),
+        machine_profile=c.get("machine_profile"),
+        queue_policy=c.get("queue_policy"),
+        queue_size_data_change=c.get("queue_size_data_change"),
+        queue_size_events=c.get("queue_size_events"),
+        reconnect_interval=c.get("reconnect_interval"),
+        root_node=c.get("root_node"),
+        sync_loop_interval_initial=c.get("sync_loop_interval_initial"),
+        sync_loop_interval_settled=c.get("sync_loop_interval_settled"),
         extra=c.get("extra", {}),
     )
 
     pipe = OpcuaPipeConfig(
         pipe_enabled=p["pipe_enabled"],
         buffer_size=p["buffer_size"],
+        configure_client=p.get("configure_client"),
+        inbound_rate_limit=p.get("inbound_rate_limit"),
+        max_inbound_message_size=p.get("max_inbound_message_size"),
+        min_integrity_level=p.get("min_integrity_level"),
+        pipe_name=p.get("pipe_name"),
+        user_access_level=p.get("user_access_level"),
         extra=p.get("extra", {}),
     )
 
@@ -1094,6 +1163,12 @@ def _opcua_from_dict(d: dict) -> OpcuaConfig:
             rule_enabled=td.get("rule_enabled"),
             start_value=td.get("start_value"),
             stop_value=td.get("stop_value"),
+            case_sensitivity=td.get("case_sensitivity"),
+            component=td.get("component"),
+            cooldown_period=td.get("cooldown_period"),
+            event=td.get("event"),
+            max_fires_per_job=td.get("max_fires_per_job"),
+            trigger_label=td.get("trigger_label"),
             extra=td.get("extra", {}),
         )
 
@@ -1102,5 +1177,6 @@ def _opcua_from_dict(d: dict) -> OpcuaConfig:
         pipe=pipe,
         triggers=triggers,
         triggers_enabled=d.get("triggers_enabled"),
+        trigger_stop_ceiling_layers=d.get("trigger_stop_ceiling_layers"),
     )
 

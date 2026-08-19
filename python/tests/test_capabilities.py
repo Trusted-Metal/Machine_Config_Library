@@ -11,10 +11,14 @@ from machine_config.capabilities import (
 )
 from machine_config.capabilities.result import Ok
 from machine_config.reader import MachineConfigReader
+from machine_config.writer import MachineConfigWriter
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = REPO / "fixtures" / "reference_config.h5"
 FIXTURE_OPCUA = REPO / "fixtures" / "reference_config_opcua.h5"
+FIXTURE_OPCUA_MISSING_REQUIRED = (
+    REPO / "docs" / "validation" / "fixtures" / "opcua_missing_required.h5"
+)
 
 
 def test_supported_versions():
@@ -107,6 +111,55 @@ def test_opcua_not_present_vs_present():
     assert isinstance(present, Ok)
     assert present.value.get_model()
     with_opc.value.close()
+
+
+def test_opcua_required_fields_present_on_reference_fixture():
+    file = open_machine_config(FIXTURE_OPCUA).value
+    result = file.opcua()
+    assert isinstance(result, Ok), f"expected Ok, got {result}"
+    model = result.value.get_model()
+    assert model["client"]["machine_profile"] is not None
+    assert all(t["event"] is not None for t in model["triggers"].values())
+    file.close()
+
+
+def test_opcua_missing_required_fields_reports_all_seven_at_once():
+    file = open_machine_config(FIXTURE_OPCUA_MISSING_REQUIRED).value
+    result = file.opcua()
+    assert not result.ok
+    assert result.error.code == "ValidationError"
+
+    expected = {
+        "Machine_Profile",
+        "Root_Node",
+        "Configure_Client",
+        "Pipe_Name",
+        "Triggers_Enabled",
+        "Trigger_Stop_Ceiling_Layers",
+        "Laser Emission Interlock.Event",
+    }
+    assert set(result.error.details) == expected
+    assert not any(d.startswith("Chamber Oxygen Level") for d in result.error.details)
+    file.close()
+
+
+def test_opcua_optional_field_never_appears_in_missing_details(tmp_path):
+    # opcua_missing_required.h5 only clears the 7 required fields — every
+    # optional field is still present there, so absence of an optional field
+    # from `details` would be trivially true. To make this a real check, also
+    # clear an optional field (keep_alive_count) in memory, re-write to a temp
+    # file, and confirm `details` still names exactly the same 7 items.
+    config = MachineConfigReader(str(FIXTURE_OPCUA_MISSING_REQUIRED)).parse()
+    config.opcua.client.keep_alive_count = None
+    out = tmp_path / "missing_required_plus_optional.h5"
+    MachineConfigWriter(config).write(out)
+
+    file = open_machine_config(out).value
+    result = file.opcua()
+    assert not result.ok
+    assert not any("Keep_Alive_Count" in d for d in result.error.details), result.error.details
+    assert len(result.error.details) == 7
+    file.close()
 
 
 def test_optional_components_and_clearbox():

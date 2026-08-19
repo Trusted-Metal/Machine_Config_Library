@@ -11,6 +11,7 @@ import {
   SetMode,
 } from '../src/capabilities/index.js';
 import { MachineConfigReader } from '../src/reader.js';
+import { MachineConfigWriter } from '../src/writer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(__dirname, '..', '..', 'fixtures', 'reference_config.h5');
@@ -20,6 +21,15 @@ const FIXTURE_OPCUA = join(
   '..',
   'fixtures',
   'reference_config_opcua.h5',
+);
+const FIXTURE_OPCUA_MISSING_REQUIRED = join(
+  __dirname,
+  '..',
+  '..',
+  'docs',
+  'validation',
+  'fixtures',
+  'opcua_missing_required.h5',
 );
 
 describe('capability facade (File_Version 1.0)', () => {
@@ -148,6 +158,71 @@ describe('capability facade (File_Version 1.0)', () => {
       expect(model).toBeTruthy();
     }
     withOpc.value.close();
+  });
+
+  it('opcua() Ok when all required fields present on reference_opcua fixture', async () => {
+    const opened = await openMachineConfig(FIXTURE_OPCUA);
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const result = opened.value.opcua();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const model = result.value.getModel();
+      expect(model.client.machine_profile).not.toBeNull();
+      expect(Object.values(model.triggers).every((t) => t.event != null)).toBe(true);
+    }
+    opened.value.close();
+  });
+
+  it('opcua() reports all seven missing required fields at once', async () => {
+    const opened = await openMachineConfig(FIXTURE_OPCUA_MISSING_REQUIRED);
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const result = opened.value.opcua();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('ValidationError');
+
+    const expected = new Set([
+      'Machine_Profile',
+      'Root_Node',
+      'Configure_Client',
+      'Pipe_Name',
+      'Triggers_Enabled',
+      'Trigger_Stop_Ceiling_Layers',
+      'Laser Emission Interlock.Event',
+    ]);
+    expect(new Set(result.error.details)).toEqual(expected);
+    expect(result.error.details?.some((d) => d.startsWith('Chamber Oxygen Level'))).toBe(false);
+    opened.value.close();
+  });
+
+  it('opcua() never reports an optional field, even when genuinely absent', async () => {
+    // opcua_missing_required.h5 only clears the 7 required fields — every
+    // optional field is still present there, so absence of an optional field
+    // from `details` would be trivially true. Also clear an optional field
+    // (keep_alive_count) in memory, re-write to a temp file, and confirm
+    // `details` still names exactly the same 7 items, not 8.
+    const dir = mkdtempSync(join(tmpdir(), 'mcl-cap-opcua-'));
+    const out = join(dir, 'missing_required_plus_optional.h5');
+    try {
+      const reader = new MachineConfigReader(FIXTURE_OPCUA_MISSING_REQUIRED);
+      const config = await reader.parse();
+      config.opcua!.client.keep_alive_count = null;
+      await new MachineConfigWriter(config).write(out);
+
+      const opened = await openMachineConfig(out);
+      expect(opened.ok).toBe(true);
+      if (!opened.ok) return;
+      const result = opened.value.opcua();
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.details?.some((d) => d.includes('Keep_Alive_Count'))).toBe(false);
+      expect(result.error.details).toHaveLength(7);
+      opened.value.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('optionalComponents null vs clearbox present', async () => {

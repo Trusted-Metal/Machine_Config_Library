@@ -19,6 +19,7 @@ import {
   MachineConfigWriter,
   MockConfigBuilder,
   UnsupportedFileVersion,
+  openMachineConfig,
 } from 'machine-config-library';
 import type {
   ClearBox,
@@ -256,6 +257,13 @@ export async function runS07(fixturesDir: string, _realDir: string): Promise<[bo
   const origTimeout = cfg.opcua.client.session_timeout;
   const origTriggersEnabled = cfg.opcua.triggers_enabled;
   const origTriggerNames = new Set(Object.keys(cfg.opcua.triggers));
+  // Newly-promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — a
+  // representative subset, proving the low-level roundtrip works through
+  // the public MachineConfigReader/Writer API too, not just in unit tests.
+  const origMachineProfile = cfg.opcua.client.machine_profile;
+  const origRootNode = cfg.opcua.client.root_node;
+  const origPipeName = cfg.opcua.pipe.pipe_name;
+  const origCeilingLayers = cfg.opcua.trigger_stop_ceiling_layers;
 
   const tmp = join(tmpdir(), `s07_${randomUUID()}.h5`);
   await new MachineConfigWriter(cfg).write(tmp);
@@ -286,9 +294,28 @@ export async function runS07(fixturesDir: string, _realDir: string): Promise<[bo
     if (ot.signal !== rt.signal || ot.subsystem !== rt.subsystem) {
       return [false, `'${co}' signal/subsystem changed`];
     }
+    if (ot.event !== rt.event || ot.trigger_label !== rt.trigger_label) {
+      return [false, `'${co}' event/trigger_label changed`];
+    }
   }
 
-  return [true, `OPCUA roundtrip OK: ${origTriggerNames.size} triggers, url='${origUrl}'`];
+  if (rb.opcua.client.machine_profile !== origMachineProfile) {
+    return [false, `machine_profile changed: '${origMachineProfile}' → '${rb.opcua.client.machine_profile}'`];
+  }
+  if (rb.opcua.client.root_node !== origRootNode) {
+    return [false, `root_node changed: '${origRootNode}' → '${rb.opcua.client.root_node}'`];
+  }
+  if (rb.opcua.pipe.pipe_name !== origPipeName) {
+    return [false, `pipe_name changed: '${origPipeName}' → '${rb.opcua.pipe.pipe_name}'`];
+  }
+  if (rb.opcua.trigger_stop_ceiling_layers !== origCeilingLayers) {
+    return [false, `trigger_stop_ceiling_layers changed: ${origCeilingLayers} → ${rb.opcua.trigger_stop_ceiling_layers}`];
+  }
+
+  return [
+    true,
+    `OPCUA roundtrip OK: ${origTriggerNames.size} triggers, url='${origUrl}', machine_profile='${origMachineProfile}'`,
+  ];
 }
 
 // S-08: Drastic change to real AconityMIDI file — new train, build_plate_x, rotation, clearbox cleared
@@ -581,4 +608,74 @@ export async function runAv11(_fixturesDir: string, _realDir: string): Promise<[
 
   return [true, 'backward migration OK — ADDITION fields lost (facility_id=null, config_author=null), ' +
     `machine_name='${v1_0.machine.machine_name}' preserved, file_version='1.0'`];
+}
+
+// AV-12: capabilities facade .opcua() returns Ok with the newly-promoted
+// typed fields readable, when every required field is present.
+//
+// Nothing before this scenario exercised the `capabilities` facade at all —
+// S-07 above only goes through the plain MachineConfigReader/Writer. See
+// OPCUA_FIELD_PROMOTION_PLAN.md's "Validation-app coverage" section for why
+// this is a real public-API guarantee, not just a unit-test concern.
+export async function runAv12(fixturesDir: string, _realDir: string): Promise<[boolean, string]> {
+  const path = join(fixturesDir, 'reference_config_opcua.h5');
+  const opened = await openMachineConfig(path);
+  if (!opened.ok) {
+    return [false, `openMachineConfig failed: ${JSON.stringify(opened.error)}`];
+  }
+
+  const result = opened.value.opcua();
+  if (!result.ok) {
+    return [false, `opcua() failed on fully-populated fixture: ${JSON.stringify(result.error)}`];
+  }
+
+  const model = result.value.getModel();
+  return [
+    true,
+    `opcua() Ok: machine_profile='${model.client.machine_profile}', ` +
+      `root_node='${model.client.root_node}', pipe_name='${model.pipe.pipe_name}', ` +
+      `triggers_enabled=${model.triggers_enabled}, ` +
+      `trigger_stop_ceiling_layers=${model.trigger_stop_ceiling_layers}`,
+  ];
+}
+
+// AV-13: capabilities facade .opcua() returns Err(ValidationError) with
+// `details` naming exactly the seven missing required fields, when OPCUA is
+// present but incomplete.
+export async function runAv13(fixturesDir: string, _realDir: string): Promise<[boolean, string]> {
+  const fixture = avFixture(fixturesDir, 'opcua_missing_required.h5');
+  const opened = await openMachineConfig(fixture);
+  if (!opened.ok) {
+    return [false, `openMachineConfig failed: ${JSON.stringify(opened.error)}`];
+  }
+
+  const result = opened.value.opcua();
+  if (result.ok) {
+    return [false, 'opcua() returned Ok on a fixture missing required fields'];
+  }
+
+  if (result.error.code !== 'ValidationError') {
+    return [false, `wrong error code: ${result.error.code}`];
+  }
+
+  const expected = new Set([
+    'Machine_Profile',
+    'Root_Node',
+    'Configure_Client',
+    'Pipe_Name',
+    'Triggers_Enabled',
+    'Trigger_Stop_Ceiling_Layers',
+    'Laser Emission Interlock.Event',
+  ]);
+  const actual = new Set(result.error.details ?? []);
+  const sameSize = actual.size === expected.size;
+  const sameMembers = [...expected].every((d) => actual.has(d));
+  if (!sameSize || !sameMembers) {
+    return [
+      false,
+      `details mismatch: got ${JSON.stringify([...actual].sort())}, expected ${JSON.stringify([...expected].sort())}`,
+    ];
+  }
+
+  return [true, `ValidationError with details=${JSON.stringify([...actual].sort())}`];
 }

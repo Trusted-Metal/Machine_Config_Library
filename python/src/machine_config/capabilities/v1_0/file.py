@@ -101,9 +101,44 @@ class MachineConfigFileV1_0:
         return _TrainCollection(self)
 
     def opcua(self) -> Result["_NodeHandle", CapabilityError]:
+        """Returns the OPCUA node, or ``Err(ValidationError)`` if OPCUA is
+        present but missing one or more required fields. Collects every
+        missing field at once (in ``details``) rather than failing on the
+        first one — see OPCUA_FIELD_PROMOTION_PLAN.md's "Why facade-only
+        enforcement". The low-level reader/writer stay fully permissive;
+        this is the one place "required" is enforced.
+        """
         self._assert_open()
-        if self._data.get("opcua") is None:
+        opcua_data = self._data.get("opcua")
+        if opcua_data is None:
             return err(capability_error("NotPresent", "OPCUA group is not present"))
+
+        missing: list[str] = []
+        if opcua_data["client"].get("machine_profile") is None:
+            missing.append("Machine_Profile")
+        if opcua_data["client"].get("root_node") is None:
+            missing.append("Root_Node")
+        if opcua_data["pipe"].get("configure_client") is None:
+            missing.append("Configure_Client")
+        if opcua_data["pipe"].get("pipe_name") is None:
+            missing.append("Pipe_Name")
+        if opcua_data.get("triggers_enabled") is None:
+            missing.append("Triggers_Enabled")
+        if opcua_data.get("trigger_stop_ceiling_layers") is None:
+            missing.append("Trigger_Stop_Ceiling_Layers")
+        for name, trigger in opcua_data.get("triggers", {}).items():
+            if trigger.get("event") is None:
+                missing.append(f"{name}.Event")
+
+        if missing:
+            return err(
+                capability_error(
+                    "ValidationError",
+                    f"OPCUA is present but missing required field(s): {', '.join(missing)}",
+                    details=missing,
+                )
+            )
+
         return ok(
             _NodeHandle(
                 self,
