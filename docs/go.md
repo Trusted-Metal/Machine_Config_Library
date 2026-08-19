@@ -68,7 +68,47 @@ _ = f.SetScanner(0, sc, capabilities.Merge)
 
 ---
 
-## Tests
+## Running the Go test suite
+
+```bash
+# From the go/ directory (Linux — requires libhdf5-dev)
+CGO_ENABLED=1 go test ./... -count=1
+
+# From the repo root
+cd go && CGO_ENABLED=1 go test ./... -count=1
+```
+
+```powershell
+# PowerShell (Windows — requires MSYS2 MinGW64 HDF5; see go.yml for full env setup)
+Push-Location go
+$env:CGO_ENABLED = '1'
+go test ./... -count=1
+Pop-Location
+```
+
+111 tests across two packages: `machine-config-go` (root — reader, writer, builder, mock
+migration) and `machine-config-go/capabilities` (capability facade and dispatch).
+
+---
+
+## Validation results
+
+20 / 20 scenarios pass on this SDK. See the full table in
+[docs/validation/go/PASS_FAIL.md](../docs/validation/go/PASS_FAIL.md) and verbatim output
+in [docs/validation/go/results.md](../docs/validation/go/results.md).
+
+Two production code additions were made during the validation pass:
+- `go/internal/h5c/h5c.go` gained `OpenRW` (open existing file read/write without
+  truncating) and `(g *Group) DeleteAttr` — needed by the mock v1.1 writer's
+  delegate-then-patch design for AV-09–11.
+- `go/internal/models/models.go`'s `MachineConfigMeta` gained `FacilityID`/`ConfigAuthor`
+  pointer fields, explicitly marked test-fixture-only, mirroring Python and Rust.
+
+No runtime or serialization defects were found. One open item was deliberately deferred:
+`BuildPlate` is exported and aliased at the module root but never constructed in the real
+codebase — flagged during S-09, decision on removal vs retention left for a later pass.
+
+For the master cross-language matrix see [docs/validation/README.md](../docs/validation/README.md).
 
 ```bash
 docker run --rm -v "${PWD}:/work" -w /work/go golang:1.24-bookworm \

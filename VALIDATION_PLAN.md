@@ -1850,7 +1850,7 @@ in §9.3 before implementation began, not a gap discovered mid-work.
 - [x] S-09: all exported types accessible via top-level package (no internal imports) — already true, no gap found
 - [x] `docs/validation/go/PASS_FAIL.md` complete — 20/20
 - [x] `docs/validation/README.md` master summary and scenario matrix updated for Go
-- [x] Validation status cross-linked from `docs/validation/README.md` (see note below on `docs/go.md`)
+- [x] Validation status cross-linked from `docs/go.md`
 - [ ] CI integration added to `go.yml` (consistent with Python/Node/Rust/C++ — none of the five have this yet; not Go-specific)
 
 **Production code changes made during this pass (see `docs/validation/go/results.md` for full detail):**
@@ -1881,9 +1881,8 @@ codebase. S-09 type-annotates it without constructing it (matching Rust's own pr
 explicitly raised with the user, who chose to flag it and decide later rather than resolve
 it as a side effect of this pass.
 
-**Note on `docs/go.md` cross-link:** not yet checked whether `docs/go.md` has an equivalent
-"Validation results" section to the ones added to `docs/rust.md`/`docs/cpp.md` — flagged as a
-follow-up, not done in this pass.
+**Note on `docs/go.md` cross-link:** now resolved — `## Running the Go test suite` and
+`## Validation results` sections added to `docs/go.md` in this pass.
 
 ### C++
 - [x] Standalone app written externally and verified (from source) (`C:\Users\ChrisParham\Desktop\Practice\machineconfiglibrarytesting\Cpp`)
