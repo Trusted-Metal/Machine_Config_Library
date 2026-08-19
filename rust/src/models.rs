@@ -313,6 +313,16 @@ pub struct OpcuaClientConfig {
     pub publish_interval: i64,
     pub sampling_interval: i64,
     pub session_timeout: i64,
+    pub keep_alive_count: Option<i64>,
+    pub lifetime_count: Option<i64>,
+    pub machine_profile: Option<String>,
+    pub queue_policy: Option<String>,
+    pub queue_size_data_change: Option<i64>,
+    pub queue_size_events: Option<i64>,
+    pub reconnect_interval: Option<i64>,
+    pub root_node: Option<String>,
+    pub sync_loop_interval_initial: Option<i64>,
+    pub sync_loop_interval_settled: Option<i64>,
     /// Preserves any non-typed HDF5 attrs.
     #[serde(default)]
     pub extra: ExtraAttrs,
@@ -323,6 +333,13 @@ pub struct OpcuaPipeConfig {
     /// HDF5 int 0/1.
     pub pipe_enabled: bool,
     pub buffer_size: i64,
+    /// HDF5 int 0/1.
+    pub configure_client: Option<bool>,
+    pub inbound_rate_limit: Option<i64>,
+    pub max_inbound_message_size: Option<i64>,
+    pub min_integrity_level: Option<String>,
+    pub pipe_name: Option<String>,
+    pub user_access_level: Option<String>,
     /// Preserves any non-typed HDF5 attrs.
     #[serde(default)]
     pub extra: ExtraAttrs,
@@ -337,6 +354,12 @@ pub struct OpcuaTrigger {
     pub rule_enabled: Option<bool>,
     pub start_value: Option<String>,
     pub stop_value: Option<String>,
+    pub case_sensitivity: Option<String>,
+    pub component: Option<String>,
+    pub cooldown_period: Option<i64>,
+    pub event: Option<String>,
+    pub max_fires_per_job: Option<i64>,
+    pub trigger_label: Option<String>,
     #[serde(default)]
     pub extra: ExtraAttrs,
 }
@@ -350,6 +373,7 @@ pub struct OpcuaConfig {
     pub triggers: IndexMap<String, OpcuaTrigger>,
     /// HDF5 float64 `0.0`/`1.0` on the `OPCUA/Triggers` group attrs — not an int.
     pub triggers_enabled: Option<bool>,
+    pub trigger_stop_ceiling_layers: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -551,6 +575,12 @@ mod tests {
                 rule_enabled: Some(true),
                 start_value: None,
                 stop_value: None,
+                case_sensitivity: Some("Exact".into()),
+                component: Some("machine_state_indicator".into()),
+                cooldown_period: Some(0),
+                event: Some("SensorEvents".into()),
+                max_fires_per_job: Some(0),
+                trigger_label: Some("Laser Emission Interlock".into()),
                 extra: IndexMap::new(),
             },
         );
@@ -564,15 +594,32 @@ mod tests {
                 publish_interval: 100,
                 sampling_interval: 100,
                 session_timeout: 60000,
+                keep_alive_count: Some(240),
+                lifetime_count: Some(2400),
+                machine_profile: Some("Aconity".into()),
+                queue_policy: Some("DropOldest".into()),
+                queue_size_data_change: Some(100),
+                queue_size_events: Some(7200),
+                reconnect_interval: Some(10000),
+                root_node: Some("MachineFleet".into()),
+                sync_loop_interval_initial: Some(1000),
+                sync_loop_interval_settled: Some(30000),
                 extra: IndexMap::new(),
             },
             pipe: OpcuaPipeConfig {
                 pipe_enabled: true,
                 buffer_size: 4096,
+                configure_client: Some(true),
+                inbound_rate_limit: Some(-1),
+                max_inbound_message_size: Some(65536),
+                min_integrity_level: Some("0x2000".into()),
+                pipe_name: Some("\\\\.\\pipe\\opc_ua_client_pipe".into()),
+                user_access_level: Some("AnyLocalUser".into()),
                 extra: IndexMap::new(),
             },
             triggers,
             triggers_enabled: Some(true),
+            trigger_stop_ceiling_layers: Some(3),
         });
 
         let json = serde_json::to_string(&config).unwrap();
@@ -580,7 +627,12 @@ mod tests {
         assert_eq!(config, roundtripped);
         let opcua = roundtripped.opcua.unwrap();
         assert_eq!(opcua.triggers_enabled, Some(true));
+        assert_eq!(opcua.trigger_stop_ceiling_layers, Some(3));
         assert!(opcua.triggers.contains_key("Laser Emission Interlock"));
+        let trigger = &opcua.triggers["Laser Emission Interlock"];
+        assert_eq!(trigger.event, Some("SensorEvents".into()));
+        assert_eq!(opcua.client.machine_profile, Some("Aconity".into()));
+        assert_eq!(opcua.pipe.pipe_name, Some("\\\\.\\pipe\\opc_ua_client_pipe".into()));
     }
 
     #[test]

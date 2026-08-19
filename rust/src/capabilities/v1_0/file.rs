@@ -268,12 +268,56 @@ impl MachineConfigFileV1_0 {
         Ok(())
     }
 
+    /// Returns the OPCUA config, or `Err(ValidationError)` if OPCUA is present
+    /// but missing one or more required fields. Collects every missing field
+    /// at once (in `details`) rather than failing on the first one — see
+    /// OPCUA_FIELD_PROMOTION_PLAN.md's "Why facade-only enforcement". The
+    /// low-level reader/writer stay fully permissive; this is the one place
+    /// "required" is enforced.
     pub fn get_opcua(&self) -> Result<OpcuaConfig, CapabilityError> {
         self.assert_open()?;
-        self.config
+        let opcua = self
+            .config
             .opcua
             .clone()
-            .ok_or_else(|| CapabilityError::NotPresent("OPCUA group is not present".into()))
+            .ok_or_else(|| CapabilityError::NotPresent("OPCUA group is not present".into()))?;
+
+        let mut missing = Vec::new();
+        if opcua.client.machine_profile.is_none() {
+            missing.push("Machine_Profile".to_string());
+        }
+        if opcua.client.root_node.is_none() {
+            missing.push("Root_Node".to_string());
+        }
+        if opcua.pipe.configure_client.is_none() {
+            missing.push("Configure_Client".to_string());
+        }
+        if opcua.pipe.pipe_name.is_none() {
+            missing.push("Pipe_Name".to_string());
+        }
+        if opcua.triggers_enabled.is_none() {
+            missing.push("Triggers_Enabled".to_string());
+        }
+        if opcua.trigger_stop_ceiling_layers.is_none() {
+            missing.push("Trigger_Stop_Ceiling_Layers".to_string());
+        }
+        for (name, trigger) in &opcua.triggers {
+            if trigger.event.is_none() {
+                missing.push(format!("{name}.Event"));
+            }
+        }
+
+        if !missing.is_empty() {
+            return Err(CapabilityError::ValidationError {
+                message: format!(
+                    "OPCUA is present but missing required field(s): {}",
+                    missing.join(", ")
+                ),
+                details: Some(missing),
+            });
+        }
+
+        Ok(opcua)
     }
 
     pub fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError> {
@@ -293,9 +337,7 @@ impl MachineConfigFileV1_0 {
             .map(|p| p.to_path_buf())
             .or_else(|| self.path.clone())
             .ok_or_else(|| {
-                CapabilityError::ValidationError(
-                    "save() requires a path for create()-d files".into(),
-                )
+                CapabilityError::validation_error("save() requires a path for create()-d files")
             })?;
         MachineConfigWriter::new(&self.config)
             .write(&out)

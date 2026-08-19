@@ -442,6 +442,16 @@ impl<'a> Hdf5WriterV1_0<'a> {
         client_grp.new_attr::<i64>().create("Publish_Interval")?.write_scalar(&c.publish_interval)?;
         client_grp.new_attr::<i64>().create("Sampling_Interval")?.write_scalar(&c.sampling_interval)?;
         client_grp.new_attr::<i64>().create("Session_Timeout")?.write_scalar(&c.session_timeout)?;
+        wi(&client_grp, "Keep_Alive_Count", c.keep_alive_count)?;
+        wi(&client_grp, "Lifetime_Count", c.lifetime_count)?;
+        ws(&client_grp, "Machine_Profile", c.machine_profile.as_deref().unwrap_or(""))?;
+        ws(&client_grp, "Queue_Policy", c.queue_policy.as_deref().unwrap_or(""))?;
+        wi(&client_grp, "Queue_Size_Data_Change", c.queue_size_data_change)?;
+        wi(&client_grp, "Queue_Size_Events", c.queue_size_events)?;
+        wi(&client_grp, "Reconnect_Interval", c.reconnect_interval)?;
+        ws(&client_grp, "Root_Node", c.root_node.as_deref().unwrap_or(""))?;
+        wi(&client_grp, "Sync_Loop_Interval_Initial", c.sync_loop_interval_initial)?;
+        wi(&client_grp, "Sync_Loop_Interval_Settled", c.sync_loop_interval_settled)?;
         for (k, v) in &c.extra {
             write_extra_value(&client_grp, k, v)?;
         }
@@ -451,6 +461,12 @@ impl<'a> Hdf5WriterV1_0<'a> {
         let p = &opcua.pipe;
         pipe_grp.new_attr::<i64>().create("Pipe_Enabled")?.write_scalar(&(p.pipe_enabled as i64))?;
         pipe_grp.new_attr::<i64>().create("Buffer_Size")?.write_scalar(&p.buffer_size)?;
+        wb(&pipe_grp, "Configure_Client", p.configure_client)?;
+        wi(&pipe_grp, "Inbound_Rate_Limit", p.inbound_rate_limit)?;
+        wi(&pipe_grp, "Max_Inbound_Message_Size", p.max_inbound_message_size)?;
+        ws(&pipe_grp, "Min_Integrity_Level", p.min_integrity_level.as_deref().unwrap_or(""))?;
+        ws(&pipe_grp, "Pipe_Name", p.pipe_name.as_deref().unwrap_or(""))?;
+        ws(&pipe_grp, "User_Access_Level", p.user_access_level.as_deref().unwrap_or(""))?;
         for (k, v) in &p.extra {
             write_extra_value(&pipe_grp, k, v)?;
         }
@@ -464,6 +480,7 @@ impl<'a> Hdf5WriterV1_0<'a> {
                 .create("Triggers_Enabled")?
                 .write_scalar(&(if te { 1.0_f64 } else { 0.0_f64 }))?;
         }
+        wi(&triggers_grp, "Trigger_Stop_Ceiling_Layers", opcua.trigger_stop_ceiling_layers)?;
         for (name, trigger) in &opcua.triggers {
             let tg = triggers_grp.create_group(name)?;
             ws(&tg, "ID", trigger.id.as_deref().unwrap_or(""))?;
@@ -472,6 +489,12 @@ impl<'a> Hdf5WriterV1_0<'a> {
             wb(&tg, "Rule_Enabled", trigger.rule_enabled)?;
             ws(&tg, "Start_Value", trigger.start_value.as_deref().unwrap_or(""))?;
             ws(&tg, "Stop_Value", trigger.stop_value.as_deref().unwrap_or(""))?;
+            ws(&tg, "Case_Sensitivity", trigger.case_sensitivity.as_deref().unwrap_or(""))?;
+            ws(&tg, "Component", trigger.component.as_deref().unwrap_or(""))?;
+            wi(&tg, "Cooldown_Period", trigger.cooldown_period)?;
+            ws(&tg, "Event", trigger.event.as_deref().unwrap_or(""))?;
+            wi(&tg, "Max_Fires_Per_Job", trigger.max_fires_per_job)?;
+            ws(&tg, "Trigger_Label", trigger.trigger_label.as_deref().unwrap_or(""))?;
             for (k, v) in &trigger.extra {
                 write_extra_value(&tg, k, v)?;
             }
@@ -650,11 +673,56 @@ mod tests {
         assert_eq!(orig_opcua.triggers_enabled, rt_opcua.triggers_enabled);
         assert_eq!(orig_opcua.triggers.len(), rt_opcua.triggers.len());
 
+        // The 22 newly-promoted fields + the new trigger_stop_ceiling_layers field.
+        assert_eq!(orig_opcua.client.keep_alive_count, rt_opcua.client.keep_alive_count);
+        assert_eq!(orig_opcua.client.lifetime_count, rt_opcua.client.lifetime_count);
+        assert_eq!(orig_opcua.client.machine_profile, rt_opcua.client.machine_profile);
+        assert_eq!(orig_opcua.client.queue_policy, rt_opcua.client.queue_policy);
+        assert_eq!(orig_opcua.client.queue_size_data_change, rt_opcua.client.queue_size_data_change);
+        assert_eq!(orig_opcua.client.queue_size_events, rt_opcua.client.queue_size_events);
+        assert_eq!(orig_opcua.client.reconnect_interval, rt_opcua.client.reconnect_interval);
+        assert_eq!(orig_opcua.client.root_node, rt_opcua.client.root_node);
+        assert_eq!(orig_opcua.client.sync_loop_interval_initial, rt_opcua.client.sync_loop_interval_initial);
+        assert_eq!(orig_opcua.client.sync_loop_interval_settled, rt_opcua.client.sync_loop_interval_settled);
+        assert_eq!(orig_opcua.pipe.configure_client, rt_opcua.pipe.configure_client);
+        assert_eq!(orig_opcua.pipe.inbound_rate_limit, rt_opcua.pipe.inbound_rate_limit);
+        assert_eq!(orig_opcua.pipe.max_inbound_message_size, rt_opcua.pipe.max_inbound_message_size);
+        assert_eq!(orig_opcua.pipe.min_integrity_level, rt_opcua.pipe.min_integrity_level);
+        assert_eq!(orig_opcua.pipe.pipe_name, rt_opcua.pipe.pipe_name);
+        assert_eq!(orig_opcua.pipe.user_access_level, rt_opcua.pipe.user_access_level);
+        assert_eq!(orig_opcua.trigger_stop_ceiling_layers, rt_opcua.trigger_stop_ceiling_layers);
+        assert_eq!(orig_opcua.trigger_stop_ceiling_layers, Some(3));
+
         let orig_t = &orig_opcua.triggers["Laser Emission Interlock"];
         let rt_t = &rt_opcua.triggers["Laser Emission Interlock"];
         assert_eq!(orig_t.signal, rt_t.signal);
         assert_eq!(orig_t.rule_enabled, rt_t.rule_enabled);
         assert_eq!(orig_t.extra, rt_t.extra);
+        assert_eq!(orig_t.case_sensitivity, rt_t.case_sensitivity);
+        assert_eq!(orig_t.component, rt_t.component);
+        assert_eq!(orig_t.cooldown_period, rt_t.cooldown_period);
+        assert_eq!(orig_t.event, rt_t.event);
+        assert_eq!(orig_t.max_fires_per_job, rt_t.max_fires_per_job);
+        assert_eq!(orig_t.trigger_label, rt_t.trigger_label);
+    }
+
+    /// `trigger_stop_ceiling_layers` specifically, including the `None` case —
+    /// the one field that lives directly on `OpcuaConfig` with no `extra`
+    /// bucket to fall back on if the write/read pairing were wrong.
+    #[test]
+    fn roundtrip_trigger_stop_ceiling_layers_none_and_some() {
+        let mut orig = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
+
+        let tmp_some = NamedTempFile::with_suffix(".h5").unwrap();
+        Hdf5WriterV1_0::new(&orig).write(tmp_some.path()).unwrap();
+        let rt_some = MachineConfigReader::open(tmp_some.path()).unwrap().parse().unwrap();
+        assert_eq!(rt_some.opcua.unwrap().trigger_stop_ceiling_layers, Some(3));
+
+        orig.opcua.as_mut().unwrap().trigger_stop_ceiling_layers = None;
+        let tmp_none = NamedTempFile::with_suffix(".h5").unwrap();
+        Hdf5WriterV1_0::new(&orig).write(tmp_none.path()).unwrap();
+        let rt_none = MachineConfigReader::open(tmp_none.path()).unwrap().parse().unwrap();
+        assert_eq!(rt_none.opcua.unwrap().trigger_stop_ceiling_layers, None);
     }
 
     #[test]

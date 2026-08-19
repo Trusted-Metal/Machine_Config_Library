@@ -1,9 +1,11 @@
-//! S-01–09/AV-01–08 scenarios for the Rust validation app (VALIDATION_PLAN.md §8).
+//! S-01–09/AV-01–08/AV-12–13 scenarios for the Rust validation app (VALIDATION_PLAN.md §8).
 //! AV-09–11 live in `rust/tests/` instead — see docs/validation/rust/results.md for why.
 
 mod common;
 
 use common::{av_fixture, bitwise_equal};
+use machine_config::capabilities::errors::CapabilityError;
+use machine_config::capabilities::open_machine_config;
 use machine_config::{
     ClearBox, Collimator, LightSource, Machine, MachineConfig, MachineConfigError,
     MachineConfigMeta, MachineConfigReader, MachineConfigWriter, MockConfigBuilder, OpcuaConfig,
@@ -408,6 +410,13 @@ pub fn run_s07(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
     let orig_timeout = opcua.client.session_timeout;
     let orig_triggers_enabled = opcua.triggers_enabled;
     let orig_trigger_names: HashSet<String> = opcua.triggers.keys().cloned().collect();
+    // Newly-promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — a
+    // representative subset, proving the low-level roundtrip works through
+    // the public MachineConfigReader/Writer API too, not just in unit tests.
+    let orig_machine_profile = opcua.client.machine_profile.clone();
+    let orig_root_node = opcua.client.root_node.clone();
+    let orig_pipe_name = opcua.pipe.pipe_name.clone();
+    let orig_ceiling_layers = opcua.trigger_stop_ceiling_layers;
 
     let tmp = match tempfile::Builder::new().suffix(".h5").tempfile() {
         Ok(t) => t,
@@ -452,11 +461,45 @@ pub fn run_s07(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
         if ot.signal != rt.signal || ot.subsystem != rt.subsystem {
             return (false, format!("'{co}' signal/subsystem changed"));
         }
+        if ot.event != rt.event || ot.trigger_label != rt.trigger_label {
+            return (false, format!("'{co}' event/trigger_label changed"));
+        }
+    }
+
+    if rb_opcua.client.machine_profile != orig_machine_profile {
+        return (
+            false,
+            format!("machine_profile changed: {orig_machine_profile:?} -> {:?}", rb_opcua.client.machine_profile),
+        );
+    }
+    if rb_opcua.client.root_node != orig_root_node {
+        return (
+            false,
+            format!("root_node changed: {orig_root_node:?} -> {:?}", rb_opcua.client.root_node),
+        );
+    }
+    if rb_opcua.pipe.pipe_name != orig_pipe_name {
+        return (
+            false,
+            format!("pipe_name changed: {orig_pipe_name:?} -> {:?}", rb_opcua.pipe.pipe_name),
+        );
+    }
+    if rb_opcua.trigger_stop_ceiling_layers != orig_ceiling_layers {
+        return (
+            false,
+            format!(
+                "trigger_stop_ceiling_layers changed: {orig_ceiling_layers:?} -> {:?}",
+                rb_opcua.trigger_stop_ceiling_layers
+            ),
+        );
     }
 
     (
         true,
-        format!("OPCUA roundtrip OK: {} triggers, url={orig_url:?}", orig_trigger_names.len()),
+        format!(
+            "OPCUA roundtrip OK: {} triggers, url={orig_url:?}, machine_profile={orig_machine_profile:?}",
+            orig_trigger_names.len()
+        ),
     )
 }
 
@@ -733,4 +776,69 @@ pub fn run_av08(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
     }
 
     (true, format!("File_Version survives roundtrip unchanged: '{rb_version}'"))
+}
+
+// AV-12: capabilities facade .get_opcua() returns Ok with the newly-promoted
+// typed fields readable, when every required field is present.
+//
+// Nothing before this scenario exercised the `capabilities` facade at all —
+// S-07 above only goes through the plain MachineConfigReader/Writer. See
+// OPCUA_FIELD_PROMOTION_PLAN.md's "Validation-app coverage" section for why
+// this is a real public-API guarantee, not just a unit-test concern.
+pub fn run_av12(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
+    let path = fixtures_dir.join("reference_config_opcua.h5");
+    let file = match open_machine_config(&path) {
+        Ok(f) => f,
+        Err(e) => return (false, format!("open_machine_config failed: {e}")),
+    };
+    match file.get_opcua() {
+        Ok(opcua) => (
+            true,
+            format!(
+                "get_opcua() Ok: machine_profile={:?}, root_node={:?}, pipe_name={:?}, \
+                 triggers_enabled={:?}, trigger_stop_ceiling_layers={:?}",
+                opcua.client.machine_profile,
+                opcua.client.root_node,
+                opcua.pipe.pipe_name,
+                opcua.triggers_enabled,
+                opcua.trigger_stop_ceiling_layers,
+            ),
+        ),
+        Err(e) => (false, format!("get_opcua() failed on fully-populated fixture: {e}")),
+    }
+}
+
+// AV-13: capabilities facade .get_opcua() returns Err(ValidationError) with
+// `details` naming exactly the seven missing required fields, when OPCUA is
+// present but incomplete. Uses the shared `opcua_missing_required.h5` fixture
+// (Phase 0), which deliberately removes Event from only one of the two
+// triggers so this also proves the still-complete trigger isn't flagged.
+pub fn run_av13(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
+    let fixture = av_fixture(fixtures_dir, "opcua_missing_required.h5");
+    let file = match open_machine_config(&fixture) {
+        Ok(f) => f,
+        Err(e) => return (false, format!("open_machine_config failed: {e}")),
+    };
+    match file.get_opcua() {
+        Ok(_) => (false, "get_opcua() returned Ok on a fixture missing required fields".to_string()),
+        Err(CapabilityError::ValidationError { details: Some(mut details), .. }) => {
+            details.sort();
+            let mut expected = vec![
+                "Machine_Profile".to_string(),
+                "Root_Node".to_string(),
+                "Configure_Client".to_string(),
+                "Pipe_Name".to_string(),
+                "Triggers_Enabled".to_string(),
+                "Trigger_Stop_Ceiling_Layers".to_string(),
+                "Laser Emission Interlock.Event".to_string(),
+            ];
+            expected.sort();
+            if details == expected {
+                (true, format!("ValidationError with details={details:?}"))
+            } else {
+                (false, format!("details mismatch: got {details:?}, expected {expected:?}"))
+            }
+        }
+        Err(e) => (false, format!("wrong error variant/shape: {e}")),
+    }
 }

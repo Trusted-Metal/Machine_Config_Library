@@ -17,9 +17,9 @@ where
         SetMode::Replace => Ok(incoming.clone()),
         SetMode::Merge => {
             let mut cur = serde_json::to_value(current)
-                .map_err(|e| CapabilityError::ValidationError(e.to_string()))?;
+                .map_err(|e| CapabilityError::validation_error(e.to_string()))?;
             let inc = serde_json::to_value(incoming)
-                .map_err(|e| CapabilityError::ValidationError(e.to_string()))?;
+                .map_err(|e| CapabilityError::validation_error(e.to_string()))?;
             if let (serde_json::Value::Object(c), serde_json::Value::Object(i)) = (&mut cur, inc)
             {
                 for (k, v) in i {
@@ -27,7 +27,7 @@ where
                 }
             }
             serde_json::from_value(cur)
-                .map_err(|e| CapabilityError::ValidationError(e.to_string()))
+                .map_err(|e| CapabilityError::validation_error(e.to_string()))
         }
     }
 }

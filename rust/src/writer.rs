@@ -201,11 +201,24 @@ mod tests {
         assert_eq!(orig_opcua.triggers_enabled, rt_opcua.triggers_enabled);
         assert_eq!(orig_opcua.triggers.len(), rt_opcua.triggers.len());
 
+        // Spot-check a representative subset of the newly-promoted fields
+        // through the public MachineConfigWriter facade specifically — the
+        // exhaustive 22-field check lives on the capabilities-layer copy of
+        // this test (capabilities::v1_0::writer::tests::roundtrip_opcua_fields).
+        assert_eq!(orig_opcua.client.machine_profile, rt_opcua.client.machine_profile);
+        assert_eq!(orig_opcua.client.root_node, rt_opcua.client.root_node);
+        assert_eq!(orig_opcua.pipe.configure_client, rt_opcua.pipe.configure_client);
+        assert_eq!(orig_opcua.pipe.pipe_name, rt_opcua.pipe.pipe_name);
+        assert_eq!(orig_opcua.trigger_stop_ceiling_layers, rt_opcua.trigger_stop_ceiling_layers);
+        assert_eq!(orig_opcua.trigger_stop_ceiling_layers, Some(3));
+
         let orig_t = &orig_opcua.triggers["Laser Emission Interlock"];
         let rt_t = &rt_opcua.triggers["Laser Emission Interlock"];
         assert_eq!(orig_t.signal, rt_t.signal);
         assert_eq!(orig_t.rule_enabled, rt_t.rule_enabled);
         assert_eq!(orig_t.extra, rt_t.extra);
+        assert_eq!(orig_t.event, rt_t.event);
+        assert_eq!(orig_t.trigger_label, rt_t.trigger_label);
     }
 
     #[test]

@@ -189,11 +189,15 @@ mod tests {
         assert!(!opcua.client.server_url.is_empty());
         assert!(opcua.client.bfs_max_depth > 0);
         assert_eq!(opcua.triggers_enabled, Some(true));
+        assert_eq!(opcua.trigger_stop_ceiling_layers, Some(3));
+        assert_eq!(opcua.client.machine_profile, Some("Aconity".into()));
+        assert_eq!(opcua.pipe.pipe_name, Some("\\\\.\\pipe\\opc_ua_client_pipe".into()));
         assert!(opcua.triggers.contains_key("Laser Emission Interlock"));
 
         let trigger = &opcua.triggers["Laser Emission Interlock"];
         assert!(trigger.signal.is_some());
-        assert!(trigger.extra.contains_key("Trigger_Label"));
+        assert_eq!(trigger.trigger_label, Some("Laser Emission Interlock".into()));
+        assert!(!trigger.extra.contains_key("Trigger_Label"));
     }
 
     #[test]

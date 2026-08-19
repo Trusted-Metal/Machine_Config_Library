@@ -32,6 +32,8 @@ fn main() -> ExitCode {
         ("AV-06", scenarios::run_av06),
         ("AV-07", scenarios::run_av07),
         ("AV-08", scenarios::run_av08),
+        ("AV-12", scenarios::run_av12),
+        ("AV-13", scenarios::run_av13),
     ];
 
     let mut passed = 0;
