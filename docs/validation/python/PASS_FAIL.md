@@ -1,6 +1,6 @@
 # Python — PASS/FAIL Summary
 
-**Date:** 2026-08-17
+**Date:** 2026-08-19 (results.md refreshed this date — see its "Doc/behavior drift found and fixed" section)
 **Version:** machine-config-library 0.2.0-rc.4
 **Result:** 20 / 20 PASS
 
