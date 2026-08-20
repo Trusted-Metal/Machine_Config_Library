@@ -39,7 +39,14 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          # "." not "rust": the real workspace root (and its Cargo.lock) is
+          # the repo root (Cargo.toml's [workspace] members = ["rust"]),
+          # not the rust/ member directory — pointing this at "rust" hashed
+          # a stale, unused duplicate lockfile for the cache key instead of
+          # the one Cargo actually resolves against. Target dir is
+          # overridden explicitly since .cargo/config.toml redirects it to
+          # rust/target (kept there for CI/tools/cross_check.py paths).
+          workspaces: ". -> rust/target"
 
       - name: Run unit and integration tests
         run: cargo test
