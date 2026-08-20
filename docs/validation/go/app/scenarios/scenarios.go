@@ -9,9 +9,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	mc "machine-config-go"
+	"machine-config-go/capabilities"
 )
 
 // S-01: Read reference fixture, all scalar fields
@@ -136,9 +138,12 @@ func RunS04WriteModify(fixturesDir, _ string) (bool, string) {
 //
 // ID:       S-05
 // Action:   Read (with binary) -> write to temp -> read temp -> compare
-//           SHA-256 of correction_data / inverse_correction_data.
+//
+//	SHA-256 of correction_data / inverse_correction_data.
+//
 // Rationale: silent precision loss in binary data is undetectable without a
-//           hash comparison.
+//
+//	hash comparison.
 func RunS05BinaryRoundtrip(fixturesDir, _ string) (bool, string) {
 	path := filepath.Join(fixturesDir, "reference_config.h5")
 	reader := mc.NewReader(path)
@@ -196,7 +201,8 @@ func RunS05BinaryRoundtrip(fixturesDir, _ string) (bool, string) {
 // ID:       S-06
 // Action:   Build a 2-laser config -> verify fields -> save to temp -> re-read.
 // Expected: 2 trains, rotations 0/180, machine_name non-empty,
-//           correction_data centre cell ~2.0 (Gaussian peak), roundtrip OK.
+//
+//	correction_data centre cell ~2.0 (Gaussian peak), roundtrip OK.
 func RunS06Builder(_, _ string) (bool, string) {
 	cfg := mc.NewMockConfigBuilder().Build()
 
@@ -253,7 +259,8 @@ func RunS06Builder(_, _ string) (bool, string) {
 //
 // ID:       S-07
 // Action:   Read reference_config_opcua.h5, verify OPCUA present, write ->
-//           re-read, verify server_url survives.
+//
+//	re-read, verify server_url survives.
 func RunS07Opcua(fixturesDir, _ string) (bool, string) {
 	path := filepath.Join(fixturesDir, "reference_config_opcua.h5")
 	cfg, err := mc.NewReader(path).Parse()
@@ -264,6 +271,13 @@ func RunS07Opcua(fixturesDir, _ string) (bool, string) {
 		return false, "expected opcua client with non-empty server_url"
 	}
 	origURL := cfg.Opcua.Client.ServerURL
+	// Newly-promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — a
+	// representative subset, proving the low-level roundtrip works through
+	// the public Reader/Writer API too, not just in unit tests.
+	origMachineProfile := cfg.Opcua.Client.MachineProfile
+	origRootNode := cfg.Opcua.Client.RootNode
+	origPipeName := cfg.Opcua.Pipe.PipeName
+	origCeilingLayers := cfg.Opcua.TriggerStopCeilingLayers
 
 	tmpPath, err := tempH5("mcl_go_s07")
 	if err != nil {
@@ -282,7 +296,23 @@ func RunS07Opcua(fixturesDir, _ string) (bool, string) {
 		return false, "server_url changed after roundtrip"
 	}
 
-	return true, fmt.Sprintf("opcua server_url=%q preserved through roundtrip", origURL)
+	if !strPtrEqual(rb.Opcua.Client.MachineProfile, origMachineProfile) {
+		return false, "machine_profile changed after roundtrip"
+	}
+	if !strPtrEqual(rb.Opcua.Client.RootNode, origRootNode) {
+		return false, "root_node changed after roundtrip"
+	}
+	if !strPtrEqual(rb.Opcua.Pipe.PipeName, origPipeName) {
+		return false, "pipe_name changed after roundtrip"
+	}
+	if !intPtrEqual(rb.Opcua.TriggerStopCeilingLayers, origCeilingLayers) {
+		return false, "trigger_stop_ceiling_layers changed after roundtrip"
+	}
+
+	return true, fmt.Sprintf(
+		"opcua server_url=%q machine_profile=%v preserved through roundtrip",
+		origURL, strPtrOrNil(origMachineProfile),
+	)
 }
 
 // S-08: Drastic field change to real file, verify adapter pipeline integrity
@@ -290,12 +320,14 @@ func RunS07Opcua(fixturesDir, _ string) (bool, string) {
 // ID:           S-08
 // Precondition: Reference Materials/machine_config_TM_LPBF_02__AconityMIDI__OG_1783607045113 (1).h5
 // Action:       1. Add a third optical train (clone train 1, change train_id)
-//               2. Change build_plate_x from 250.0 to 350.0
-//               3. Set scan_head_rotation on new train to 90.0
-//               4. Clear all correction data on the new train (clearbox = nil)
-//               5. Change machine_name to "MODIFIED_ACONITY_VALIDATION"
+//  2. Change build_plate_x from 250.0 to 350.0
+//  3. Set scan_head_rotation on new train to 90.0
+//  4. Clear all correction data on the new train (clearbox = nil)
+//  5. Change machine_name to "MODIFIED_ACONITY_VALIDATION"
+//
 // Expected:     All five changes persist after write -> read; file_version
-//               unchanged at "1.0".
+//
+//	unchanged at "1.0".
 func RunS08DrasticChange(_ string, realDir string) (bool, string) {
 	path, err := findRealFixture(realDir)
 	if err != nil {
@@ -358,10 +390,13 @@ func RunS08DrasticChange(_ string, realDir string) (bool, string) {
 // ID:        S-09
 // Title:     Verify all public model types are importable from the module root
 // Action:    Reference every consumer-facing type directly via the "machine-config-go"
-//            import (no machine-config-go/internal/... path) and prove each is
-//            usable, not just nameable.
+//
+//	import (no machine-config-go/internal/... path) and prove each is
+//	usable, not just nameable.
+//
 // Rationale: If a consumer must import from an internal path, the library's
-//            public API surface is incomplete. See VALIDATION_PLAN.md §8.
+//
+//	public API surface is incomplete. See VALIDATION_PLAN.md §8.
 //
 // BuildPlate is type-annotated only, not constructed: it's a real, exported,
 // aliased type but nothing in go/ ever builds one today (Machine carries flat
@@ -566,4 +601,73 @@ func RunAv08VersionFidelity(fixturesDir, _ string) (bool, string) {
 	}
 
 	return true, fmt.Sprintf("File_Version survives roundtrip unchanged: %q", rbVersion)
+}
+
+// AV-12: capabilities facade GetOpcua() returns no error with the newly-
+// promoted typed fields readable, when every required field is present.
+//
+// Nothing before this scenario exercised the capabilities facade at all —
+// S-07 above only goes through the plain Reader/Writer. See
+// OPCUA_FIELD_PROMOTION_PLAN.md's "Validation-app coverage" section for why
+// this is a real public-API guarantee, not just a unit-test concern.
+func RunAv12OpcuaFacadeOk(fixturesDir, _ string) (bool, string) {
+	path := filepath.Join(fixturesDir, "reference_config_opcua.h5")
+	f, err := capabilities.OpenMachineConfig(path)
+	if err != nil {
+		return false, fmt.Sprintf("OpenMachineConfig failed: %v", err)
+	}
+	defer f.Close()
+
+	opc, capErr := f.GetOpcua()
+	if capErr != nil {
+		return false, fmt.Sprintf("GetOpcua failed on fully-populated fixture: %v", capErr)
+	}
+
+	return true, fmt.Sprintf(
+		"GetOpcua Ok: machine_profile=%v root_node=%v pipe_name=%v triggers_enabled=%v trigger_stop_ceiling_layers=%v",
+		strPtrOrNil(opc.Client.MachineProfile), strPtrOrNil(opc.Client.RootNode),
+		strPtrOrNil(opc.Pipe.PipeName), boolPtrOrNil(opc.TriggersEnabled), intPtrOrNil(opc.TriggerStopCeilingLayers),
+	)
+}
+
+// AV-13: capabilities facade GetOpcua() returns an ErrValidation error with
+// Details naming exactly the seven missing required fields, when OPCUA is
+// present but incomplete.
+func RunAv13OpcuaFacadeValidation(fixturesDir, _ string) (bool, string) {
+	fixture := avFixture(fixturesDir, "opcua_missing_required.h5")
+	f, err := capabilities.OpenMachineConfig(fixture)
+	if err != nil {
+		return false, fmt.Sprintf("OpenMachineConfig failed: %v", err)
+	}
+	defer f.Close()
+
+	_, capErr := f.GetOpcua()
+	if capErr == nil {
+		return false, "GetOpcua returned no error on a fixture missing required fields"
+	}
+	if capErr.Code != capabilities.ErrValidation {
+		return false, fmt.Sprintf("wrong error code: %q", capErr.Code)
+	}
+
+	expected := map[string]bool{
+		"Machine_Profile":                true,
+		"Root_Node":                      true,
+		"Configure_Client":               true,
+		"Pipe_Name":                      true,
+		"Triggers_Enabled":               true,
+		"Trigger_Stop_Ceiling_Layers":    true,
+		"Laser Emission Interlock.Event": true,
+	}
+	if len(capErr.Details) != len(expected) {
+		return false, fmt.Sprintf("details = %v, want exactly %d items", capErr.Details, len(expected))
+	}
+	for _, d := range capErr.Details {
+		if !expected[d] {
+			return false, fmt.Sprintf("unexpected detail %q in %v", d, capErr.Details)
+		}
+	}
+
+	sorted := append([]string{}, capErr.Details...)
+	sort.Strings(sorted)
+	return true, fmt.Sprintf("ValidationError with details=%v", sorted)
 }

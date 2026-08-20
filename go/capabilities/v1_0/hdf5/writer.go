@@ -866,6 +866,36 @@ func writeOpcua(g *h5c.Group, opcua *OpcuaConfig) error {
 	if err := clientGrp.WriteInt64Attr("Session_Timeout", int64(c.SessionTimeout)); err != nil {
 		return err
 	}
+	if err := wi(clientGrp, "Keep_Alive_Count", c.KeepAliveCount); err != nil {
+		return err
+	}
+	if err := wi(clientGrp, "Lifetime_Count", c.LifetimeCount); err != nil {
+		return err
+	}
+	if err := ws(clientGrp, "Machine_Profile", strOrEmpty(c.MachineProfile)); err != nil {
+		return err
+	}
+	if err := ws(clientGrp, "Queue_Policy", strOrEmpty(c.QueuePolicy)); err != nil {
+		return err
+	}
+	if err := wi(clientGrp, "Queue_Size_Data_Change", c.QueueSizeDataChange); err != nil {
+		return err
+	}
+	if err := wi(clientGrp, "Queue_Size_Events", c.QueueSizeEvents); err != nil {
+		return err
+	}
+	if err := wi(clientGrp, "Reconnect_Interval", c.ReconnectInterval); err != nil {
+		return err
+	}
+	if err := ws(clientGrp, "Root_Node", strOrEmpty(c.RootNode)); err != nil {
+		return err
+	}
+	if err := wi(clientGrp, "Sync_Loop_Interval_Initial", c.SyncLoopIntervalInitial); err != nil {
+		return err
+	}
+	if err := wi(clientGrp, "Sync_Loop_Interval_Settled", c.SyncLoopIntervalSettled); err != nil {
+		return err
+	}
 	for k, v := range c.Extra {
 		if err := writeExtra(clientGrp, k, v); err != nil {
 			return err
@@ -886,6 +916,24 @@ func writeOpcua(g *h5c.Group, opcua *OpcuaConfig) error {
 		return err
 	}
 	if err := pipeGrp.WriteInt64Attr("Buffer_Size", int64(p.BufferSize)); err != nil {
+		return err
+	}
+	if err := wb(pipeGrp, "Configure_Client", p.ConfigureClient); err != nil {
+		return err
+	}
+	if err := wi(pipeGrp, "Inbound_Rate_Limit", p.InboundRateLimit); err != nil {
+		return err
+	}
+	if err := wi(pipeGrp, "Max_Inbound_Message_Size", p.MaxInboundMessageSize); err != nil {
+		return err
+	}
+	if err := ws(pipeGrp, "Min_Integrity_Level", strOrEmpty(p.MinIntegrityLevel)); err != nil {
+		return err
+	}
+	if err := ws(pipeGrp, "Pipe_Name", strOrEmpty(p.PipeName)); err != nil {
+		return err
+	}
+	if err := ws(pipeGrp, "User_Access_Level", strOrEmpty(p.UserAccessLevel)); err != nil {
 		return err
 	}
 	for k, v := range p.Extra {
@@ -909,6 +957,9 @@ func writeOpcua(g *h5c.Group, opcua *OpcuaConfig) error {
 		if err := triggersGrp.WriteFloat64Attr("Triggers_Enabled", te); err != nil {
 			return err
 		}
+	}
+	if err := wi(triggersGrp, "Trigger_Stop_Ceiling_Layers", opcua.TriggerStopCeilingLayers); err != nil {
+		return err
 	}
 
 	for name, trigger := range opcua.Triggers {
@@ -937,6 +988,30 @@ func writeOpcua(g *h5c.Group, opcua *OpcuaConfig) error {
 			return err
 		}
 		if err := ws(tGrp, "Stop_Value", strOrEmpty(trigger.StopValue)); err != nil {
+			tGrp.Close()
+			return err
+		}
+		if err := ws(tGrp, "Case_Sensitivity", strOrEmpty(trigger.CaseSensitivity)); err != nil {
+			tGrp.Close()
+			return err
+		}
+		if err := ws(tGrp, "Component", strOrEmpty(trigger.Component)); err != nil {
+			tGrp.Close()
+			return err
+		}
+		if err := wi(tGrp, "Cooldown_Period", trigger.CooldownPeriod); err != nil {
+			tGrp.Close()
+			return err
+		}
+		if err := ws(tGrp, "Event", strOrEmpty(trigger.Event)); err != nil {
+			tGrp.Close()
+			return err
+		}
+		if err := wi(tGrp, "Max_Fires_Per_Job", trigger.MaxFiresPerJob); err != nil {
+			tGrp.Close()
+			return err
+		}
+		if err := ws(tGrp, "Trigger_Label", strOrEmpty(trigger.TriggerLabel)); err != nil {
 			tGrp.Close()
 			return err
 		}

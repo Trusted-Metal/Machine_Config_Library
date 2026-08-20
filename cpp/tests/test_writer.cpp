@@ -170,7 +170,66 @@ TEST_CASE("RoundtripWithOpcua") {
     REQUIRE(rbT.start_value  == origT.start_value);
     REQUIRE(rbT.stop_value   == origT.stop_value);
 
+    // Promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — all 22
+    // promoted fields survive a real write→read cycle, not just parsing.
+    const auto& origC = orig.opcua->client;
+    const auto& rbC   = rb.opcua->client;
+    REQUIRE(rbC.keep_alive_count           == origC.keep_alive_count);
+    REQUIRE(rbC.lifetime_count             == origC.lifetime_count);
+    REQUIRE(rbC.machine_profile            == origC.machine_profile);
+    REQUIRE(rbC.queue_policy               == origC.queue_policy);
+    REQUIRE(rbC.queue_size_data_change     == origC.queue_size_data_change);
+    REQUIRE(rbC.queue_size_events          == origC.queue_size_events);
+    REQUIRE(rbC.reconnect_interval         == origC.reconnect_interval);
+    REQUIRE(rbC.root_node                  == origC.root_node);
+    REQUIRE(rbC.sync_loop_interval_initial == origC.sync_loop_interval_initial);
+    REQUIRE(rbC.sync_loop_interval_settled == origC.sync_loop_interval_settled);
+
+    const auto& origP = orig.opcua->pipe;
+    const auto& rbP   = rb.opcua->pipe;
+    REQUIRE(rbP.configure_client         == origP.configure_client);
+    REQUIRE(rbP.inbound_rate_limit       == origP.inbound_rate_limit);
+    REQUIRE(rbP.max_inbound_message_size == origP.max_inbound_message_size);
+    REQUIRE(rbP.min_integrity_level      == origP.min_integrity_level);
+    REQUIRE(rbP.pipe_name                == origP.pipe_name);
+    REQUIRE(rbP.user_access_level        == origP.user_access_level);
+
+    REQUIRE(rb.opcua->trigger_stop_ceiling_layers == orig.opcua->trigger_stop_ceiling_layers);
+    REQUIRE(orig.opcua->trigger_stop_ceiling_layers == std::optional<std::int64_t>{3});
+
+    REQUIRE(rbT.case_sensitivity  == origT.case_sensitivity);
+    REQUIRE(rbT.component         == origT.component);
+    REQUIRE(rbT.cooldown_period   == origT.cooldown_period);
+    REQUIRE(rbT.event             == origT.event);
+    REQUIRE(rbT.max_fires_per_job == origT.max_fires_per_job);
+    REQUIRE(rbT.trigger_label     == origT.trigger_label);
+
     std::filesystem::remove(out);
+}
+
+// ---------------------------------------------------------------------------
+// RoundtripTriggerStopCeilingLayersNilAndSome
+// The one field with no `extra` bucket to fall back on if the write/read
+// pairing were mismatched — both the real value (3) and the nullopt case.
+// ---------------------------------------------------------------------------
+TEST_CASE("RoundtripTriggerStopCeilingLayersNilAndSome") {
+    MachineConfigReader src{OPCUA_REF};
+    auto cfg = src.parse();
+
+    auto outSome = tmpPath("ceiling_some");
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(outSome));
+    MachineConfigReader backSome{outSome};
+    auto rtSome = backSome.parse();
+    REQUIRE(rtSome.opcua->trigger_stop_ceiling_layers == std::optional<std::int64_t>{3});
+    std::filesystem::remove(outSome);
+
+    cfg.opcua->trigger_stop_ceiling_layers = std::nullopt;
+    auto outNone = tmpPath("ceiling_none");
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(outNone));
+    MachineConfigReader backNone{outNone};
+    auto rtNone = backNone.parse();
+    REQUIRE_FALSE(rtNone.opcua->trigger_stop_ceiling_layers.has_value());
+    std::filesystem::remove(outNone);
 }
 
 // ---------------------------------------------------------------------------

@@ -76,6 +76,46 @@ func fmtF64Ptr(p *float64) string {
 	return fmt.Sprintf("%v", *p)
 }
 
+// strPtrEqual compares two *string by value, treating nil == nil.
+func strPtrEqual(a, b *string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
+}
+
+// intPtrEqual compares two *int by value, treating nil == nil.
+func intPtrEqual(a, b *int) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
+}
+
+// strPtrOrNil renders a *string for diagnostic messages (nil-safe).
+func strPtrOrNil(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return *p
+}
+
+// intPtrOrNil renders a *int for diagnostic messages (nil-safe).
+func intPtrOrNil(p *int) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%d", *p)
+}
+
+// boolPtrOrNil renders a *bool for diagnostic messages (nil-safe).
+func boolPtrOrNil(p *bool) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%v", *p)
+}
+
 // tempH5 creates an empty temp file with a .h5 suffix and returns its path.
 // The caller is responsible for removing it.
 func tempH5(prefix string) (string, error) {

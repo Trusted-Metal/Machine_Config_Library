@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -17,6 +19,16 @@ struct Result {
     bool passed;
     std::string detail;
 };
+
+// "nil" for an unset optional, else its value — for display in scenario
+// detail strings (matches Go's strPtrOrNil/intPtrOrNil/boolPtrOrNil).
+template <typename T>
+inline std::string optOrNil(const std::optional<T>& v) {
+    if (!v) return "nil";
+    std::ostringstream oss;
+    oss << std::boolalpha << *v;
+    return oss.str();
+}
 
 // Bitwise (NaN-aware) equality for correction-grid data — mirrors Rust's/
 // Node's helper. Plain == on doubles would treat any NaN as unequal to

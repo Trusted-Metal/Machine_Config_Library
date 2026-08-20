@@ -22,6 +22,6 @@ const (
 
 type Error = api.Error
 
-func errf(code ErrorCode, msg string) *Error {
-	return api.Errf(code, msg)
+func errf(code ErrorCode, msg string, details ...string) *Error {
+	return api.Errf(code, msg, details...)
 }

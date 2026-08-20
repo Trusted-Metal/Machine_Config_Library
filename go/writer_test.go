@@ -238,6 +238,115 @@ func TestWriterRoundtripOPCUA(t *testing.T) {
 	if (tr.StopValue == nil) != (to.StopValue == nil) || (to.StopValue != nil && *tr.StopValue != *to.StopValue) {
 		t.Errorf("%q stop_value: got %v want %v", key, tr.StopValue, to.StopValue)
 	}
+
+	// Promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — all 22
+	// promoted fields survive a real write→read cycle, not just parsing.
+	oc, rc := oo.Client, or_.Client
+	if (rc.KeepAliveCount == nil) != (oc.KeepAliveCount == nil) || (oc.KeepAliveCount != nil && *rc.KeepAliveCount != *oc.KeepAliveCount) {
+		t.Errorf("client.keep_alive_count: got %v want %v", rc.KeepAliveCount, oc.KeepAliveCount)
+	}
+	if (rc.LifetimeCount == nil) != (oc.LifetimeCount == nil) || (oc.LifetimeCount != nil && *rc.LifetimeCount != *oc.LifetimeCount) {
+		t.Errorf("client.lifetime_count: got %v want %v", rc.LifetimeCount, oc.LifetimeCount)
+	}
+	if (rc.MachineProfile == nil) != (oc.MachineProfile == nil) || (oc.MachineProfile != nil && *rc.MachineProfile != *oc.MachineProfile) {
+		t.Errorf("client.machine_profile: got %v want %v", rc.MachineProfile, oc.MachineProfile)
+	}
+	if (rc.QueuePolicy == nil) != (oc.QueuePolicy == nil) || (oc.QueuePolicy != nil && *rc.QueuePolicy != *oc.QueuePolicy) {
+		t.Errorf("client.queue_policy: got %v want %v", rc.QueuePolicy, oc.QueuePolicy)
+	}
+	if (rc.QueueSizeDataChange == nil) != (oc.QueueSizeDataChange == nil) || (oc.QueueSizeDataChange != nil && *rc.QueueSizeDataChange != *oc.QueueSizeDataChange) {
+		t.Errorf("client.queue_size_data_change: got %v want %v", rc.QueueSizeDataChange, oc.QueueSizeDataChange)
+	}
+	if (rc.QueueSizeEvents == nil) != (oc.QueueSizeEvents == nil) || (oc.QueueSizeEvents != nil && *rc.QueueSizeEvents != *oc.QueueSizeEvents) {
+		t.Errorf("client.queue_size_events: got %v want %v", rc.QueueSizeEvents, oc.QueueSizeEvents)
+	}
+	if (rc.ReconnectInterval == nil) != (oc.ReconnectInterval == nil) || (oc.ReconnectInterval != nil && *rc.ReconnectInterval != *oc.ReconnectInterval) {
+		t.Errorf("client.reconnect_interval: got %v want %v", rc.ReconnectInterval, oc.ReconnectInterval)
+	}
+	if (rc.RootNode == nil) != (oc.RootNode == nil) || (oc.RootNode != nil && *rc.RootNode != *oc.RootNode) {
+		t.Errorf("client.root_node: got %v want %v", rc.RootNode, oc.RootNode)
+	}
+	if (rc.SyncLoopIntervalInitial == nil) != (oc.SyncLoopIntervalInitial == nil) || (oc.SyncLoopIntervalInitial != nil && *rc.SyncLoopIntervalInitial != *oc.SyncLoopIntervalInitial) {
+		t.Errorf("client.sync_loop_interval_initial: got %v want %v", rc.SyncLoopIntervalInitial, oc.SyncLoopIntervalInitial)
+	}
+	if (rc.SyncLoopIntervalSettled == nil) != (oc.SyncLoopIntervalSettled == nil) || (oc.SyncLoopIntervalSettled != nil && *rc.SyncLoopIntervalSettled != *oc.SyncLoopIntervalSettled) {
+		t.Errorf("client.sync_loop_interval_settled: got %v want %v", rc.SyncLoopIntervalSettled, oc.SyncLoopIntervalSettled)
+	}
+
+	op, rp := oo.Pipe, or_.Pipe
+	if (rp.ConfigureClient == nil) != (op.ConfigureClient == nil) || (op.ConfigureClient != nil && *rp.ConfigureClient != *op.ConfigureClient) {
+		t.Errorf("pipe.configure_client: got %v want %v", rp.ConfigureClient, op.ConfigureClient)
+	}
+	if (rp.InboundRateLimit == nil) != (op.InboundRateLimit == nil) || (op.InboundRateLimit != nil && *rp.InboundRateLimit != *op.InboundRateLimit) {
+		t.Errorf("pipe.inbound_rate_limit: got %v want %v", rp.InboundRateLimit, op.InboundRateLimit)
+	}
+	if (rp.MaxInboundMessageSize == nil) != (op.MaxInboundMessageSize == nil) || (op.MaxInboundMessageSize != nil && *rp.MaxInboundMessageSize != *op.MaxInboundMessageSize) {
+		t.Errorf("pipe.max_inbound_message_size: got %v want %v", rp.MaxInboundMessageSize, op.MaxInboundMessageSize)
+	}
+	if (rp.MinIntegrityLevel == nil) != (op.MinIntegrityLevel == nil) || (op.MinIntegrityLevel != nil && *rp.MinIntegrityLevel != *op.MinIntegrityLevel) {
+		t.Errorf("pipe.min_integrity_level: got %v want %v", rp.MinIntegrityLevel, op.MinIntegrityLevel)
+	}
+	if (rp.PipeName == nil) != (op.PipeName == nil) || (op.PipeName != nil && *rp.PipeName != *op.PipeName) {
+		t.Errorf("pipe.pipe_name: got %v want %v", rp.PipeName, op.PipeName)
+	}
+	if (rp.UserAccessLevel == nil) != (op.UserAccessLevel == nil) || (op.UserAccessLevel != nil && *rp.UserAccessLevel != *op.UserAccessLevel) {
+		t.Errorf("pipe.user_access_level: got %v want %v", rp.UserAccessLevel, op.UserAccessLevel)
+	}
+
+	if (or_.TriggerStopCeilingLayers == nil) != (oo.TriggerStopCeilingLayers == nil) || (oo.TriggerStopCeilingLayers != nil && *or_.TriggerStopCeilingLayers != *oo.TriggerStopCeilingLayers) {
+		t.Errorf("trigger_stop_ceiling_layers: got %v want %v", or_.TriggerStopCeilingLayers, oo.TriggerStopCeilingLayers)
+	}
+	if oo.TriggerStopCeilingLayers == nil || *oo.TriggerStopCeilingLayers != 3 {
+		t.Fatalf("trigger_stop_ceiling_layers expected 3, got %v", oo.TriggerStopCeilingLayers)
+	}
+
+	if (tr.CaseSensitivity == nil) != (to.CaseSensitivity == nil) || (to.CaseSensitivity != nil && *tr.CaseSensitivity != *to.CaseSensitivity) {
+		t.Errorf("%q case_sensitivity: got %v want %v", key, tr.CaseSensitivity, to.CaseSensitivity)
+	}
+	if (tr.Component == nil) != (to.Component == nil) || (to.Component != nil && *tr.Component != *to.Component) {
+		t.Errorf("%q component: got %v want %v", key, tr.Component, to.Component)
+	}
+	if (tr.CooldownPeriod == nil) != (to.CooldownPeriod == nil) || (to.CooldownPeriod != nil && *tr.CooldownPeriod != *to.CooldownPeriod) {
+		t.Errorf("%q cooldown_period: got %v want %v", key, tr.CooldownPeriod, to.CooldownPeriod)
+	}
+	if (tr.Event == nil) != (to.Event == nil) || (to.Event != nil && *tr.Event != *to.Event) {
+		t.Errorf("%q event: got %v want %v", key, tr.Event, to.Event)
+	}
+	if (tr.MaxFiresPerJob == nil) != (to.MaxFiresPerJob == nil) || (to.MaxFiresPerJob != nil && *tr.MaxFiresPerJob != *to.MaxFiresPerJob) {
+		t.Errorf("%q max_fires_per_job: got %v want %v", key, tr.MaxFiresPerJob, to.MaxFiresPerJob)
+	}
+	if (tr.TriggerLabel == nil) != (to.TriggerLabel == nil) || (to.TriggerLabel != nil && *tr.TriggerLabel != *to.TriggerLabel) {
+		t.Errorf("%q trigger_label: got %v want %v", key, tr.TriggerLabel, to.TriggerLabel)
+	}
+}
+
+// TestWriterRoundtripTriggerStopCeilingLayersNilAndSome covers the one field
+// with no Extra bucket to fall back on if the write/read pairing were
+// mismatched — both the real value (3) and the nil case.
+func TestWriterRoundtripTriggerStopCeilingLayersNilAndSome(t *testing.T) {
+	src := filepath.Join(fixturesDir(t), "reference_config_opcua.h5")
+
+	_, rtSome := roundtrip(t, src)
+	if rtSome.Opcua.TriggerStopCeilingLayers == nil || *rtSome.Opcua.TriggerStopCeilingLayers != 3 {
+		t.Fatalf("trigger_stop_ceiling_layers expected 3, got %v", rtSome.Opcua.TriggerStopCeilingLayers)
+	}
+
+	cfg, err := machineconfig.NewReader(src).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Opcua.TriggerStopCeilingLayers = nil
+	tmp := filepath.Join(t.TempDir(), "ceiling_nil.h5")
+	if err := machineconfig.NewWriter().Write(cfg, tmp); err != nil {
+		t.Fatal(err)
+	}
+	rtNil, err := machineconfig.NewReader(tmp).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rtNil.Opcua.TriggerStopCeilingLayers != nil {
+		t.Fatalf("trigger_stop_ceiling_layers expected nil, got %v", *rtNil.Opcua.TriggerStopCeilingLayers)
+	}
 }
 
 func TestWriterRejectsUnknownFileVersion(t *testing.T) {

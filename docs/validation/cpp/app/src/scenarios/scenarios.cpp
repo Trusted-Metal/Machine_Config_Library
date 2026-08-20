@@ -300,6 +300,13 @@ scenarios::Result run(const std::filesystem::path& fixturesDir, const std::files
         auto origTriggersEnabled = cfg.opcua->triggers_enabled;
         std::set<std::string> origNames;
         for (const auto& [name, trig] : cfg.opcua->triggers) origNames.insert(name);
+        // Newly-promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — a
+        // representative subset, proving the low-level roundtrip works through
+        // the public Reader/Writer API too, not just in unit tests.
+        auto origMachineProfile = cfg.opcua->client.machine_profile;
+        auto origRootNode = cfg.opcua->client.root_node;
+        auto origPipeName = cfg.opcua->pipe.pipe_name;
+        auto origCeilingLayers = cfg.opcua->trigger_stop_ceiling_layers;
 
         auto tmp = scenarios::makeTempPath(".h5");
         MachineConfigWriter{cfg}.write(tmp);
@@ -314,6 +321,18 @@ scenarios::Result run(const std::filesystem::path& fixturesDir, const std::files
         }
         if (rb.opcua->triggers_enabled != origTriggersEnabled) {
             return {false, "triggers_enabled changed"};
+        }
+        if (rb.opcua->client.machine_profile != origMachineProfile) {
+            return {false, "machine_profile changed after roundtrip"};
+        }
+        if (rb.opcua->client.root_node != origRootNode) {
+            return {false, "root_node changed after roundtrip"};
+        }
+        if (rb.opcua->pipe.pipe_name != origPipeName) {
+            return {false, "pipe_name changed after roundtrip"};
+        }
+        if (rb.opcua->trigger_stop_ceiling_layers != origCeilingLayers) {
+            return {false, "trigger_stop_ceiling_layers changed after roundtrip"};
         }
 
         std::set<std::string> rbNames;
@@ -637,3 +656,100 @@ scenarios::Result run(const std::filesystem::path& fixturesDir, const std::files
 }
 
 } // namespace av08
+
+// AV-12: capabilities facade getOpcua() returns no error with the newly-
+// promoted typed fields readable, when every required field is present.
+//
+// Nothing before this scenario exercised the capabilities facade at all —
+// S-07 above only goes through the plain Reader/Writer. See
+// OPCUA_FIELD_PROMOTION_PLAN.md's "Validation-app coverage" section for why
+// this is a real public-API guarantee, not just a unit-test concern.
+namespace av12 {
+
+using namespace machine_config;
+using namespace machine_config::capabilities;
+
+scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path&) {
+    // MachineConfigFileV1_0::open() directly, not openMachineConfig(): the
+    // version-agnostic IMachineConfigFile interface only exposes
+    // fileVersion()/opticalTrainCount()/save()/close() (generated.hpp) — the
+    // OPCUA facade lives on the concrete v1.0 type, same as every other
+    // per-component getter this app never routes through the dispatcher for.
+    auto path = fixturesDir / "reference_config_opcua.h5";
+    auto opened = MachineConfigFileV1_0::open(path);
+    if (!opened.ok()) {
+        return {false, "MachineConfigFileV1_0::open failed: " + opened.errorMessage()};
+    }
+    auto file = opened.value();
+
+    auto opc = file->getOpcua();
+    if (!opc.ok()) {
+        file->close();
+        return {false, "getOpcua failed on fully-populated fixture: " + opc.errorMessage()};
+    }
+    const auto& cfg = opc.value();
+    file->close();
+
+    return {true,
+            "getOpcua Ok: machine_profile=" + scenarios::optOrNil(cfg.client.machine_profile) +
+                " root_node=" + scenarios::optOrNil(cfg.client.root_node) +
+                " pipe_name=" + scenarios::optOrNil(cfg.pipe.pipe_name) +
+                " triggers_enabled=" + scenarios::optOrNil(cfg.triggers_enabled) +
+                " trigger_stop_ceiling_layers=" + scenarios::optOrNil(cfg.trigger_stop_ceiling_layers)};
+}
+
+} // namespace av12
+
+// AV-13: capabilities facade getOpcua() returns a ValidationError with
+// details naming exactly the seven missing required fields, when OPCUA is
+// present but incomplete.
+namespace av13 {
+
+using namespace machine_config;
+using namespace machine_config::capabilities;
+
+scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path&) {
+    // MachineConfigFileV1_0::open() directly — see av12's comment above.
+    auto fixture = scenarios::avFixture(fixturesDir, "opcua_missing_required.h5");
+    auto opened = MachineConfigFileV1_0::open(fixture);
+    if (!opened.ok()) {
+        return {false, "MachineConfigFileV1_0::open failed: " + opened.errorMessage()};
+    }
+    auto file = opened.value();
+
+    auto opc = file->getOpcua();
+    file->close();
+    if (opc.ok()) {
+        return {false, "getOpcua returned no error on a fixture missing required fields"};
+    }
+    if (opc.errorCode() != "ValidationError") {
+        return {false, "wrong error code: '" + opc.errorCode() + "'"};
+    }
+
+    std::set<std::string> expected = {
+        "Machine_Profile", "Root_Node", "Configure_Client", "Pipe_Name",
+        "Triggers_Enabled", "Trigger_Stop_Ceiling_Layers",
+        "Laser Emission Interlock.Event",
+    };
+    std::set<std::string> actual(opc.errorDetails().begin(), opc.errorDetails().end());
+    if (actual != expected) {
+        std::ostringstream oss;
+        oss << "details mismatch, got {";
+        for (const auto& d : opc.errorDetails()) oss << "'" << d << "', ";
+        oss << "}, want exactly " << expected.size() << " items";
+        return {false, oss.str()};
+    }
+
+    std::ostringstream oss;
+    oss << "ValidationError with details={";
+    bool first = true;
+    for (const auto& d : actual) {
+        if (!first) oss << ", ";
+        oss << "'" << d << "'";
+        first = false;
+    }
+    oss << "}";
+    return {true, oss.str()};
+}
+
+} // namespace av13

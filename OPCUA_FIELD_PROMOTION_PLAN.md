@@ -1,13 +1,13 @@
 # OPCUA Field Promotion + Required-Field Validation — Implementation Plan
 
-**Status:** Required/optional split confirmed (see "The 23 fields" table and "Required/optional
-list — confirmed" at the bottom). Phase 0's shared artifacts are done and verified (schema,
-reference fixture, `opcua_missing_required.h5` — see Phase 0 below). **Rust, Python, and Node.js
-are all fully done** — Phase 1, Phase 2, and validation-app coverage all complete and verified for
-each (Rust: 125/125 crate tests, 19/19 validation-app scenarios; Python: 321/321 tests, 22/22
-validation-app scenarios; Node.js: 169/169 tests, 22/22 validation-app scenarios). Go is next —
-Phase 1 → Phase 2 → validation-app coverage — then C++, each language completing all three steps
-before the next language starts.
+**Status: the entire 5-language rollout is complete.** Required/optional split confirmed (see
+"The 23 fields" table and "Required/optional list — confirmed" at the bottom). Phase 0's shared
+artifacts are done and verified (schema, reference fixture, `opcua_missing_required.h5` — see
+Phase 0 below). **Rust, Python, Node.js, Go, and C++ are all fully done** — Phase 1, Phase 2, and
+validation-app coverage all complete and verified for each (Rust: 125/125 crate tests, 19/19
+validation-app scenarios; Python: 321/321 tests, 22/22 validation-app scenarios; Node.js: 169/169
+tests, 22/22 validation-app scenarios; Go: 59/59 tests, 19/19 validation-app scenarios; C++:
+463/463 assertions across 87 test cases, 19/19 validation-app scenarios).
 
 **Note on cross-language CI during this rollout:** `tools/cross_check.py`'s Phase 2 (Read Parity)
 will show expected, temporary failures between whichever languages have completed their OPCUA
@@ -352,68 +352,105 @@ since nothing was broken), 0 failures. `reader.test.ts` and `writer.test.ts` ind
 passing before the full-suite run, along with a standalone smoke test of the built reader against
 the real fixture.
 
-### Node.js
+### Go
 
 **Status: done and verified, 2026-08-19.**
 
-- [x] `nodejs/src/capabilities/errors.ts` — added an optional `details?: string[]` field to the
-      `CapabilityError` interface, and a matching optional `details` parameter to the
-      `capabilityError(code, message, details?)` helper. Every existing call goes through that
-      helper (confirmed via grep — no call site constructs a `CapabilityError` object literal
-      directly outside `errors.ts` itself), so all pre-existing call sites needed zero changes.
-- [x] `nodejs/src/capabilities/v1_0/file.ts`'s `opcua()` — implemented the same 4-step mechanism
-      as Rust/Python: 6 single-instance checks (reading `this.data['opcua']` cast to the existing
-      `OpcuaModel` type for typed dot-access, the same dict-like-data architecture Python uses —
-      confirmed by reading `asJson()`/`this.data` directly rather than assuming), the per-trigger
-      `event` loop producing `` `${name}.Event` `` entries, and a combined-list `ValidationError`
-      with `details` populated only when non-empty. Missing-field names use the same on-disk HDF5
-      attribute spelling as Rust/Python. Renamed a local variable to `current` (not `model`) to
-      avoid shadowing the pre-existing `setModel(model, ...)` parameter name in the same method
-      scope. `setModel`-equivalent mutation was left untouched, matching the other languages'
-      scoping decision.
-- [x] **New tests**, all in `nodejs/tests/capabilities.test.ts` (the existing home of the
-      `'opcua NotPresent vs present'` test, extended alongside them; added a
-      `FIXTURE_OPCUA_MISSING_REQUIRED` path constant and imported `MachineConfigWriter`):
-  - [x] `'opcua() Ok when all required fields present on reference_opcua fixture'` — plus
-        spot-checks on two of the fields the check depends on.
-  - [x] `'opcua() reports all seven missing required fields at once'` — `details` (compared as a
-        `Set`, order-independent) equals exactly the seven expected items, including
-        `'Laser Emission Interlock.Event'` and explicitly **not** any `'Chamber Oxygen Level'`
-        entry.
-  - [x] `'opcua() never reports an optional field, even when genuinely absent'` — same
-        non-tautology fix applied as Rust/Python: `opcua_missing_required.h5` never removes any
-        optional field, so parsed it with the low-level `MachineConfigReader`, cleared
-        `keep_alive_count` in memory too, re-wrote it via `MachineConfigWriter` to a temp file
-        (cleaned up in a `finally` block, matching this file's existing `mkdtempSync`/`rmSync`
-        convention), and confirmed `details` still names exactly the same 7 items on the re-opened
-        facade — not 8.
+- [x] `go/internal/models/models.go` — added all 23 fields as pointer types (`*int`, `*string`,
+      `*bool`) to `OpcuaClientConfig`/`OpcuaPipeConfig`/`OpcuaTrigger`/`OpcuaConfig`.
+- [x] `go/capabilities/v1_0/hdf5/hdf5.go` — added `readStrAttr`/`readIntAttr`/`readBoolFromIntAttr`
+      calls per field in `parseOpcua`; added all 22 promoted names to the inline
+      `clientKnownKeys`/`pipeKnownKeys`/`triggerKnownKeys` maps; read
+      `Trigger_Stop_Ceiling_Layers` alongside `Triggers_Enabled`.
+- [x] `go/capabilities/v1_0/hdf5/writer.go` — added `ws`/`wi`/`wb` calls per field in
+      `writeOpcua` (via the existing `strOrEmpty` helper for the `*string` fields, since `ws`
+      takes a plain `string`, not a pointer — the same pattern already used for `ID`/`Signal`/
+      etc.), all existing helpers, no new ones added.
+- [x] **Confirmed no hidden third site** — Go's capabilities facade (`GetOpcua()` in
+      `capabilities/v1_0/file.go`) returns the typed `OpcuaConfig` struct directly via
+      `api.Snapshot()` (a deep-copy), the same shape as Rust/Node.js, not Python's hand-written
+      JSON-dict layer — confirmed by reading `file.go` directly rather than assuming architectural
+      parity with any one other language.
+- [x] **No existing breaking test found** — grepped `go/` for every promoted on-disk attribute
+      name and for `.Extra[` map lookups; no test constructs an `OpcuaTrigger`/etc. literal with a
+      soon-to-be-promoted key inside `Extra`, so none could have Python's failure mode. Ran the
+      three pre-existing OPCUA tests (`TestOpcuaAbsentAndPresent`, `TestOpcuaDetailedFields`,
+      `TestWriterRoundtripOPCUA`) before touching anything else to confirm.
+- [x] **New tests**, added to the existing homes in `go/reader_test.go` and `go/writer_test.go`:
+  - [x] Extended `TestOpcuaDetailedFields` with every one of the 22 promoted fields checked
+        against `reference_config_opcua.h5`'s real values (client, pipe, both triggers), each also
+        asserting `Extra` is empty.
+  - [x] `TestOpcuaMissingRequiredFixtureParsesGracefully` (new) — parses
+        `opcua_missing_required.h5` (via a new `validationFixturesDir(t)` helper alongside the
+        existing `fixturesDir(t)`) without error; all seven deliberately-removed fields read back
+        `nil`; the per-trigger `Event` asymmetry confirmed; a few untouched fields spot-checked.
+  - [x] Extended `TestWriterRoundtripOPCUA` with equality assertions on all 22 promoted fields
+        across a real write→read cycle.
+  - [x] `TestWriterRoundtripTriggerStopCeilingLayersNilAndSome` (new) — both the `3` case (real
+        fixture, via the existing `roundtrip(t, src)` helper) and the `nil` case (mutated in
+        memory, re-written, re-read) through a temp file.
 
-**Verification:** `npx tsc --noEmit` clean; `npm run build` clean, zero warnings. Full
-`npx vitest run`: **169 passed** (up from 166), 0 failures. `capabilities.test.ts` individually
-confirmed passing (11/11) before the full-suite run; a standalone smoke test against both fixtures
-(`reference_config_opcua.h5` → `ok: true`, `opcua_missing_required.h5` → `ok: false` naming
-exactly the seven expected fields) was also run directly against the built `dist/` output before
-the vitest pass.
-
-### Go
-
-- [ ] `go/internal/models/models.go` — add fields as pointer types (`*int`, `*string`, `*bool`).
-- [ ] `go/capabilities/v1_0/hdf5/hdf5.go` — add `readStrAttr`/`readIntAttr`/`readBoolFromIntAttr`
-      calls; add names to the inline `clientKnownKeys`/`pipeKnownKeys`/`triggerKnownKeys` maps in
-      `parseOpcua`; read `Trigger_Stop_Ceiling_Layers`.
-- [ ] `go/capabilities/v1_0/hdf5/writer.go` — add `ws`/`wi`/`wf`/`wb` calls.
-- [ ] No existing breaking test (confirmed).
-- [ ] **New tests** — same three categories.
+**Verification:** built and tested with `CGO_ENABLED=1` and MSYS2 MinGW64's `gcc`/`g++` on PATH
+(the same toolchain `go.yml`'s Windows CI leg uses for HDF5 bindings). `go build ./...` and
+`go vet ./...` both clean. Full `go test ./... -v -count=1`: **56 passed, 0 failed** across both
+packages (`machine-config-go` and `machine-config-go/capabilities`). The OPCUA-specific tests
+individually confirmed passing before the full-suite run.
 
 ### C++
 
-- [ ] `cpp/include/machine_config/models.hpp` — add fields as `std::optional<T>`.
-- [ ] `cpp/include/machine_config/capabilities/v1_0/hdf5.hpp` — add `readStr`/`readInt`/
-      `readBoolFromInt` calls; add names to the inline initializer-lists passed to
-      `collectExtra(...)`; read `Trigger_Stop_Ceiling_Layers`.
-- [ ] `cpp/include/machine_config/capabilities/v1_0/writer.hpp` — add `ws`/`wi`/`wf`/`wb` calls.
-- [ ] No existing breaking test (confirmed).
-- [ ] **New tests** — same three categories.
+**Status: done and verified, 2026-08-20.**
+
+- [x] `cpp/include/machine_config/models.hpp` — added all 23 fields as `std::optional<T>` to
+      `OpcuaClientConfig`/`OpcuaPipeConfig`/`OpcuaTrigger`/`OpcuaConfig`. Unlike Rust/Node.js's
+      compiler-enforced struct literals, C++ default-constructs missing members (`std::optional`
+      defaults to empty) — adding fields can never cause a compile error at any existing
+      construction site, so the "compiler catches every site" discipline used for those two
+      languages doesn't apply here; every site had to be found manually (see below).
+- [x] **Found a hidden third site, exactly like Python's** — `models.hpp` also hand-writes
+      `to_json`/`from_json` overloads for all four OPCUA structs (nlohmann::json's ADL-based
+      serialization, not an auto-derive), analogous to Python's `_opcua_to_dict`/`_opcua_from_dict`.
+      Found by grepping for `to_json(nlohmann::json&, const Opcua` up front, the same discipline
+      that caught Python's and Rust's respective surprises, rather than trusting the plan's
+      three-file list as exhaustive. Updated all 8 functions (`to_json`/`from_json` × 4 structs)
+      with all 23 fields, using the existing `detail::opt_to_j`/`detail::j_to_opt<T>` templates —
+      already generic over any `T`, so no new serialization helpers were needed. Followed the
+      pre-existing alphabetical key ordering convention within each `to_json`'s initializer list.
+- [x] `cpp/include/machine_config/capabilities/v1_0/hdf5.hpp` — added `readStr`/`readInt`/
+      `readBoolFromInt` calls per field in `parseOpcua`; added all 22 promoted names to the inline
+      initializer-lists passed to `collectExtra(...)`; read `Trigger_Stop_Ceiling_Layers`
+      alongside `Triggers_Enabled`.
+- [x] `cpp/include/machine_config/capabilities/v1_0/writer.hpp` — added `ws`/`wi`/`wb` calls per
+      field in `writeOpcua`, all existing helpers, no new ones added.
+- [x] **No existing breaking test found** — grepped `cpp/tests/` for every promoted on-disk
+      attribute name and for `.extra` lookups referencing them; the one test that hand-builds an
+      `OpcuaConfig`/`OpcuaTrigger` in memory (`RoundtripOpcuaFromScratch`) does so via field
+      assignment, not an aggregate literal, and never touches `extra` for a soon-to-be-promoted
+      key, so it couldn't have Python's failure mode. Ran the 12 pre-existing OPCUA-related test
+      cases before touching anything else to confirm.
+- [x] **New tests**, added to `cpp/tests/test_reader.cpp` and `cpp/tests/test_writer.cpp` (the
+      existing homes of the OPCUA test cases, extended alongside them):
+  - [x] `OpcuaPromotedFieldsHaveRealValues` (new, in `test_reader.cpp`) — every one of the 22
+        promoted fields checked against `reference_config_opcua.h5`'s real values (client, pipe,
+        both triggers), each also asserting `extra` is empty.
+  - [x] `OpcuaMissingRequiredFixtureParsesGracefully` (new, in `test_reader.cpp`) — parses
+        `opcua_missing_required.h5` without error; all seven deliberately-removed fields read
+        back `nullopt`; the per-trigger `event` asymmetry confirmed; a few untouched fields
+        spot-checked. Required adding a new `VALIDATION_FIXTURES_DIR` compile definition to
+        `cpp/tests/CMakeLists.txt` (mirroring the existing `FIXTURES_DIR`/`SCHEMA_DIR`) since
+        `cpp/tests/` had never before reached outside `fixtures/`/`schema/` into
+        `docs/validation/fixtures/` — every other language already had this path available via
+        their own test-fixture conventions.
+  - [x] Extended `RoundtripWithOpcua` with equality assertions on all 22 promoted fields across a
+        real write→read cycle.
+  - [x] `RoundtripTriggerStopCeilingLayersNilAndSome` (new, in `test_writer.cpp`) — both the `3`
+        case (real fixture) and the `nullopt` case (mutated in memory, re-written, re-read)
+        through a temp file.
+
+**Verification:** reconfigured CMake (`cmake -S cpp -B cpp/build`, required for the new
+`VALIDATION_FIXTURES_DIR` definition to take effect) and rebuilt with MSVC 19.43
+(`cmake --build cpp/build --config Debug --target machine_config_tests`), clean. Full test binary
+run: **425 assertions in 82 test cases, 0 failures**. The 15 OPCUA-related test cases (135
+assertions) individually confirmed passing before the full-suite run.
 
 ---
 
@@ -533,6 +570,183 @@ warnings. All 3 new OPCUA-facade tests plus the pre-existing `test_opcua_not_pre
 individually confirmed passing before the full-suite run; a standalone smoke test against both
 fixtures (`reference_config_opcua.h5` → `Ok`, `opcua_missing_required.h5` → `Err` naming exactly
 the seven expected fields) was also run directly before the pytest pass.
+
+*(Node.js's Phase 2 section was originally drafted here but misfiled under Phase 1 above during
+that pass — moved to its correct place after this section, in language-completion order:
+Rust → Python → Node.js → Go.)*
+
+### Node.js
+
+**Status: done and verified, 2026-08-19.**
+
+- [x] `nodejs/src/capabilities/errors.ts` — added an optional `details?: string[]` field to the
+      `CapabilityError` interface, and a matching optional `details` parameter to the
+      `capabilityError(code, message, details?)` helper. Every existing call goes through that
+      helper (confirmed via grep — no call site constructs a `CapabilityError` object literal
+      directly outside `errors.ts` itself), so all pre-existing call sites needed zero changes.
+- [x] `nodejs/src/capabilities/v1_0/file.ts`'s `opcua()` — implemented the same 4-step mechanism
+      as Rust/Python: 6 single-instance checks (reading `this.data['opcua']` cast to the existing
+      `OpcuaModel` type for typed dot-access, the same dict-like-data architecture Python uses —
+      confirmed by reading `asJson()`/`this.data` directly rather than assuming), the per-trigger
+      `event` loop producing `` `${name}.Event` `` entries, and a combined-list `ValidationError`
+      with `details` populated only when non-empty. Missing-field names use the same on-disk HDF5
+      attribute spelling as Rust/Python. Renamed a local variable to `current` (not `model`) to
+      avoid shadowing the pre-existing `setModel(model, ...)` parameter name in the same method
+      scope. `setModel`-equivalent mutation was left untouched, matching the other languages'
+      scoping decision.
+- [x] **New tests**, all in `nodejs/tests/capabilities.test.ts` (the existing home of the
+      `'opcua NotPresent vs present'` test, extended alongside them; added a
+      `FIXTURE_OPCUA_MISSING_REQUIRED` path constant and imported `MachineConfigWriter`):
+  - [x] `'opcua() Ok when all required fields present on reference_opcua fixture'` — plus
+        spot-checks on two of the fields the check depends on.
+  - [x] `'opcua() reports all seven missing required fields at once'` — `details` (compared as a
+        `Set`, order-independent) equals exactly the seven expected items, including
+        `'Laser Emission Interlock.Event'` and explicitly **not** any `'Chamber Oxygen Level'`
+        entry.
+  - [x] `'opcua() never reports an optional field, even when genuinely absent'` — same
+        non-tautology fix applied as Rust/Python: `opcua_missing_required.h5` never removes any
+        optional field, so parsed it with the low-level `MachineConfigReader`, cleared
+        `keep_alive_count` in memory too, re-wrote it via `MachineConfigWriter` to a temp file
+        (cleaned up in a `finally` block, matching this file's existing `mkdtempSync`/`rmSync`
+        convention), and confirmed `details` still names exactly the same 7 items on the re-opened
+        facade — not 8.
+
+**Verification:** `npx tsc --noEmit` clean; `npm run build` clean, zero warnings. Full
+`npx vitest run`: **169 passed** (up from 166), 0 failures. `capabilities.test.ts` individually
+confirmed passing (11/11) before the full-suite run; a standalone smoke test against both fixtures
+(`reference_config_opcua.h5` → `ok: true`, `opcua_missing_required.h5` → `ok: false` naming
+exactly the seven expected fields) was also run directly against the built `dist/` output before
+the vitest pass.
+
+### Go
+
+**Status: done and verified, 2026-08-20.**
+
+- [x] `go/capabilities/internal/api/api.go` — added a `Details []string` field to the `Error`
+      struct, and changed `Errf(code, msg)` to `Errf(code ErrorCode, msg string, details ...string)`
+      — a variadic third parameter, since Go has no default-argument syntax. Every pre-existing
+      2-argument call site (confirmed via grep across `go/capabilities/`) keeps compiling unchanged;
+      variadic with zero args yields a `nil` `Details` slice. `go/capabilities/types.go`'s local
+      `errf` wrapper updated to match and forward the variadic.
+- [x] `go/capabilities/v1_0/file.go`'s `GetOpcua()` — implemented the same 4-step mechanism as the
+      other languages: reads `f.config.Opcua` directly (the typed struct, same architecture as
+      Rust/Node.js — confirmed by reading `file.go` directly, not assumed), 6 single-instance
+      checks, a `for name, trigger := range opcua.Triggers` loop producing `name+".Event"` entries,
+      and a combined-list `ErrValidation` built via `api.Errf(api.ErrValidation, msg, missing...)`
+      with `Details` populated only when non-empty. Missing-field names use the same on-disk HDF5
+      attribute spelling as the other three languages.
+- [x] **New tests**, added to `go/capabilities/file_test.go` (the existing home of
+      `TestInvalidIndexAndOpcua`/`TestOpcuaStructuredFields`, extended alongside them; added a
+      `validationFixturesDir(t)` helper alongside the existing `fixturesDir(t)`):
+  - [x] `TestOpcuaRequiredFieldsPresentOnReferenceFixture` — `GetOpcua()` returns no error on
+        `reference_config_opcua.h5`, plus spot-checks on two of the fields the check depends on.
+  - [x] `TestOpcuaMissingRequiredFieldsReportsAllSevenAtOnce` — `GetOpcua()` returns
+        `ErrValidation` on `opcua_missing_required.h5`; `Details` (compared via a lookup map, so
+        order-independent) names exactly the seven expected items, including
+        `"Laser Emission Interlock.Event"` and explicitly **not** any `"Chamber Oxygen Level"`
+        entry.
+  - [x] `TestOpcuaOptionalFieldNeverAppearsInMissingDetails` — same non-tautology fix applied as
+        the other languages: `opcua_missing_required.h5` never removes any optional field, so
+        parsed it with the low-level `NewReader`, cleared `Client.KeepAliveCount` in memory too,
+        re-wrote it via `NewWriter` to a temp file, and confirmed `Details` still names exactly
+        the same 7 items on the re-opened facade — not 8.
+- [x] **Found and fixed a real bug in the new test code itself** (not the library): the optional-
+      field test's first draft reused the identifier `err` across two different declarations —
+      `cfg, err := machineconfig.NewReader(src).Parse()` (return type `error`, the standard
+      interface) followed later by `f, err := capabilities.OpenMachineConfig(tmp)` (return type
+      `*Error`, a concrete pointer). Reusing `err` let Go's mixed `:=` rules assign the concrete
+      `*Error` into the already-`error`-typed variable — so a successful (nil `*Error`) open still
+      produced a non-nil `error` interface value (the classic "nil pointer wrapped in a non-nil
+      interface" gotcha), and the test failed with `t.Fatal(err)` printing `<nil>` instead of
+      passing. Caught immediately by running the new tests before moving on, not by trusting them
+      once compiled; fixed by renaming the second variable to `capErr`.
+
+**Verification:** built and tested with the same `CGO_ENABLED=1` + MSYS2 MinGW64 `gcc`/`g++`
+toolchain as Phase 1. `go build ./...` and `go vet ./...` both clean. Full
+`go test ./... -v -count=1`: **59 passed, 0 failed** (up from 56). The five OPCUA-facade tests in
+`go/capabilities/file_test.go` individually confirmed passing — including catching and fixing the
+test-code bug above — before the full-suite run.
+
+### C++
+
+**Status: done and verified, 2026-08-20.**
+
+- [x] **Correction to an earlier finding in this same pass: `CapabilityError` is not dead code —
+      it was undocumented drift, and it's now fixed.** Initially found zero construction sites of
+      `capabilities::CapabilityError`/`capabilityError(...)` anywhere except `errors.hpp` itself,
+      and concluded it was unused/orphaned, since the real facade (`file.hpp`'s `getOpcua()`/etc.)
+      returns `Result<T>` (`capabilities/result.hpp`), which stored its own private
+      `code_`/`message_` strings directly rather than holding a `CapabilityError`. Before acting on
+      that conclusion, re-checked `VALIDATION_PLAN.md` and found it explicitly documents
+      `CapabilityError` as belonging to the stable-facade API by design (§9.x, the same section
+      covering C++'s error-handling decisions) — meaning the implementation had silently drifted
+      from the documented design (`Result<T>` was built with its own inline fields instead of
+      using `CapabilityError` as intended), not that the struct was intentionally left as a
+      decoy. Confirmed against all four other languages before fixing (`rust/src/capabilities/result.rs`'s
+      `Result<T, E = CapabilityError>`, `python/.../result.py`'s `Err[E]` holding `error: E`,
+      `nodejs/.../result.ts`'s `{ ok: false; error: E }`, `go/capabilities/v1_0/file.go`'s
+      `(OpcuaConfig, *api.Error)`): in every one of them, the value a caller actually holds after a
+      failure is **one real error object** with `.code`/`.message`/`.details` as direct fields —
+      never three independent getter calls. C++ had drifted furthest from that shape.
+- [x] `cpp/include/machine_config/capabilities/errors.hpp` — added
+      `std::vector<std::string> details` to `CapabilityError` (plus `#include <vector>`), and a
+      matching optional third parameter to `capabilityError(code, message, details = {})`.
+- [x] `cpp/include/machine_config/capabilities/result.hpp` — restructured `Result<T>` and the
+      `Result<void>` specialization to hold one real `CapabilityError error_` member instead of
+      separate `code_`/`message_`/`details_` strings; added `const CapabilityError& error() const`
+      — the accessor that actually matches the other four languages' shape — with `errorCode()`/
+      `errorMessage()`/`errorDetails()` kept as delegating convenience shortcuts so every
+      pre-existing call site (confirmed via grep across `cpp/include/`) keeps compiling unchanged.
+      `Err(code, message, details = {})` now builds the `CapabilityError` internally.
+- [x] `cpp/include/machine_config/capabilities/v1_0/file.hpp`'s `getOpcua()` — implemented the
+      same 4-step mechanism as the other four languages: reads `*config_.opcua` directly (the
+      typed struct, same architecture as Rust/Node.js/Go), 6 single-instance checks, a
+      `for (const auto& [name, trigger] : opcua.triggers)` loop producing `name + ".Event"`
+      entries, and a combined-list `Result<OpcuaConfig>::Err("ValidationError", msg, missing)`
+      with `details` populated only when non-empty. Missing-field names use the same on-disk HDF5
+      attribute spelling as the other languages. Added `#include <vector>` to `file.hpp`.
+- [x] **Found and fixed a second, related bug**: `cpp/include/machine_config/capabilities/file.hpp`'s
+      `openMachineConfig()` re-wraps `MachineConfigFileV1_0::open()`'s error into a
+      `Result<shared_ptr<IMachineConfigFile>>`, and that re-wrap only forwarded `errorCode()`/
+      `errorMessage()`, silently dropping `errorDetails()`. Fixed to forward all three. **Not
+      reachable through any real call today** — `open()`'s only two error paths
+      (`UnsupportedVersion`, `IoError`) never populate `details` — so this is disclosed as
+      currently-inert insurance against a real class of bug, not something the existing test
+      suite could have caught by accident, and is tested via an isolated reconstruction of the
+      exact re-wrap expression (see below) rather than a misleadingly-labeled "integration" test.
+- [x] **New tests**, added to `cpp/tests/test_capabilities.cpp` (the existing home of
+      `CapabilityOpcuaNotPresentVsPresent`, extended alongside them; added an
+      `OPCUA_MISSING_REQUIRED` path constant using the `VALIDATION_FIXTURES_DIR` macro Phase 1
+      already added to `cpp/tests/CMakeLists.txt`, plus `#include "machine_config/writer.hpp"`
+      and `#include <set>`):
+  - [x] `CapabilityOpcuaRequiredFieldsPresentOnReferenceFixture` — `getOpcua()` returns `ok()` on
+        `reference_config_opcua.h5`, plus spot-checks on two of the fields the check depends on.
+  - [x] `CapabilityOpcuaMissingRequiredFieldsReportsAllSevenAtOnce` — `getOpcua()` returns
+        `errorCode() == "ValidationError"` on `opcua_missing_required.h5`; `errorDetails()`
+        (compared as a `std::set`, so order-independent) equals exactly the seven expected items,
+        including `"Laser Emission Interlock.Event"` and explicitly **not** any
+        `"Chamber Oxygen Level"` entry.
+  - [x] `CapabilityOpcuaOptionalFieldNeverAppearsInMissingDetails` — same non-tautology fix
+        applied as the other four languages: `opcua_missing_required.h5` never removes any
+        optional field, so parsed it with the low-level `MachineConfigReader`, cleared
+        `client.keep_alive_count` in memory too, re-wrote it via `MachineConfigWriter` to a temp
+        file, and confirmed `errorDetails()` still names exactly the same 7 items on the re-opened
+        facade — not 8.
+  - [x] `CapabilityResultErrorReturnsRealCapabilityError` (new) — confirms `result.error()` is a
+        genuine `CapabilityError` whose `.code`/`.message`/`.details` match `errorCode()`/
+        `errorMessage()`/`errorDetails()` exactly, using the real `opcua_missing_required.h5`
+        failure.
+  - [x] `CapabilityErrorRewrapPreservesDetails` (new) — since no real caller can reach the
+        re-wrap bug above, this manually constructs a `Result<shared_ptr<MachineConfigFileV1_0>>::Err`
+        with non-empty `details`, applies the identical re-wrap expression now used in
+        `openMachineConfig()`, and confirms `details` survives — a faithful test of the fixed
+        line's logic, explicitly not a claim that it's exercised end-to-end today.
+
+**Verification:** rebuilt with the same MSVC 19.43 toolchain as Phase 1, clean, after each of the
+three edits (`CapabilityError`, `Result<T>`, the re-wrap) — confirming the internal restructuring
+never broke any pre-existing call site before adding new tests. All 20 OPCUA/Result-related test
+cases (173 assertions) confirmed passing after adding the 5 new ones. Full test binary run:
+**463 assertions in 87 test cases, 0 failures** (up from 425/82 at the start of Phase 2).
 
 ---
 
@@ -698,6 +912,110 @@ Re-ran the full `npx vitest run` suite in `nodejs/` afterward as a regression ch
 169/169 passing, confirming the validation-app changes (a separate npm package consuming
 `machine-config-library` as a `file:` dependency) didn't require or trigger any change to the
 library itself.
+
+### Go
+
+**Status: done and verified, 2026-08-20.**
+
+- [x] `docs/validation/go/app/scenarios/scenarios.go` — added `RunAv12OpcuaFacadeOk`/
+      `RunAv13OpcuaFacadeValidation`, wired into `docs/validation/go/app/main.go`'s scenario list
+      (now 19 scenarios, up from 17 — Go's app has no AV-09–11 at all, like Rust/C++, since Go's
+      dispatcher has no registry seam either; those live in `go/`'s own test tree). New import:
+      `machine-config-go/capabilities` — this app had never touched the `capabilities` package
+      before. Added `strPtrEqual`/`intPtrEqual`/`strPtrOrNil`/`intPtrOrNil`/`boolPtrOrNil` helpers
+      to `docs/validation/go/app/scenarios/common.go` alongside the existing `fmtF64Ptr`, needed
+      because Go has no built-in nil-safe pointer comparison/formatting.
+  - [x] `RunAv12OpcuaFacadeOk` — opens `reference_config_opcua.h5` via `capabilities.OpenMachineConfig`,
+        calls `.GetOpcua()`, confirms no error and prints five of the newly-promoted/new fields to
+        prove they're actually readable, not just present.
+  - [x] `RunAv13OpcuaFacadeValidation` — opens `opcua_missing_required.h5` via
+        `capabilities.OpenMachineConfig`, confirms `.GetOpcua()` returns an error with
+        `Code == capabilities.ErrValidation`, and asserts `Details` (compared via a lookup map, so
+        order-independent) equals exactly the seven expected entries — including
+        `"Laser Emission Interlock.Event"` and, implicitly, the absence of any
+        `"Chamber Oxygen Level"` entry.
+- [x] **S-07 extended** (`RunS07Opcua`) — added roundtrip assertions for `MachineProfile`,
+      `RootNode`, `PipeName`, and `TriggerStopCeilingLayers`, proving the Phase 1 fields survive a
+      real write→read cycle through the plain public `Reader`/`Writer` API, not just via
+      `go test`. Go's `RunS07Opcua` was already the thinnest of the five languages' S-07
+      (no trigger-level checks at all pre-existing), so no trigger fields were extended here
+      either — consistent with what was already there, not a new gap introduced.
+- [x] S-09 unchanged, per plan (no new top-level type introduced).
+
+**Verification:** built with the same `CGO_ENABLED=1` + MSYS2 MinGW64 `gcc`/`g++` toolchain as
+Phase 1/2, via the app's own `replace machine-config-go => ../../../../go` directive (always
+builds against local source directly, no separate link step needed). Ran the built binary against
+the real fixture set, with `/mingw64/bin` also on `PATH` at runtime (needed for `libhdf5-310.dll`):
+
+```
+[PASS] S-07: opcua server_url="opc.tcp://172.17.20.240:62541/TM_OPCUA_DevTemplate_V0.1/TelemetryServer" machine_profile=Aconity preserved through roundtrip
+[PASS] AV-12: GetOpcua Ok: machine_profile=Aconity root_node=MachineFleet pipe_name=\\.\pipe\opc_ua_client_pipe triggers_enabled=true trigger_stop_ceiling_layers=3
+[PASS] AV-13: ValidationError with details=[Configure_Client Laser Emission Interlock.Event Machine_Profile Pipe_Name Root_Node Trigger_Stop_Ceiling_Layers Triggers_Enabled]
+
+19 scenarios: 19 passed, 0 failed
+```
+
+`go vet ./...` clean both in the main module and (implicitly, via the same build) the app.
+Re-ran the full `go test ./... -v -count=1` suite in `go/` afterward as a regression check: still
+59/59 passing, confirming the validation-app changes (a separate Go module) didn't require or
+trigger any change to the library itself. Removed the built binary afterward (not a tracked
+artifact).
+
+### C++
+
+**Status: done and verified, 2026-08-20.**
+
+- [x] `docs/validation/cpp/app/src/scenarios/scenarios.cpp` — added `av12`/`av13` namespaces,
+      wired into `docs/validation/cpp/app/src/main.cpp`'s `scenarioList` (now 19 scenarios, up
+      from 17 — C++'s app has no AV-09–11 at all, like Rust/Go, since C++'s dispatcher is a
+      hardcoded `if (ver != "1.0") throw` with no registry seam either; those live in `cpp/tests/`
+      instead). Declared in `docs/validation/cpp/app/src/scenarios/scenarios.hpp`. Added a small
+      `scenarios::optOrNil<T>(const std::optional<T>&)` template to `common.hpp` — needed because
+      unlike Go's typed pointer-or-nil helpers, C++ had no existing convention for rendering an
+      unset `std::optional` in a scenario detail string.
+  - [x] `av12::run` — opens `reference_config_opcua.h5` via `MachineConfigFileV1_0::open()`
+        (not `openMachineConfig()` — the version-agnostic `IMachineConfigFile` interface in
+        `generated.hpp` only exposes `fileVersion()`/`opticalTrainCount()`/`save()`/`close()`;
+        `getOpcua()` lives on the concrete v1.0 type, the same as every other per-component
+        getter this app never routes through the dispatcher for), calls `.getOpcua()`, confirms
+        `.ok()` and prints five of the newly-promoted/new fields to prove they're actually
+        readable, not just present.
+  - [x] `av13::run` — opens `opcua_missing_required.h5` (also via `MachineConfigFileV1_0::open()`)
+        via `avFixture()`, confirms `.getOpcua()` is not `.ok()` and `.errorCode() ==
+        "ValidationError"`, and asserts `.errorDetails()` (compared as a `std::set`,
+        order-independent) equals exactly the seven expected entries — including `"Laser
+        Emission Interlock.Event"` and, implicitly, the absence of any `"Chamber Oxygen Level"`
+        entry.
+- [x] **S-07 extended** (`s07::run`) — added roundtrip assertions for `machine_profile`,
+      `root_node`, `pipe_name`, and `trigger_stop_ceiling_layers`, proving the Phase 1 fields
+      survive a real write→read cycle through the plain public `MachineConfigReader`/`Writer`
+      API, not just via Catch2. Matches Go's S-07 extension in scope (no trigger-level field
+      additions), since C++'s pre-existing S-07 was already trigger-name/signal/subsystem-level
+      only, not per-field.
+- [x] S-09 unchanged, per plan (no new top-level type introduced).
+
+**Verification:** rebuilt the standalone app (`cmake --build docs/validation/cpp/app/build
+--config Debug --target validation_app`) — its own CMake project, `add_subdirectory`-consuming
+`cpp/` exactly as a real from-source consumer would, so this exercised the real Phase 1/2 changes
+through a fresh, independent build tree, not just `cpp/build`. Ran the built binary against the
+real fixture set (`validation_app.exe fixtures "Reference Materials"`):
+
+```
+[PASS] S-07: OPCUA roundtrip OK: 2 triggers, url="opc.tcp://172.17.20.240:62541/TM_OPCUA_DevTemplate_V0.1/TelemetryServer"
+[PASS] AV-12: getOpcua Ok: machine_profile=Aconity root_node=MachineFleet pipe_name=\\.\pipe\opc_ua_client_pipe triggers_enabled=true trigger_stop_ceiling_layers=3
+[PASS] AV-13: ValidationError with details={'Configure_Client', 'Laser Emission Interlock.Event', 'Machine_Profile', 'Pipe_Name', 'Root_Node', 'Trigger_Stop_Ceiling_Layers', 'Triggers_Enabled'}
+
+19 scenarios: 19 passed, 0 failed
+```
+
+Re-ran the full `cpp/build` Catch2 suite afterward as a regression check (`cmake --build cpp/build
+--config Debug --target machine_config_tests`, then running `machine_config_tests.exe` directly):
+still 463/463 assertions passing in 87 test cases, confirming the validation-app changes (a
+separate standalone CMake project) didn't require or trigger any change to the library itself.
+
+**This completes the entire 5-language OPCUA field-promotion rollout** — Rust, Python, Node.js,
+Go, and C++ are all fully done: Phase 1, Phase 2, and validation-app coverage complete and
+verified for each.
 
 ---
 

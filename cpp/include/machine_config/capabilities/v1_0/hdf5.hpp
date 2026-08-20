@@ -531,20 +531,43 @@ private:
         client.publish_interval  = readInt(client_grp, "Publish_Interval").value_or(0);
         client.sampling_interval = readInt(client_grp, "Sampling_Interval").value_or(0);
         client.session_timeout   = readInt(client_grp, "Session_Timeout").value_or(0);
+        client.keep_alive_count             = readInt(client_grp, "Keep_Alive_Count");
+        client.lifetime_count               = readInt(client_grp, "Lifetime_Count");
+        client.machine_profile              = readStr(client_grp, "Machine_Profile");
+        client.queue_policy                 = readStr(client_grp, "Queue_Policy");
+        client.queue_size_data_change       = readInt(client_grp, "Queue_Size_Data_Change");
+        client.queue_size_events            = readInt(client_grp, "Queue_Size_Events");
+        client.reconnect_interval           = readInt(client_grp, "Reconnect_Interval");
+        client.root_node                    = readStr(client_grp, "Root_Node");
+        client.sync_loop_interval_initial   = readInt(client_grp, "Sync_Loop_Interval_Initial");
+        client.sync_loop_interval_settled   = readInt(client_grp, "Sync_Loop_Interval_Settled");
         client.extra = collectExtra(client_grp, {
             "Server_URL", "Auth_Mode", "Security_Mode", "Security_Policy",
-            "BFS_Max_Depth", "Publish_Interval", "Sampling_Interval", "Session_Timeout"
+            "BFS_Max_Depth", "Publish_Interval", "Sampling_Interval", "Session_Timeout",
+            "Keep_Alive_Count", "Lifetime_Count", "Machine_Profile", "Queue_Policy",
+            "Queue_Size_Data_Change", "Queue_Size_Events", "Reconnect_Interval", "Root_Node",
+            "Sync_Loop_Interval_Initial", "Sync_Loop_Interval_Settled"
         });
 
         auto pipe_grp = f.getGroup("OPCUA/Pipe");
         OpcuaPipeConfig pipe;
         pipe.pipe_enabled = readBoolFromInt(pipe_grp, "Pipe_Enabled").value_or(false);
         pipe.buffer_size  = readInt(pipe_grp, "Buffer_Size").value_or(0);
-        pipe.extra = collectExtra(pipe_grp, {"Pipe_Enabled", "Buffer_Size"});
+        pipe.configure_client         = readBoolFromInt(pipe_grp, "Configure_Client");
+        pipe.inbound_rate_limit       = readInt(pipe_grp, "Inbound_Rate_Limit");
+        pipe.max_inbound_message_size = readInt(pipe_grp, "Max_Inbound_Message_Size");
+        pipe.min_integrity_level      = readStr(pipe_grp, "Min_Integrity_Level");
+        pipe.pipe_name                = readStr(pipe_grp, "Pipe_Name");
+        pipe.user_access_level        = readStr(pipe_grp, "User_Access_Level");
+        pipe.extra = collectExtra(pipe_grp, {
+            "Pipe_Enabled", "Buffer_Size", "Configure_Client", "Inbound_Rate_Limit",
+            "Max_Inbound_Message_Size", "Min_Integrity_Level", "Pipe_Name", "User_Access_Level"
+        });
 
         auto tgrp = f.getGroup("OPCUA/Triggers");
         OpcuaConfig opcua;
         opcua.triggers_enabled = readBoolFromInt(tgrp, "Triggers_Enabled");
+        opcua.trigger_stop_ceiling_layers = readInt(tgrp, "Trigger_Stop_Ceiling_Layers");
         for (const auto& name : tgrp.listObjectNames()) {
             auto tg = tgrp.getGroup(name);
             OpcuaTrigger t;
@@ -554,8 +577,16 @@ private:
             t.rule_enabled = readBoolFromInt(tg, "Rule_Enabled");
             t.start_value  = readStr(tg, "Start_Value");
             t.stop_value   = readStr(tg, "Stop_Value");
+            t.case_sensitivity  = readStr(tg, "Case_Sensitivity");
+            t.component         = readStr(tg, "Component");
+            t.cooldown_period   = readInt(tg, "Cooldown_Period");
+            t.event             = readStr(tg, "Event");
+            t.max_fires_per_job = readInt(tg, "Max_Fires_Per_Job");
+            t.trigger_label     = readStr(tg, "Trigger_Label");
             t.extra = collectExtra(tg, {
-                "ID", "Signal", "Subsystem", "Rule_Enabled", "Start_Value", "Stop_Value"
+                "ID", "Signal", "Subsystem", "Rule_Enabled", "Start_Value", "Stop_Value",
+                "Case_Sensitivity", "Component", "Cooldown_Period", "Event",
+                "Max_Fires_Per_Job", "Trigger_Label"
             });
             opcua.triggers[name] = std::move(t);
         }

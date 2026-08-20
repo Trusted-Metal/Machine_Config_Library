@@ -40,6 +40,8 @@ func main() {
 		{"AV-06", scenarios.RunAv06WhitespaceVersion},
 		{"AV-07", scenarios.RunAv07EmptyVersion},
 		{"AV-08", scenarios.RunAv08VersionFidelity},
+		{"AV-12", scenarios.RunAv12OpcuaFacadeOk},
+		{"AV-13", scenarios.RunAv13OpcuaFacadeValidation},
 	}
 
 	passed, failed := 0, 0

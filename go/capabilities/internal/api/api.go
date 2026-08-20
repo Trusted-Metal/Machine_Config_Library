@@ -25,12 +25,18 @@ const (
 type Error struct {
 	Code    ErrorCode
 	Message string
+	// Details names every individual violation at once (e.g. every missing
+	// required OPCUA field) rather than only the first one encountered. Nil
+	// for validation failures with nothing more specific to list.
+	Details []string
 }
 
 func (e *Error) Error() string { return e.Message }
 
-func Errf(code ErrorCode, msg string) *Error {
-	return &Error{Code: code, Message: msg}
+// Errf builds an Error. An optional details slice may be passed as the
+// third argument; existing two-argument call sites are unaffected.
+func Errf(code ErrorCode, msg string, details ...string) *Error {
+	return &Error{Code: code, Message: msg, Details: details}
 }
 
 func Snapshot[T any](v T) T {

@@ -361,30 +361,30 @@ func parseScanner(g *h5c.Group) (Scanner, error) {
 	}
 	wdu, _ := readStrLocked(g, "Working_Distance_unit", "mm")
 	return Scanner{
-		Manufacturer:          readRequiredStr(g, "Manufacturer"),
-		Model:                 readRequiredStr(g, "Model"),
-		SerialNumber:          readRequiredStr(g, "Serial_Number"),
-		WorkingDistance:       wd,
-		WorkingDistanceUnit:   wdu,
-		ScanFieldX:            mustFloat(g, "Scan_Field_Size_X"),
-		ScanFieldXUnit:        readStrAttr(g, "Scan_Field_Size_X_unit"),
-		ScanFieldY:            mustFloat(g, "Scan_Field_Size_Y"),
-		ScanFieldYUnit:        readStrAttr(g, "Scan_Field_Size_Y_unit"),
-		ScanFieldZ:            mustFloat(g, "Scan_Field_Size_Z"),
-		ScanFieldZUnit:        readStrAttr(g, "Scan_Field_Size_Z_unit"),
-		ScanHeadOffsetX:       mustFloat(g, "Scan_Head_Offset_X"),
-		ScanHeadOffsetXUnit:   readStrAttr(g, "Scan_Head_Offset_X_unit"),
-		ScanHeadOffsetY:       mustFloat(g, "Scan_Head_Offset_Y"),
-		ScanHeadOffsetYUnit:   readStrAttr(g, "Scan_Head_Offset_Y_unit"),
-		ScanHeadOffsetZ:       mustFloat(g, "Scan_Head_Offset_Z"),
-		ScanHeadOffsetZUnit:   readStrAttr(g, "Scan_Head_Offset_Z_unit"),
-		ScanHeadRotation:      mustFloat(g, "Scan_Head_Rotation"),
-		ScanHeadRotationUnit:  readStrAttr(g, "Scan_Head_Rotation_unit"),
-		AxisConfiguration:     readStrAttr(g, "Axis_Configuration"),
-		XAxis:                 xa,
-		YAxis:                 ya,
-		ZAxis:                 za,
-		Focus:                 focus,
+		Manufacturer:         readRequiredStr(g, "Manufacturer"),
+		Model:                readRequiredStr(g, "Model"),
+		SerialNumber:         readRequiredStr(g, "Serial_Number"),
+		WorkingDistance:      wd,
+		WorkingDistanceUnit:  wdu,
+		ScanFieldX:           mustFloat(g, "Scan_Field_Size_X"),
+		ScanFieldXUnit:       readStrAttr(g, "Scan_Field_Size_X_unit"),
+		ScanFieldY:           mustFloat(g, "Scan_Field_Size_Y"),
+		ScanFieldYUnit:       readStrAttr(g, "Scan_Field_Size_Y_unit"),
+		ScanFieldZ:           mustFloat(g, "Scan_Field_Size_Z"),
+		ScanFieldZUnit:       readStrAttr(g, "Scan_Field_Size_Z_unit"),
+		ScanHeadOffsetX:      mustFloat(g, "Scan_Head_Offset_X"),
+		ScanHeadOffsetXUnit:  readStrAttr(g, "Scan_Head_Offset_X_unit"),
+		ScanHeadOffsetY:      mustFloat(g, "Scan_Head_Offset_Y"),
+		ScanHeadOffsetYUnit:  readStrAttr(g, "Scan_Head_Offset_Y_unit"),
+		ScanHeadOffsetZ:      mustFloat(g, "Scan_Head_Offset_Z"),
+		ScanHeadOffsetZUnit:  readStrAttr(g, "Scan_Head_Offset_Z_unit"),
+		ScanHeadRotation:     mustFloat(g, "Scan_Head_Rotation"),
+		ScanHeadRotationUnit: readStrAttr(g, "Scan_Head_Rotation_unit"),
+		AxisConfiguration:    readStrAttr(g, "Axis_Configuration"),
+		XAxis:                xa,
+		YAxis:                ya,
+		ZAxis:                za,
+		Focus:                focus,
 	}, nil
 }
 
@@ -422,23 +422,23 @@ func parseAxis(g *h5c.Group) (AxisConfig, error) {
 
 func parseLightSource(g *h5c.Group) (LightSource, error) {
 	return LightSource{
-		Manufacturer:            readRequiredStr(g, "Manufacturer"),
-		Model:                   readRequiredStr(g, "Model"),
-		SerialNumber:            readRequiredStr(g, "Serial_Number"),
-		Wavelength:              mustFloat(g, "Light_Wavelength"),
-		WavelengthUnit:          readStrAttr(g, "Light_Wavelength_unit"),
-		PowerMaxNominal:         mustFloat(g, "Power_Max_Nominal"),
-		PowerMaxNominalUnit:     readStrAttr(g, "Power_Max_Nominal_unit"),
-		PowerMaxActual:          mustFloat(g, "Power_Max_Actual"),
-		PowerMaxActualUnit:      readStrAttr(g, "Power_Max_Actual_unit"),
-		PowerMinActual:          mustFloat(g, "Power_Min_Actual"),
-		PowerMinActualUnit:      readStrAttr(g, "Power_Min_Actual_unit"),
-		PowerMinNominal:         mustFloat(g, "Power_Min_Nominal"),
-		PowerMinNominalUnit:     readStrAttr(g, "Power_Min_Nominal_unit"),
-		PowerBitResolution:      mustFloat(g, "Power_Bit_Resolution"),
-		PowerBitResolutionUnit:  readStrAttr(g, "Power_Bit_Resolution_unit"),
-		WattsToVoltsAlgorithm:   readStrAttr(g, "Watts_To_Volts_Algorithm"),
-		WattsToVoltsParams:      readStrAttr(g, "Watts_To_Volts_Params"),
+		Manufacturer:           readRequiredStr(g, "Manufacturer"),
+		Model:                  readRequiredStr(g, "Model"),
+		SerialNumber:           readRequiredStr(g, "Serial_Number"),
+		Wavelength:             mustFloat(g, "Light_Wavelength"),
+		WavelengthUnit:         readStrAttr(g, "Light_Wavelength_unit"),
+		PowerMaxNominal:        mustFloat(g, "Power_Max_Nominal"),
+		PowerMaxNominalUnit:    readStrAttr(g, "Power_Max_Nominal_unit"),
+		PowerMaxActual:         mustFloat(g, "Power_Max_Actual"),
+		PowerMaxActualUnit:     readStrAttr(g, "Power_Max_Actual_unit"),
+		PowerMinActual:         mustFloat(g, "Power_Min_Actual"),
+		PowerMinActualUnit:     readStrAttr(g, "Power_Min_Actual_unit"),
+		PowerMinNominal:        mustFloat(g, "Power_Min_Nominal"),
+		PowerMinNominalUnit:    readStrAttr(g, "Power_Min_Nominal_unit"),
+		PowerBitResolution:     mustFloat(g, "Power_Bit_Resolution"),
+		PowerBitResolutionUnit: readStrAttr(g, "Power_Bit_Resolution_unit"),
+		WattsToVoltsAlgorithm:  readStrAttr(g, "Watts_To_Volts_Algorithm"),
+		WattsToVoltsParams:     readStrAttr(g, "Watts_To_Volts_Params"),
 	}, nil
 }
 
@@ -449,11 +449,11 @@ func parseCollimator(g *h5c.Group) (Collimator, error) {
 	}
 	flu, _ := readStrLocked(g, "Focal_Length_unit", "mm")
 	return Collimator{
-		Manufacturer:     readRequiredStr(g, "Manufacturer"),
-		Model:            readRequiredStr(g, "Model"),
-		SerialNumber:     readRequiredStr(g, "Serial_Number"),
-		FocalLength:      fl,
-		FocalLengthUnit:  flu,
+		Manufacturer:    readRequiredStr(g, "Manufacturer"),
+		Model:           readRequiredStr(g, "Model"),
+		SerialNumber:    readRequiredStr(g, "Serial_Number"),
+		FocalLength:     fl,
+		FocalLengthUnit: flu,
 	}, nil
 }
 
@@ -463,12 +463,12 @@ func parseScannerCard(g *h5c.Group) (ScannerCard, error) {
 		return ScannerCard{}, err
 	}
 	return ScannerCard{
-		Manufacturer:           readRequiredStr(g, "Manufacturer"),
-		Model:                  readRequiredStr(g, "Model"),
-		SerialNumber:           readRequiredStr(g, "Serial_Number"),
-		CommunicationProtocol:  readStrAttr(g, "Communication_Protocol"),
-		SamplePeriod:           sp,
-		SamplePeriodUnit:       readStrAttr(g, "Sample_Period_unit"),
+		Manufacturer:          readRequiredStr(g, "Manufacturer"),
+		Model:                 readRequiredStr(g, "Model"),
+		SerialNumber:          readRequiredStr(g, "Serial_Number"),
+		CommunicationProtocol: readStrAttr(g, "Communication_Protocol"),
+		SamplePeriod:          sp,
+		SamplePeriodUnit:      readStrAttr(g, "Sample_Period_unit"),
 	}, nil
 }
 
@@ -498,22 +498,22 @@ func parseClearBox(f *h5c.File, path string, g *h5c.Group, includeBinary bool) (
 		return ClearBox{}, err
 	}
 	cb := ClearBox{
-		IPAddress:              readRequiredStr(g, "Ip_Address"),
-		SerialNumber:           readStrAttr(g, "Serial_Number"),
-		DataPort:               dp,
-		ServerPort:             sp,
-		ActualTimingOffset:     ato,
-		CommandedTimingOffset:  cto,
-		Manufacturer:           readStrAttr(g, "Manufacturer"),
-		Model:                  readStrAttr(g, "Model"),
-		OutputPath:             readStrAttr(g, "Output_Path"),
-		SelectedCamera:         readStrAttr(g, "Selected_Camera"),
-		CustomVideoFormat:      readStrAttr(g, "Custom_Video_Format"),
-		VideoOutput:            readStrAttr(g, "Video_Output"),
-		ShowConsole:            sc,
-		SoftwareTriggerDelay:   std,
-		VoltsToWattsAlgorithm:  readStrAttr(g, "Volts_To_Watts_Algorithm"),
-		VoltsToWattsParams:     readStrAttr(g, "Volts_To_Watts_Params"),
+		IPAddress:                 readRequiredStr(g, "Ip_Address"),
+		SerialNumber:              readStrAttr(g, "Serial_Number"),
+		DataPort:                  dp,
+		ServerPort:                sp,
+		ActualTimingOffset:        ato,
+		CommandedTimingOffset:     cto,
+		Manufacturer:              readStrAttr(g, "Manufacturer"),
+		Model:                     readStrAttr(g, "Model"),
+		OutputPath:                readStrAttr(g, "Output_Path"),
+		SelectedCamera:            readStrAttr(g, "Selected_Camera"),
+		CustomVideoFormat:         readStrAttr(g, "Custom_Video_Format"),
+		VideoOutput:               readStrAttr(g, "Video_Output"),
+		ShowConsole:               sc,
+		SoftwareTriggerDelay:      std,
+		VoltsToWattsAlgorithm:     readStrAttr(g, "Volts_To_Watts_Algorithm"),
+		VoltsToWattsParams:        readStrAttr(g, "Volts_To_Watts_Params"),
 		CorrectionGridDomainShape: readStrAttr(g, "Correction_Grid_Domain_Shape"),
 		InverseGridDomainShape:    readStrAttr(g, "Inverse_Grid_Domain_Shape"),
 	}
@@ -645,13 +645,17 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 		"Server_URL": true, "Auth_Mode": true, "Security_Mode": true,
 		"Security_Policy": true, "BFS_Max_Depth": true, "Publish_Interval": true,
 		"Sampling_Interval": true, "Session_Timeout": true,
+		"Keep_Alive_Count": true, "Lifetime_Count": true, "Machine_Profile": true,
+		"Queue_Policy": true, "Queue_Size_Data_Change": true, "Queue_Size_Events": true,
+		"Reconnect_Interval": true, "Root_Node": true,
+		"Sync_Loop_Interval_Initial": true, "Sync_Loop_Interval_Settled": true,
 	}
 	client := OpcuaClientConfig{
-		ServerURL:        readRequiredStr(cg, "Server_URL"),
-		AuthMode:         readRequiredStr(cg, "Auth_Mode"),
-		SecurityMode:     readRequiredStr(cg, "Security_Mode"),
-		SecurityPolicy:   readRequiredStr(cg, "Security_Policy"),
-		Extra:            readGroupExtras(cg, clientKnownKeys),
+		ServerURL:      readRequiredStr(cg, "Server_URL"),
+		AuthMode:       readRequiredStr(cg, "Auth_Mode"),
+		SecurityMode:   readRequiredStr(cg, "Security_Mode"),
+		SecurityPolicy: readRequiredStr(cg, "Security_Policy"),
+		Extra:          readGroupExtras(cg, clientKnownKeys),
 	}
 	if v, err := readIntAttr(cg, "BFS_Max_Depth"); err == nil && v != nil {
 		client.BfsMaxDepth = *v
@@ -665,9 +669,36 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 	if v, err := readIntAttr(cg, "Session_Timeout"); err == nil && v != nil {
 		client.SessionTimeout = *v
 	}
+	if v, err := readIntAttr(cg, "Keep_Alive_Count"); err == nil {
+		client.KeepAliveCount = v
+	}
+	if v, err := readIntAttr(cg, "Lifetime_Count"); err == nil {
+		client.LifetimeCount = v
+	}
+	client.MachineProfile = readStrAttr(cg, "Machine_Profile")
+	client.QueuePolicy = readStrAttr(cg, "Queue_Policy")
+	if v, err := readIntAttr(cg, "Queue_Size_Data_Change"); err == nil {
+		client.QueueSizeDataChange = v
+	}
+	if v, err := readIntAttr(cg, "Queue_Size_Events"); err == nil {
+		client.QueueSizeEvents = v
+	}
+	if v, err := readIntAttr(cg, "Reconnect_Interval"); err == nil {
+		client.ReconnectInterval = v
+	}
+	client.RootNode = readStrAttr(cg, "Root_Node")
+	if v, err := readIntAttr(cg, "Sync_Loop_Interval_Initial"); err == nil {
+		client.SyncLoopIntervalInitial = v
+	}
+	if v, err := readIntAttr(cg, "Sync_Loop_Interval_Settled"); err == nil {
+		client.SyncLoopIntervalSettled = v
+	}
 
 	pipeKnownKeys := map[string]bool{
 		"Pipe_Enabled": true, "Buffer_Size": true,
+		"Configure_Client": true, "Inbound_Rate_Limit": true,
+		"Max_Inbound_Message_Size": true, "Min_Integrity_Level": true,
+		"Pipe_Name": true, "User_Access_Level": true,
 	}
 	pipe := OpcuaPipeConfig{Extra: map[string]any{}}
 	if og.LinkExists("Pipe") {
@@ -679,6 +710,18 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 			if v, err := readIntAttr(pg, "Buffer_Size"); err == nil && v != nil {
 				pipe.BufferSize = *v
 			}
+			if b, err := readBoolFromIntAttr(pg, "Configure_Client"); err == nil {
+				pipe.ConfigureClient = b
+			}
+			if v, err := readIntAttr(pg, "Inbound_Rate_Limit"); err == nil {
+				pipe.InboundRateLimit = v
+			}
+			if v, err := readIntAttr(pg, "Max_Inbound_Message_Size"); err == nil {
+				pipe.MaxInboundMessageSize = v
+			}
+			pipe.MinIntegrityLevel = readStrAttr(pg, "Min_Integrity_Level")
+			pipe.PipeName = readStrAttr(pg, "Pipe_Name")
+			pipe.UserAccessLevel = readStrAttr(pg, "User_Access_Level")
 			pipe.Extra = readGroupExtras(pg, pipeKnownKeys)
 			pg.Close()
 		}
@@ -686,15 +729,21 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 
 	triggers := map[string]OpcuaTrigger{}
 	var triggersEnabled *bool
+	var triggerStopCeilingLayers *int
 	if og.LinkExists("Triggers") {
 		tg, err := og.OpenGroup("Triggers")
 		if err == nil {
 			if b, err := readBoolFromIntAttr(tg, "Triggers_Enabled"); err == nil {
 				triggersEnabled = b
 			}
+			if v, err := readIntAttr(tg, "Trigger_Stop_Ceiling_Layers"); err == nil {
+				triggerStopCeilingLayers = v
+			}
 			triggerKnownKeys := map[string]bool{
 				"ID": true, "Signal": true, "Subsystem": true,
 				"Rule_Enabled": true, "Start_Value": true, "Stop_Value": true,
+				"Case_Sensitivity": true, "Component": true, "Cooldown_Period": true,
+				"Event": true, "Max_Fires_Per_Job": true, "Trigger_Label": true,
 			}
 			for _, tname := range tg.AttrNames() {
 				_ = tname // Triggers_Enabled etc already handled above; skip scalar attrs
@@ -706,14 +755,27 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 					continue
 				}
 				re, _ := readBoolFromIntAttr(sg, "Rule_Enabled")
+				var cooldownPeriod, maxFiresPerJob *int
+				if v, err := readIntAttr(sg, "Cooldown_Period"); err == nil {
+					cooldownPeriod = v
+				}
+				if v, err := readIntAttr(sg, "Max_Fires_Per_Job"); err == nil {
+					maxFiresPerJob = v
+				}
 				trig := OpcuaTrigger{
-					ID:          readStrAttr(sg, "ID"),
-					Signal:      readStrAttr(sg, "Signal"),
-					Subsystem:   readStrAttr(sg, "Subsystem"),
-					RuleEnabled: re,
-					StartValue:  readStrAttr(sg, "Start_Value"),
-					StopValue:   readStrAttr(sg, "Stop_Value"),
-					Extra:       readGroupExtras(sg, triggerKnownKeys),
+					ID:              readStrAttr(sg, "ID"),
+					Signal:          readStrAttr(sg, "Signal"),
+					Subsystem:       readStrAttr(sg, "Subsystem"),
+					RuleEnabled:     re,
+					StartValue:      readStrAttr(sg, "Start_Value"),
+					StopValue:       readStrAttr(sg, "Stop_Value"),
+					CaseSensitivity: readStrAttr(sg, "Case_Sensitivity"),
+					Component:       readStrAttr(sg, "Component"),
+					CooldownPeriod:  cooldownPeriod,
+					Event:           readStrAttr(sg, "Event"),
+					MaxFiresPerJob:  maxFiresPerJob,
+					TriggerLabel:    readStrAttr(sg, "Trigger_Label"),
+					Extra:           readGroupExtras(sg, triggerKnownKeys),
 				}
 				sg.Close()
 				triggers[subname] = trig
@@ -723,10 +785,11 @@ func parseOpcua(f *h5c.File) (*OpcuaConfig, error) {
 	}
 
 	return &OpcuaConfig{
-		Client:          client,
-		Pipe:            pipe,
-		Triggers:        triggers,
-		TriggersEnabled: triggersEnabled,
+		Client:                   client,
+		Pipe:                     pipe,
+		Triggers:                 triggers,
+		TriggersEnabled:          triggersEnabled,
+		TriggerStopCeilingLayers: triggerStopCeilingLayers,
 	}, nil
 }
 

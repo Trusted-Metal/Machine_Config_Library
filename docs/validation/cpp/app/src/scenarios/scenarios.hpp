@@ -25,3 +25,5 @@ namespace av05 { scenarios::Result run(const std::filesystem::path& fixturesDir,
 namespace av06 { scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path& realDir); }
 namespace av07 { scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path& realDir); }
 namespace av08 { scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path& realDir); }
+namespace av12 { scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path& realDir); }
+namespace av13 { scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path& realDir); }

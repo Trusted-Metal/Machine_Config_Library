@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
         {"S-09", s09::run},
         {"AV-01", av01::run}, {"AV-02", av02::run}, {"AV-03", av03::run}, {"AV-04", av04::run},
         {"AV-05", av05::run}, {"AV-06", av06::run}, {"AV-07", av07::run}, {"AV-08", av08::run},
+        {"AV-12", av12::run}, {"AV-13", av13::run},
     };
 
     int passed = 0, failed = 0;

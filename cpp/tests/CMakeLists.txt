@@ -17,7 +17,8 @@ target_include_directories(machine_config_tests PRIVATE ${picosha2_SOURCE_DIR})
 # Absolute path to shared fixtures so tests can open HDF5 files regardless of cwd.
 target_compile_definitions(machine_config_tests PRIVATE
   FIXTURES_DIR="${PROJECT_SOURCE_DIR}/../fixtures"
-  SCHEMA_DIR="${PROJECT_SOURCE_DIR}/../schema")
+  SCHEMA_DIR="${PROJECT_SOURCE_DIR}/../schema"
+  VALIDATION_FIXTURES_DIR="${PROJECT_SOURCE_DIR}/../docs/validation/fixtures")
 
 include(Catch)
 catch_discover_tests(machine_config_tests)

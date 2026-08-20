@@ -3,10 +3,11 @@ package capabilities_test
 import (
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
-	"machine-config-go/capabilities"
 	machineconfig "machine-config-go"
+	"machine-config-go/capabilities"
 )
 
 func fixturesDir(t *testing.T) string {
@@ -16,6 +17,11 @@ func fixturesDir(t *testing.T) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "fixtures"))
+}
+
+func validationFixturesDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Clean(filepath.Join(fixturesDir(t), "..", "docs", "validation", "fixtures"))
 }
 
 func TestOpenGetScanner(t *testing.T) {
@@ -177,6 +183,101 @@ func TestOpcuaStructuredFields(t *testing.T) {
 	}
 	if opc.Client.ServerURL == "" {
 		t.Fatal("opcua client server_url is empty")
+	}
+}
+
+func TestOpcuaRequiredFieldsPresentOnReferenceFixture(t *testing.T) {
+	f, err := capabilities.OpenMachineConfig(filepath.Join(fixturesDir(t), "reference_config_opcua.h5"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	opc, e := f.GetOpcua()
+	if e != nil {
+		t.Fatalf("expected Ok, got %#v", e)
+	}
+	if opc.Client.MachineProfile == nil {
+		t.Fatal("client.machine_profile should be populated")
+	}
+	for name, trigger := range opc.Triggers {
+		if trigger.Event == nil {
+			t.Fatalf("trigger %q event should be populated", name)
+		}
+	}
+}
+
+func TestOpcuaMissingRequiredFieldsReportsAllSevenAtOnce(t *testing.T) {
+	path := filepath.Join(validationFixturesDir(t), "opcua_missing_required.h5")
+	f, err := capabilities.OpenMachineConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	_, e := f.GetOpcua()
+	if e == nil {
+		t.Fatal("expected ValidationError, got nil")
+	}
+	if e.Code != capabilities.ErrValidation {
+		t.Fatalf("expected ErrValidation, got %q", e.Code)
+	}
+
+	expected := map[string]bool{
+		"Machine_Profile":                true,
+		"Root_Node":                      true,
+		"Configure_Client":               true,
+		"Pipe_Name":                      true,
+		"Triggers_Enabled":               true,
+		"Trigger_Stop_Ceiling_Layers":    true,
+		"Laser Emission Interlock.Event": true,
+	}
+	if len(e.Details) != len(expected) {
+		t.Fatalf("details = %v, want exactly %d items", e.Details, len(expected))
+	}
+	for _, d := range e.Details {
+		if !expected[d] {
+			t.Errorf("unexpected detail %q", d)
+		}
+		if strings.HasPrefix(d, "Chamber Oxygen Level") {
+			t.Errorf("Chamber Oxygen Level must not be reported, got %q", d)
+		}
+	}
+}
+
+func TestOpcuaOptionalFieldNeverAppearsInMissingDetails(t *testing.T) {
+	// opcua_missing_required.h5 only clears the 7 required fields — every
+	// optional field is still present there, so absence of an optional field
+	// from Details would be trivially true. Also clear an optional field
+	// (keep_alive_count) in memory, re-write to a temp file, and confirm
+	// Details still names exactly the same 7 items, not 8.
+	src := filepath.Join(validationFixturesDir(t), "opcua_missing_required.h5")
+	cfg, err := machineconfig.NewReader(src).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Opcua.Client.KeepAliveCount = nil
+	tmp := filepath.Join(t.TempDir(), "missing_required_plus_optional.h5")
+	if err := machineconfig.NewWriter().Write(cfg, tmp); err != nil {
+		t.Fatal(err)
+	}
+
+	f, capErr := capabilities.OpenMachineConfig(tmp)
+	if capErr != nil {
+		t.Fatal(capErr)
+	}
+	defer f.Close()
+
+	_, e := f.GetOpcua()
+	if e == nil {
+		t.Fatal("expected ValidationError, got nil")
+	}
+	for _, d := range e.Details {
+		if strings.Contains(d, "Keep_Alive_Count") {
+			t.Fatalf("optional field must never appear in details, got %v", e.Details)
+		}
+	}
+	if len(e.Details) != 7 {
+		t.Fatalf("clearing an optional field must not change the missing count: got %v", e.Details)
 	}
 }
 

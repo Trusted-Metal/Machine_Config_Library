@@ -27,7 +27,8 @@ inline Result<std::shared_ptr<IMachineConfigFile>> openMachineConfig(
   }
   auto r = MachineConfigFileV1_0::open(path);
   if (!r.ok()) {
-    return Result<std::shared_ptr<IMachineConfigFile>>::Err(r.errorCode(), r.errorMessage());
+    return Result<std::shared_ptr<IMachineConfigFile>>::Err(
+        r.errorCode(), r.errorMessage(), r.errorDetails());
   }
   return Result<std::shared_ptr<IMachineConfigFile>>::Ok(
       std::static_pointer_cast<IMachineConfigFile>(r.value()));

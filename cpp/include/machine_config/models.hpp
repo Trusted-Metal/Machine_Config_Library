@@ -288,12 +288,28 @@ struct OpcuaClientConfig {
     std::int64_t publish_interval{0};
     std::int64_t sampling_interval{0};
     std::int64_t session_timeout{0};
+    std::optional<std::int64_t> keep_alive_count;
+    std::optional<std::int64_t> lifetime_count;
+    std::optional<std::string>  machine_profile;
+    std::optional<std::string>  queue_policy;
+    std::optional<std::int64_t> queue_size_data_change;
+    std::optional<std::int64_t> queue_size_events;
+    std::optional<std::int64_t> reconnect_interval;
+    std::optional<std::string>  root_node;
+    std::optional<std::int64_t> sync_loop_interval_initial;
+    std::optional<std::int64_t> sync_loop_interval_settled;
     ExtraAttrs extra;
 };
 
 struct OpcuaPipeConfig {
     bool         pipe_enabled{false}; // HDF5 int 0/1
     std::int64_t buffer_size{0};
+    std::optional<bool>         configure_client; // HDF5 int 0/1
+    std::optional<std::int64_t> inbound_rate_limit;
+    std::optional<std::int64_t> max_inbound_message_size;
+    std::optional<std::string>  min_integrity_level;
+    std::optional<std::string>  pipe_name;
+    std::optional<std::string>  user_access_level;
     ExtraAttrs extra;
 };
 
@@ -304,6 +320,12 @@ struct OpcuaTrigger {
     std::optional<bool>        rule_enabled; // HDF5 int 0/1
     std::optional<std::string> start_value;
     std::optional<std::string> stop_value;
+    std::optional<std::string>  case_sensitivity;
+    std::optional<std::string>  component;
+    std::optional<std::int64_t> cooldown_period;
+    std::optional<std::string>  event;
+    std::optional<std::int64_t> max_fires_per_job;
+    std::optional<std::string>  trigger_label;
     ExtraAttrs extra;
 };
 
@@ -315,6 +337,7 @@ struct OpcuaConfig {
     // Cross-check uses value comparison so ordering mismatch is benign.
     std::map<std::string, OpcuaTrigger> triggers;
     std::optional<bool> triggers_enabled; // HDF5 float 0.0/1.0 on OPCUA/Triggers group
+    std::optional<std::int64_t> trigger_stop_ceiling_layers; // on OPCUA/Triggers group
 };
 
 struct MachineConfig {
@@ -799,15 +822,25 @@ inline void from_json(const nlohmann::json& j, MachineConfigMeta& m) {
 
 inline void to_json(nlohmann::json& j, const OpcuaClientConfig& o) {
     j = {
-        {"auth_mode",         o.auth_mode},
-        {"bfs_max_depth",     o.bfs_max_depth},
-        {"extra",             o.extra},
-        {"publish_interval",  o.publish_interval},
-        {"sampling_interval", o.sampling_interval},
-        {"security_mode",     o.security_mode},
-        {"security_policy",   o.security_policy},
-        {"server_url",        o.server_url},
-        {"session_timeout",   o.session_timeout},
+        {"auth_mode",                    o.auth_mode},
+        {"bfs_max_depth",                o.bfs_max_depth},
+        {"extra",                        o.extra},
+        {"keep_alive_count",             detail::opt_to_j(o.keep_alive_count)},
+        {"lifetime_count",               detail::opt_to_j(o.lifetime_count)},
+        {"machine_profile",              detail::opt_to_j(o.machine_profile)},
+        {"publish_interval",             o.publish_interval},
+        {"queue_policy",                 detail::opt_to_j(o.queue_policy)},
+        {"queue_size_data_change",       detail::opt_to_j(o.queue_size_data_change)},
+        {"queue_size_events",            detail::opt_to_j(o.queue_size_events)},
+        {"reconnect_interval",           detail::opt_to_j(o.reconnect_interval)},
+        {"root_node",                    detail::opt_to_j(o.root_node)},
+        {"sampling_interval",            o.sampling_interval},
+        {"security_mode",                o.security_mode},
+        {"security_policy",              o.security_policy},
+        {"server_url",                   o.server_url},
+        {"session_timeout",              o.session_timeout},
+        {"sync_loop_interval_initial",   detail::opt_to_j(o.sync_loop_interval_initial)},
+        {"sync_loop_interval_settled",   detail::opt_to_j(o.sync_loop_interval_settled)},
     };
 }
 
@@ -820,6 +853,16 @@ inline void from_json(const nlohmann::json& j, OpcuaClientConfig& o) {
     j.at("publish_interval").get_to(o.publish_interval);
     j.at("sampling_interval").get_to(o.sampling_interval);
     j.at("session_timeout").get_to(o.session_timeout);
+    o.keep_alive_count             = detail::j_to_opt<std::int64_t>(j, "keep_alive_count");
+    o.lifetime_count               = detail::j_to_opt<std::int64_t>(j, "lifetime_count");
+    o.machine_profile               = detail::j_to_opt<std::string>(j, "machine_profile");
+    o.queue_policy                  = detail::j_to_opt<std::string>(j, "queue_policy");
+    o.queue_size_data_change       = detail::j_to_opt<std::int64_t>(j, "queue_size_data_change");
+    o.queue_size_events             = detail::j_to_opt<std::int64_t>(j, "queue_size_events");
+    o.reconnect_interval             = detail::j_to_opt<std::int64_t>(j, "reconnect_interval");
+    o.root_node                     = detail::j_to_opt<std::string>(j, "root_node");
+    o.sync_loop_interval_initial   = detail::j_to_opt<std::int64_t>(j, "sync_loop_interval_initial");
+    o.sync_loop_interval_settled   = detail::j_to_opt<std::int64_t>(j, "sync_loop_interval_settled");
     o.extra = (j.contains("extra") && j.at("extra").is_object())
               ? j.at("extra") : nlohmann::json::object();
 }
@@ -828,15 +871,27 @@ inline void from_json(const nlohmann::json& j, OpcuaClientConfig& o) {
 
 inline void to_json(nlohmann::json& j, const OpcuaPipeConfig& o) {
     j = {
-        {"buffer_size",  o.buffer_size},
-        {"extra",        o.extra},
-        {"pipe_enabled", o.pipe_enabled},
+        {"buffer_size",              o.buffer_size},
+        {"configure_client",         detail::opt_to_j(o.configure_client)},
+        {"extra",                    o.extra},
+        {"inbound_rate_limit",       detail::opt_to_j(o.inbound_rate_limit)},
+        {"max_inbound_message_size", detail::opt_to_j(o.max_inbound_message_size)},
+        {"min_integrity_level",      detail::opt_to_j(o.min_integrity_level)},
+        {"pipe_enabled",             o.pipe_enabled},
+        {"pipe_name",                detail::opt_to_j(o.pipe_name)},
+        {"user_access_level",        detail::opt_to_j(o.user_access_level)},
     };
 }
 
 inline void from_json(const nlohmann::json& j, OpcuaPipeConfig& o) {
     j.at("pipe_enabled").get_to(o.pipe_enabled);
     j.at("buffer_size").get_to(o.buffer_size);
+    o.configure_client         = detail::j_to_opt<bool>(j, "configure_client");
+    o.inbound_rate_limit       = detail::j_to_opt<std::int64_t>(j, "inbound_rate_limit");
+    o.max_inbound_message_size = detail::j_to_opt<std::int64_t>(j, "max_inbound_message_size");
+    o.min_integrity_level      = detail::j_to_opt<std::string>(j, "min_integrity_level");
+    o.pipe_name                = detail::j_to_opt<std::string>(j, "pipe_name");
+    o.user_access_level        = detail::j_to_opt<std::string>(j, "user_access_level");
     o.extra = (j.contains("extra") && j.at("extra").is_object())
               ? j.at("extra") : nlohmann::json::object();
 }
@@ -845,13 +900,19 @@ inline void from_json(const nlohmann::json& j, OpcuaPipeConfig& o) {
 
 inline void to_json(nlohmann::json& j, const OpcuaTrigger& o) {
     j = {
-        {"extra",        o.extra},
-        {"id",           detail::opt_to_j(o.id)},
-        {"rule_enabled", detail::opt_to_j(o.rule_enabled)},
-        {"signal",       detail::opt_to_j(o.signal)},
-        {"start_value",  detail::opt_to_j(o.start_value)},
-        {"stop_value",   detail::opt_to_j(o.stop_value)},
-        {"subsystem",    detail::opt_to_j(o.subsystem)},
+        {"case_sensitivity", detail::opt_to_j(o.case_sensitivity)},
+        {"component",        detail::opt_to_j(o.component)},
+        {"cooldown_period",  detail::opt_to_j(o.cooldown_period)},
+        {"event",            detail::opt_to_j(o.event)},
+        {"extra",            o.extra},
+        {"id",               detail::opt_to_j(o.id)},
+        {"max_fires_per_job", detail::opt_to_j(o.max_fires_per_job)},
+        {"rule_enabled",     detail::opt_to_j(o.rule_enabled)},
+        {"signal",           detail::opt_to_j(o.signal)},
+        {"start_value",      detail::opt_to_j(o.start_value)},
+        {"stop_value",       detail::opt_to_j(o.stop_value)},
+        {"subsystem",        detail::opt_to_j(o.subsystem)},
+        {"trigger_label",    detail::opt_to_j(o.trigger_label)},
     };
 }
 
@@ -862,6 +923,12 @@ inline void from_json(const nlohmann::json& j, OpcuaTrigger& o) {
     o.rule_enabled = detail::j_to_opt<bool>(j, "rule_enabled");
     o.start_value  = detail::j_to_opt<std::string>(j, "start_value");
     o.stop_value   = detail::j_to_opt<std::string>(j, "stop_value");
+    o.case_sensitivity = detail::j_to_opt<std::string>(j, "case_sensitivity");
+    o.component        = detail::j_to_opt<std::string>(j, "component");
+    o.cooldown_period   = detail::j_to_opt<std::int64_t>(j, "cooldown_period");
+    o.event             = detail::j_to_opt<std::string>(j, "event");
+    o.max_fires_per_job = detail::j_to_opt<std::int64_t>(j, "max_fires_per_job");
+    o.trigger_label     = detail::j_to_opt<std::string>(j, "trigger_label");
     o.extra = (j.contains("extra") && j.at("extra").is_object())
               ? j.at("extra") : nlohmann::json::object();
 }
@@ -870,10 +937,11 @@ inline void from_json(const nlohmann::json& j, OpcuaTrigger& o) {
 
 inline void to_json(nlohmann::json& j, const OpcuaConfig& o) {
     j = {
-        {"client",           o.client},
-        {"pipe",             o.pipe},
-        {"triggers",         o.triggers},
-        {"triggers_enabled", detail::opt_to_j(o.triggers_enabled)},
+        {"client",                       o.client},
+        {"pipe",                         o.pipe},
+        {"trigger_stop_ceiling_layers",  detail::opt_to_j(o.trigger_stop_ceiling_layers)},
+        {"triggers",                     o.triggers},
+        {"triggers_enabled",             detail::opt_to_j(o.triggers_enabled)},
     };
 }
 
@@ -882,6 +950,7 @@ inline void from_json(const nlohmann::json& j, OpcuaConfig& o) {
     j.at("pipe").get_to(o.pipe);
     j.at("triggers").get_to(o.triggers);
     o.triggers_enabled = detail::j_to_opt<bool>(j, "triggers_enabled");
+    o.trigger_stop_ceiling_layers = detail::j_to_opt<std::int64_t>(j, "trigger_stop_ceiling_layers");
 }
 
 // --- MachineConfig ---
