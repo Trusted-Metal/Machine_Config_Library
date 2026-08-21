@@ -232,6 +232,61 @@ type ClearBox struct {
 	VoltsToWattsParams        *string         `json:"volts_to_watts_params"`
 	CorrectionGridDomainShape *string         `json:"correction_grid_domain_shape"`
 	InverseGridDomainShape    *string         `json:"inverse_grid_domain_shape"`
+	// omitempty: omitted entirely (not "{}") when there are no sensors —
+	// matches Rust's skip_serializing_if and Python's _clearbox_to_dict
+	// choice to omit the key when empty, so every fixture that doesn't use
+	// this feature stays byte-for-byte identical in JSON shape to before it
+	// existed. Same optional-whole-feature shape as MachineConfig.Opcua,
+	// not OpcuaConfig.Triggers (which is always present, even as {}) —
+	// deliberately different from that precedent.
+	SynchronousSensors map[string]SynchronousSensor `json:"synchronous_sensors,omitempty"`
+}
+
+// EquationConstant is one named constant used to derive an equation (e.g.
+// `a`/`b` for a Log-Linear fit, `c0`..`cN` for a polynomial fit). Stored
+// on disk as a 64-byte fixed-length UTF-8 string (see
+// SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string convention") —
+// Name here is a plain Go string; the fixed-width conversion happens only
+// at the h5c layer (h5c.EquationConstantRow).
+type EquationConstant struct {
+	Name  string  `json:"name"`
+	Value float64 `json:"value"`
+}
+
+// CalibrationPoint is one raw calibration pair. InputValue is in whatever
+// unit SynchronousSensor.InputType implies; OutputValue is in whatever unit
+// SynchronousSensor.SensorOutputSpace implies (no per-row unit tag) — see
+// SYNCHRONOUS_SENSOR_PLAN.md's "Why compound datasets" for the convention.
+type CalibrationPoint struct {
+	InputValue  float64 `json:"input_value"`
+	OutputValue float64 `json:"output_value"`
+}
+
+// SynchronousSensor holds one Synchronous Sensor record. The map key (on
+// ClearBox.SynchronousSensors) is a free-form label chosen by the file's
+// author — not required to equal any attribute value inside the sensor's
+// own group (same convention as OpcuaConfig.Triggers's keys).
+type SynchronousSensor struct {
+	Enabled                     *bool              `json:"enabled"`
+	SensorName                  *string            `json:"sensor_name"`
+	SensorOutputRangeLow        *float64           `json:"sensor_output_range_low"`
+	SensorOutputRangeHigh       *float64           `json:"sensor_output_range_high"`
+	SensorOutputSpace           *string            `json:"sensor_output_space"`
+	SensorModel                 *string            `json:"sensor_model"`
+	SensorManufacturer          *string            `json:"sensor_manufacturer"`
+	SensorScope                 *string            `json:"sensor_scope"`
+	UnitsDerivedQuantity        *string            `json:"units_derived_quantity"`
+	PortID                      *int               `json:"port_id"`
+	SensorType                  *string            `json:"sensor_type"`
+	InputType                   *string            `json:"input_type"`
+	AlgorithmType               *string            `json:"algorithm_type"`
+	AlgorithmEquation           *string            `json:"algorithm_equation"`
+	CalibrationSource           *string            `json:"calibration_source"`
+	CalibrationVerified         *bool              `json:"calibration_verified"`
+	SamplePeriod                *float64           `json:"sample_period"`
+	Metadata                    *string            `json:"metadata"`
+	DerivationEquationConstants []EquationConstant `json:"derivation_equation_constants"`
+	CalibrationPoints           []CalibrationPoint `json:"calibration_points"`
 }
 
 // ScanFieldCorrectionFile holds metadata for the embedded .fc3 scan-field correction file.

@@ -16,6 +16,63 @@ class ScanFieldCorrectionFile:
 
 
 @dataclass
+class EquationConstant:
+    """One named equation constant for a SynchronousSensor's algorithm_equation
+    (e.g. a/b for a Log-Linear fit: log(ppm) = a*mA + b). HDF5 source: one row
+    of the Derivation_Equation_Constants compound dataset. A named row rather
+    than a positional array so a reader never has to infer which index means
+    what from algorithm_type alone, and so adding a constant is an additive
+    row rather than an ordering hazard.
+    """
+    name: str
+    value: float
+
+
+@dataclass
+class CalibrationPoint:
+    """One calibration sample pair for a SynchronousSensor. HDF5 source: one
+    row of the Calibration_Points compound dataset.
+
+    ``input_value`` is in the sensor's input_type unit; ``output_value`` is in
+    the sensor's sensor_output_space unit (**not** units_derived_quantity) —
+    every row of a given sensor's calibration curve is in the same units by
+    construction. Confirmed against the ZR800 reference example: both points
+    satisfy algorithm_equation exactly in log-space
+    (0.4375 * 4 - 2.75 == -1.0, 0.4375 * 20 - 2.75 == 6.0), not linear ppm.
+    """
+    input_value: float
+    output_value: float
+
+
+@dataclass
+class SynchronousSensor:
+    """A synchronous sensor attached to a ClearBox. HDF5 source: one
+    sub-group under .../ClearBox/Synchronous_Sensors/<key>/ — see
+    ClearBox.synchronous_sensors for what <key> means.
+    """
+    enabled: Optional[bool]                              # HDF5 int 0/1
+    sensor_name: Optional[str]
+    sensor_output_range_low: Optional[float]
+    sensor_output_range_high: Optional[float]
+    sensor_output_space: Optional[str]
+    sensor_model: Optional[str]
+    sensor_manufacturer: Optional[str]
+    sensor_scope: Optional[str]
+    units_derived_quantity: Optional[str]
+    port_id: Optional[int]
+    sensor_type: Optional[str]
+    input_type: Optional[str]
+    algorithm_type: Optional[str]
+    algorithm_equation: Optional[str]
+    calibration_source: Optional[str]
+    calibration_verified: Optional[bool]                 # HDF5 int 0/1
+    sample_period: Optional[float]
+    metadata: Optional[str]
+    derivation_equation_constants: list[EquationConstant]
+    calibration_points: list[CalibrationPoint]
+
+
+@dataclass
 class ClearBox:
     ip_address: str
     serial_number: Optional[str]
@@ -37,6 +94,13 @@ class ClearBox:
     volts_to_watts_params: Optional[str]
     correction_grid_domain_shape: Optional[str]
     inverse_grid_domain_shape: Optional[str]
+    # Key = free-form sensor label (HDF5 sub-group name under
+    # ClearBox/Synchronous_Sensors/) — an arbitrary value chosen by the
+    # file's author, not required to match any attribute inside that
+    # sensor's own group (e.g. "Oxygen Sensor", "O2_Port5", anything). No
+    # Synchronous_Sensors group on disk is represented identically to an
+    # empty dict here — there is no separate "absent" state to track.
+    synchronous_sensors: dict[str, SynchronousSensor]
 
 
 @dataclass

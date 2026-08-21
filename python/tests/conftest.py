@@ -11,6 +11,10 @@ from machine_config.reader import MachineConfigReader
 _REPO_ROOT = Path(__file__).parent.parent.parent
 REFERENCE_H5 = _REPO_ROOT / "fixtures" / "reference_config.h5"
 REFERENCE_OPCUA_H5 = _REPO_ROOT / "fixtures" / "reference_config_opcua.h5"
+REFERENCE_SENSORS_H5 = _REPO_ROOT / "fixtures" / "reference_config_synchronous_sensors.h5"
+REFERENCE_OPCUA_SENSORS_H5 = (
+    _REPO_ROOT / "fixtures" / "reference_config_opcua_synchronous_sensors.h5"
+)
 OPCUA_MISSING_REQUIRED_H5 = (
     _REPO_ROOT / "docs" / "validation" / "fixtures" / "opcua_missing_required.h5"
 )
@@ -38,3 +42,13 @@ def opcua_reader() -> MachineConfigReader:
 @pytest.fixture(scope="session")
 def opcua_missing_required_reader() -> MachineConfigReader:
     return MachineConfigReader(OPCUA_MISSING_REQUIRED_H5)
+
+
+@pytest.fixture(scope="session")
+def sensors_reader() -> MachineConfigReader:
+    return MachineConfigReader(REFERENCE_SENSORS_H5)
+
+
+@pytest.fixture(scope="session")
+def opcua_sensors_reader() -> MachineConfigReader:
+    return MachineConfigReader(REFERENCE_OPCUA_SENSORS_H5)

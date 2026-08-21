@@ -8,6 +8,7 @@ use hdf5::types::VarLenUnicode;
 use hdf5::{Dataset, File as H5File, Group};
 use ndarray::Array1;
 
+use super::hdf5::{RawCalibrationPoint, RawEquationConstant};
 use super::layout;
 use crate::error::Result;
 use crate::models::*;
@@ -402,6 +403,72 @@ impl<'a> Hdf5WriterV1_0<'a> {
         ws_ds(&icd_ds, "dtype", "float64")?;
         ws_ds(&icd_ds, "shape", &format!("{}x{}x{}", icd_shape[0], icd_shape[1], icd_shape[2]))?;
 
+        // Synchronous_Sensors: only created when non-empty, so a ClearBox
+        // with no sensors looks identical on disk to before this field
+        // existed — no empty placeholder group. Mirrors ClearBox itself
+        // being entirely absent rather than an empty shell.
+        if !cb.synchronous_sensors.is_empty() {
+            let sensors_grp = grp.create_group("Synchronous_Sensors")?;
+            for (name, sensor) in &cb.synchronous_sensors {
+                let sg = sensors_grp.create_group(name)?;
+                self.write_synchronous_sensor(&sg, sensor)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn write_synchronous_sensor(&self, grp: &Group, sensor: &SynchronousSensor) -> Result<()> {
+        wb(grp, "Enabled", sensor.enabled)?;
+        ws(grp, "Sensor_Name", sensor.sensor_name.as_deref().unwrap_or(""))?;
+        wf(grp, "Sensor_Output_Range_Low", sensor.sensor_output_range_low)?;
+        wf(grp, "Sensor_Output_Range_High", sensor.sensor_output_range_high)?;
+        ws(grp, "Sensor_Output_Space", sensor.sensor_output_space.as_deref().unwrap_or(""))?;
+        ws(grp, "Sensor_Model", sensor.sensor_model.as_deref().unwrap_or(""))?;
+        ws(grp, "Sensor_Manufacturer", sensor.sensor_manufacturer.as_deref().unwrap_or(""))?;
+        ws(grp, "Sensor_Scope", sensor.sensor_scope.as_deref().unwrap_or(""))?;
+        ws(grp, "Units_Derived_Quantity", sensor.units_derived_quantity.as_deref().unwrap_or(""))?;
+        wi(grp, "Port_ID", sensor.port_id)?;
+        ws(grp, "Sensor_Type", sensor.sensor_type.as_deref().unwrap_or(""))?;
+        ws(grp, "Input_Type", sensor.input_type.as_deref().unwrap_or(""))?;
+        ws(grp, "Algorithm_Type", sensor.algorithm_type.as_deref().unwrap_or(""))?;
+        ws(grp, "Algorithm_Equation", sensor.algorithm_equation.as_deref().unwrap_or(""))?;
+        ws(grp, "Calibration_Source", sensor.calibration_source.as_deref().unwrap_or(""))?;
+        wb(grp, "Calibration_Verified", sensor.calibration_verified)?;
+        wf(grp, "Sample_Period", sensor.sample_period)?;
+        ws(grp, "Metadata", sensor.metadata.as_deref().unwrap_or(""))?;
+
+        let const_rows: Vec<RawEquationConstant> = sensor
+            .derivation_equation_constants
+            .iter()
+            .map(|c| -> Result<RawEquationConstant> {
+                Ok(RawEquationConstant {
+                    name: c.name.parse().map_err(|e| {
+                        crate::error::MachineConfigError::Parse(format!(
+                            "Derivation_Equation_Constants name {:?} does not fit in a \
+                             64-byte FixedUnicode field: {e:?}",
+                            c.name
+                        ))
+                    })?,
+                    value: c.value,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let const_arr = Array1::from(const_rows);
+        grp.new_dataset_builder()
+            .with_data(&const_arr)
+            .create("Derivation_Equation_Constants")?;
+
+        let point_rows: Vec<RawCalibrationPoint> = sensor
+            .calibration_points
+            .iter()
+            .map(|p| RawCalibrationPoint { input_value: p.input_value, output_value: p.output_value })
+            .collect();
+        let point_arr = Array1::from(point_rows);
+        grp.new_dataset_builder()
+            .with_data(&point_arr)
+            .create("Calibration_Points")?;
+
         Ok(())
     }
 
@@ -515,6 +582,10 @@ mod tests {
         concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_config_opcua.h5");
     const SYNTHETIC: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/synthetic_2laser.h5");
+    const REFERENCE_SENSORS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/reference_config_synchronous_sensors.h5"
+    );
 
     fn roundtrip(src: &str) -> MachineConfig {
         let original = MachineConfigReader::open(src).unwrap().parse().unwrap();
@@ -599,14 +670,249 @@ mod tests {
 
     #[test]
     fn roundtrip_clearbox_scalar_fields() {
-        let orig = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
-        let rt = roundtrip(REFERENCE);
+        // reference_config_synchronous_sensors.h5, not reference_config.h5,
+        // which deliberately has no sensors (SYNCHRONOUS_SENSOR_PLAN.md
+        // Phase 0) — every pre-existing scalar assertion below still holds,
+        // since the two fixtures are byte-identical outside the new group.
+        let orig = MachineConfigReader::open(REFERENCE_SENSORS).unwrap().parse().unwrap();
+        let rt = roundtrip(REFERENCE_SENSORS);
         let cb_orig = orig.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
         let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
         assert_eq!(cb_orig.ip_address, cb_rt.ip_address);
         assert_eq!(cb_orig.data_port, cb_rt.data_port);
         assert_eq!(cb_orig.show_console, cb_rt.show_console);
         assert_eq!(cb_orig.correction_grid_domain_shape, cb_rt.correction_grid_domain_shape);
+
+        assert_eq!(cb_orig.synchronous_sensors.len(), cb_rt.synchronous_sensors.len());
+        let sensor_orig = &cb_orig.synchronous_sensors["Oxygen Sensor"];
+        let sensor_rt = &cb_rt.synchronous_sensors["Oxygen Sensor"];
+        assert_eq!(sensor_orig.sensor_name, sensor_rt.sensor_name);
+        assert_eq!(sensor_orig.port_id, sensor_rt.port_id);
+        assert_eq!(sensor_orig.calibration_verified, sensor_rt.calibration_verified);
+        assert_eq!(
+            sensor_orig.derivation_equation_constants,
+            sensor_rt.derivation_equation_constants
+        );
+        assert_eq!(sensor_orig.calibration_points, sensor_rt.calibration_points);
+    }
+
+    #[test]
+    fn roundtrip_synchronous_sensor_compound_datasets_exact_values_in_order() {
+        let rt = roundtrip(REFERENCE_SENSORS);
+        let cb = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        let sensor = &cb.synchronous_sensors["Oxygen Sensor"];
+
+        assert_eq!(
+            sensor.derivation_equation_constants,
+            vec![
+                EquationConstant { name: "a".to_string(), value: 0.4375 },
+                EquationConstant { name: "b".to_string(), value: -2.75 },
+            ]
+        );
+        assert_eq!(
+            sensor.calibration_points,
+            vec![
+                CalibrationPoint { input_value: 4.0, output_value: -1.0 },
+                CalibrationPoint { input_value: 20.0, output_value: 6.0 },
+            ]
+        );
+    }
+
+    #[test]
+    fn roundtrip_empty_synchronous_sensors_map_stays_empty_not_absent() {
+        // reference_config.h5 has zero sensors already — the write path must
+        // skip creating the Synchronous_Sensors group entirely (not write an
+        // empty placeholder), and the read path must default back to an
+        // empty map, not error.
+        let rt = roundtrip(REFERENCE);
+        let cb = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        assert!(cb.synchronous_sensors.is_empty());
+    }
+
+    #[test]
+    fn roundtrip_synchronous_sensor_with_zero_row_compound_datasets() {
+        // The distinct edge case from the empty-*map* test above: here the
+        // sensor itself exists (its group is created), but both compound
+        // datasets have zero rows — proving 0-length compound dataset
+        // creation/read genuinely works, not assumed.
+        let mut config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let cb = config.optical_trains[0].optional_components.clearbox.as_mut().unwrap();
+        cb.synchronous_sensors.insert(
+            "Untested Sensor".to_string(),
+            SynchronousSensor {
+                enabled: Some(false),
+                sensor_name: Some("Placeholder".to_string()),
+                sensor_output_range_low: None,
+                sensor_output_range_high: None,
+                sensor_output_space: None,
+                sensor_model: None,
+                sensor_manufacturer: None,
+                sensor_scope: None,
+                units_derived_quantity: None,
+                port_id: None,
+                sensor_type: None,
+                input_type: None,
+                algorithm_type: None,
+                algorithm_equation: None,
+                calibration_source: None,
+                calibration_verified: None,
+                sample_period: None,
+                metadata: None,
+                derivation_equation_constants: vec![],
+                calibration_points: vec![],
+            },
+        );
+
+        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+        Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap();
+        let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
+        let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        let sensor_rt = &cb_rt.synchronous_sensors["Untested Sensor"];
+        assert!(sensor_rt.derivation_equation_constants.is_empty());
+        assert!(sensor_rt.calibration_points.is_empty());
+        assert_eq!(sensor_rt.sensor_name, Some("Placeholder".to_string()));
+    }
+
+    #[test]
+    fn write_synchronous_sensor_constant_name_too_long_for_fixed64_errors() {
+        // Derivation_Equation_Constants.name is a 64-byte FixedUnicode field
+        // (see SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string
+        // convention"). A name whose UTF-8 encoding exceeds 64 bytes must be
+        // rejected with a clear error at write time, not silently truncated.
+        let mut config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let cb = config.optical_trains[0].optional_components.clearbox.as_mut().unwrap();
+        cb.synchronous_sensors.insert(
+            "Oversized Name Sensor".to_string(),
+            SynchronousSensor {
+                enabled: None,
+                sensor_name: None,
+                sensor_output_range_low: None,
+                sensor_output_range_high: None,
+                sensor_output_space: None,
+                sensor_model: None,
+                sensor_manufacturer: None,
+                sensor_scope: None,
+                units_derived_quantity: None,
+                port_id: None,
+                sensor_type: None,
+                input_type: None,
+                algorithm_type: None,
+                algorithm_equation: None,
+                calibration_source: None,
+                calibration_verified: None,
+                sample_period: None,
+                metadata: None,
+                derivation_equation_constants: vec![EquationConstant {
+                    name: "a".repeat(65),
+                    value: 1.0,
+                }],
+                calibration_points: vec![],
+            },
+        );
+
+        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+        let err = Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap_err();
+        assert!(
+            matches!(err, crate::error::MachineConfigError::Parse(_)),
+            "expected a Parse error for an oversized constant name, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn roundtrip_synchronous_sensor_arbitrary_differently_styled_key() {
+        // The map key is a free-form label with no schema meaning — proves a
+        // key unlike the fixture's own "Oxygen Sensor" (different style:
+        // underscore-joined, all-caps) survives a write->read cycle verbatim.
+        let mut config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let cb = config.optical_trains[0].optional_components.clearbox.as_mut().unwrap();
+        cb.synchronous_sensors.insert(
+            "HUMIDITY_SENSOR_2".to_string(),
+            SynchronousSensor {
+                enabled: Some(true),
+                sensor_name: None,
+                sensor_output_range_low: None,
+                sensor_output_range_high: None,
+                sensor_output_space: None,
+                sensor_model: None,
+                sensor_manufacturer: None,
+                sensor_scope: None,
+                units_derived_quantity: None,
+                port_id: Some(9),
+                sensor_type: None,
+                input_type: None,
+                algorithm_type: None,
+                algorithm_equation: None,
+                calibration_source: None,
+                calibration_verified: None,
+                sample_period: None,
+                metadata: None,
+                derivation_equation_constants: vec![],
+                calibration_points: vec![],
+            },
+        );
+
+        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+        Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap();
+        let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
+        let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        assert!(cb_rt.synchronous_sensors.contains_key("HUMIDITY_SENSOR_2"));
+        assert_eq!(cb_rt.synchronous_sensors["HUMIDITY_SENSOR_2"].port_id, Some(9));
+    }
+
+    #[test]
+    fn opcua_and_synchronous_sensor_coexist_through_writer() {
+        // Proves the Writer side of the cross-feature guarantee (the Reader
+        // side is proved directly against the pre-built combined fixture in
+        // capabilities/v1_0/hdf5.rs's own test module) — parses a real
+        // OPCUA-only fixture, adds a sensor purely in memory, writes, and
+        // confirms both survive re-reading. See SYNCHRONOUS_SENSOR_PLAN.md's
+        // Phase 0 fixture-layout decision for why both tests are kept.
+        let mut config = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
+        assert!(config.opcua.is_some(), "fixture must already have OPCUA before the test adds a sensor");
+
+        let cb = config.optical_trains[0].optional_components.clearbox.as_mut().unwrap();
+        cb.synchronous_sensors.insert(
+            "Oxygen Sensor".to_string(),
+            SynchronousSensor {
+                enabled: Some(true),
+                sensor_name: Some("ZR800 Oxygen Analyzer".to_string()),
+                sensor_output_range_low: Some(-1.0),
+                sensor_output_range_high: Some(6.0),
+                sensor_output_space: Some("log10(ppm)".to_string()),
+                sensor_model: Some("ZR810".to_string()),
+                sensor_manufacturer: Some("Industrial Physics".to_string()),
+                sensor_scope: Some("Global".to_string()),
+                units_derived_quantity: Some("ppm".to_string()),
+                port_id: Some(5),
+                sensor_type: Some("Oxygen Sensor".to_string()),
+                input_type: Some("4-20 mA".to_string()),
+                algorithm_type: Some("Log-Linear".to_string()),
+                algorithm_equation: Some("log(ppm) = a*mA + b".to_string()),
+                calibration_source: Some("Datasheet".to_string()),
+                calibration_verified: Some(false),
+                sample_period: Some(5.0),
+                metadata: None,
+                derivation_equation_constants: vec![
+                    EquationConstant { name: "a".to_string(), value: 0.4375 },
+                    EquationConstant { name: "b".to_string(), value: -2.75 },
+                ],
+                calibration_points: vec![
+                    CalibrationPoint { input_value: 4.0, output_value: -1.0 },
+                    CalibrationPoint { input_value: 20.0, output_value: 6.0 },
+                ],
+            },
+        );
+
+        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+        Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap();
+        let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
+
+        assert!(rt.opcua.is_some(), "OPCUA must survive alongside the newly-added sensor");
+        let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        let sensor_rt = &cb_rt.synchronous_sensors["Oxygen Sensor"];
+        assert_eq!(sensor_rt.sensor_name, Some("ZR800 Oxygen Analyzer".to_string()));
+        assert_eq!(sensor_rt.derivation_equation_constants.len(), 2);
+        assert_eq!(sensor_rt.calibration_points.len(), 2);
     }
 
     #[test]

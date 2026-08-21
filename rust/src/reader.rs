@@ -69,6 +69,10 @@ mod tests {
         concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_config_opcua.h5");
     const SYNTHETIC: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/synthetic_2laser.h5");
+    const REFERENCE_SENSORS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/reference_config_synchronous_sensors.h5"
+    );
 
     #[test]
     fn open_rejects_nonexistent_path() {
@@ -133,6 +137,28 @@ mod tests {
             .expect("scan field correction file present");
         assert_eq!(sfcf.file_size, 1138799);
         assert!(sfcf.raw_bytes.is_none(), "parse() must not read raw .fc3 bytes");
+    }
+
+    #[test]
+    fn parse_reference_has_no_synchronous_sensors() {
+        let config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        assert!(cb.synchronous_sensors.is_empty());
+    }
+
+    #[test]
+    fn parse_synchronous_sensor_fixture_through_public_facade() {
+        // Same fixture/values as capabilities/v1_0/hdf5.rs's own
+        // synchronous_sensor_fixture_has_real_values test, but through the
+        // plain public MachineConfigReader facade rather than the internal
+        // adapter directly.
+        let config = MachineConfigReader::open(REFERENCE_SENSORS).unwrap().parse().unwrap();
+        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        let sensor = &cb.synchronous_sensors["Oxygen Sensor"];
+        assert_eq!(sensor.sensor_name, Some("ZR800 Oxygen Analyzer".to_string()));
+        assert_eq!(sensor.port_id, Some(5));
+        assert_eq!(sensor.derivation_equation_constants.len(), 2);
+        assert_eq!(sensor.calibration_points.len(), 2);
     }
 
     #[test]

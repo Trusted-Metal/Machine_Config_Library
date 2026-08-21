@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -91,6 +92,138 @@ func TestClearboxPresent(t *testing.T) {
 	}
 	if cb.IPAddress == "" {
 		t.Fatal("clearbox ip empty")
+	}
+}
+
+// ===========================================================================
+// SynchronousSensor
+// ===========================================================================
+
+func TestSynchronousSensorsEmptyWhenFixtureHasNone(t *testing.T) {
+	path := filepath.Join(fixturesDir(t), "reference_config.h5")
+	cfg, err := machineconfig.NewReader(path).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
+	if cb == nil {
+		t.Fatal("expected clearbox")
+	}
+	if len(cb.SynchronousSensors) != 0 {
+		t.Fatalf("expected no sensors, got %v", cb.SynchronousSensors)
+	}
+}
+
+// reference_config_synchronous_sensors.h5, not reference_config.h5, which
+// deliberately has no sensors (see SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
+func TestSynchronousSensorFixtureHasRealValues(t *testing.T) {
+	path := filepath.Join(fixturesDir(t), "reference_config_synchronous_sensors.h5")
+	cfg, err := machineconfig.NewReader(path).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
+	if cb == nil {
+		t.Fatal("expected clearbox")
+	}
+	if len(cb.SynchronousSensors) != 1 {
+		t.Fatalf("expected exactly 1 sensor, got %d", len(cb.SynchronousSensors))
+	}
+	s, ok := cb.SynchronousSensors["Oxygen Sensor"]
+	if !ok {
+		t.Fatal(`expected key "Oxygen Sensor"`)
+	}
+
+	strEq := func(field string, got *string, want string) {
+		if got == nil || *got != want {
+			t.Errorf("%s: got %v want %q", field, got, want)
+		}
+	}
+	floatEq := func(field string, got *float64, want float64) {
+		if got == nil || *got != want {
+			t.Errorf("%s: got %v want %v", field, got, want)
+		}
+	}
+	boolEq := func(field string, got *bool, want bool) {
+		if got == nil || *got != want {
+			t.Errorf("%s: got %v want %v", field, got, want)
+		}
+	}
+
+	boolEq("enabled", s.Enabled, true)
+	strEq("sensor_name", s.SensorName, "ZR800 Oxygen Analyzer")
+	floatEq("sensor_output_range_low", s.SensorOutputRangeLow, -1.0)
+	floatEq("sensor_output_range_high", s.SensorOutputRangeHigh, 6.0)
+	strEq("sensor_output_space", s.SensorOutputSpace, "log10(ppm)")
+	strEq("sensor_model", s.SensorModel, "ZR810")
+	strEq("sensor_manufacturer", s.SensorManufacturer, "Industrial Physics")
+	strEq("sensor_scope", s.SensorScope, "Global")
+	strEq("units_derived_quantity", s.UnitsDerivedQuantity, "ppm")
+	if s.PortID == nil || *s.PortID != 5 {
+		t.Errorf("port_id: got %v want 5", s.PortID)
+	}
+	strEq("sensor_type", s.SensorType, "Oxygen Sensor")
+	strEq("input_type", s.InputType, "4-20 mA")
+	strEq("algorithm_type", s.AlgorithmType, "Log-Linear")
+	strEq("algorithm_equation", s.AlgorithmEquation, "log(ppm) = a*mA + b")
+	strEq("calibration_source", s.CalibrationSource, "Datasheet")
+	boolEq("calibration_verified", s.CalibrationVerified, false)
+	floatEq("sample_period", s.SamplePeriod, 5.0)
+	if s.Metadata == nil || !strings.Contains(*s.Metadata, "Synchronous Sensor because Clearbox is responsible") {
+		t.Errorf("metadata: got %v", s.Metadata)
+	}
+
+	wantConstants := []machineconfig.EquationConstant{
+		{Name: "a", Value: 0.4375},
+		{Name: "b", Value: -2.75},
+	}
+	if !reflect.DeepEqual(s.DerivationEquationConstants, wantConstants) {
+		t.Errorf("derivation_equation_constants: got %+v want %+v", s.DerivationEquationConstants, wantConstants)
+	}
+
+	wantPoints := []machineconfig.CalibrationPoint{
+		{InputValue: 4.0, OutputValue: -1.0},
+		{InputValue: 20.0, OutputValue: 6.0},
+	}
+	if !reflect.DeepEqual(s.CalibrationPoints, wantPoints) {
+		t.Errorf("calibration_points: got %+v want %+v", s.CalibrationPoints, wantPoints)
+	}
+
+	// log(ppm) = a*mA + b, per algorithm_equation — proves the points are
+	// recorded in Sensor_Output_Space (log10(ppm)) units, not the linear
+	// Units_Derived_Quantity (ppm) units of the same underlying quantity.
+	a, b := s.DerivationEquationConstants[0].Value, s.DerivationEquationConstants[1].Value
+	for _, p := range s.CalibrationPoints {
+		got := a*p.InputValue + b
+		if math.Abs(got-p.OutputValue) > 1e-10 {
+			t.Errorf("a*%v+b = %v, want %v", p.InputValue, got, p.OutputValue)
+		}
+	}
+}
+
+func TestCombinedOpcuaAndSynchronousSensorsFixtureHasBoth(t *testing.T) {
+	path := filepath.Join(fixturesDir(t), "reference_config_opcua_synchronous_sensors.h5")
+	cfg, err := machineconfig.NewReader(path).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Opcua == nil {
+		t.Fatal("expected opcua")
+	}
+	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
+	if cb == nil {
+		t.Fatal("expected clearbox")
+	}
+	s, ok := cb.SynchronousSensors["Oxygen Sensor"]
+	if !ok {
+		t.Fatal(`expected key "Oxygen Sensor"`)
+	}
+	wantConstants := []machineconfig.EquationConstant{
+		{Name: "a", Value: 0.4375},
+		{Name: "b", Value: -2.75},
+	}
+	if !reflect.DeepEqual(s.DerivationEquationConstants, wantConstants) {
+		t.Errorf("derivation_equation_constants: got %+v want %+v", s.DerivationEquationConstants, wantConstants)
 	}
 }
 

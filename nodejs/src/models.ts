@@ -89,6 +89,59 @@ export interface ScannerCard {
   sample_period_unit: string | null;
 }
 
+/**
+ * On-disk row for `Derivation_Equation_Constants` — a variable-row-count
+ * compound dataset naming an equation's constants (e.g. `a`/`b` for
+ * `LINEAR`, `c0`..`cN` for `POLYNOMIAL`). `name` is stored as a 64-byte
+ * fixed-length UTF-8 string on disk — see SYNCHRONOUS_SENSOR_PLAN.md's
+ * "Compound dataset string convention" for why (a cross-language HDF5
+ * restriction on variable-length strings inside compound-type members).
+ */
+export interface EquationConstant {
+  name: string;
+  value: number;
+}
+
+/**
+ * On-disk row for `Calibration_Points` — a variable-row-count compound
+ * dataset of raw calibration pairs. `input_value` is in whatever unit
+ * `SynchronousSensor.input_type` implies; `output_value` is in whatever unit
+ * `SynchronousSensor.sensor_output_space` implies (no per-row unit tag).
+ */
+export interface CalibrationPoint {
+  input_value: number;
+  output_value: number;
+}
+
+/**
+ * A single Synchronous Sensor record. Map key (on `ClearBox.synchronous_sensors`)
+ * is a free-form label chosen by the file's author — not required to equal
+ * any attribute value inside the sensor's own group (same convention as
+ * `OpcuaConfig.triggers`'s keys).
+ */
+export interface SynchronousSensor {
+  enabled: boolean | null;
+  sensor_name: string | null;
+  sensor_output_range_low: number | null;
+  sensor_output_range_high: number | null;
+  sensor_output_space: string | null;
+  sensor_model: string | null;
+  sensor_manufacturer: string | null;
+  sensor_scope: string | null;
+  units_derived_quantity: string | null;
+  port_id: number | null;
+  sensor_type: string | null;
+  input_type: string | null;
+  algorithm_type: string | null;
+  algorithm_equation: string | null;
+  calibration_source: string | null;
+  calibration_verified: boolean | null;
+  sample_period: number | null;
+  metadata: string | null;
+  derivation_equation_constants: EquationConstant[];
+  calibration_points: CalibrationPoint[];
+}
+
 export interface ClearBox {
   ip_address: string;
   serial_number: string | null;
@@ -112,6 +165,16 @@ export interface ClearBox {
   volts_to_watts_params: string | null;
   correction_grid_domain_shape: string | null;
   inverse_grid_domain_shape: string | null;
+  /**
+   * Omitted entirely (not `{}`) when there are no sensors — matches Rust's
+   * `#[serde(skip_serializing_if = "IndexMap::is_empty")]` and Python's
+   * `_clearbox_to_dict` choice to omit the key when empty, so every fixture
+   * that doesn't use this feature stays byte-for-byte identical in JSON
+   * shape to before it existed. Same optional-whole-feature shape as
+   * `MachineConfig.opcua?`, not `OpcuaConfig.triggers` (which is always
+   * present, even as `{}`) — deliberately different from that precedent.
+   */
+  synchronous_sensors?: Record<string, SynchronousSensor>;
 }
 
 export interface OptionalComponents {

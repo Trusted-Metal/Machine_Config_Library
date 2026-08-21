@@ -113,6 +113,76 @@ pub struct ClearBox {
     pub volts_to_watts_params: Option<String>,
     pub correction_grid_domain_shape: Option<String>,
     pub inverse_grid_domain_shape: Option<String>,
+    /// Key = free-form sensor label (HDF5 sub-group name under
+    /// `ClearBox/Synchronous_Sensors/`) — an arbitrary value chosen by the
+    /// file's author, not required to match any attribute inside that
+    /// sensor's own group (e.g. `"Oxygen Sensor"`, `"O2_Port5"`, anything).
+    /// `IndexMap` preserves HDF5 group enumeration order, matching
+    /// `OpcuaConfig.triggers`'s existing choice. No `Synchronous_Sensors`
+    /// group on disk is represented identically to an empty map here — there
+    /// is no separate "absent" state to track. Omitted from JSON entirely
+    /// when empty (unlike `triggers`, which has no such gate) — keeps "no
+    /// group on disk" and "no key in JSON" symmetric, and keeps every
+    /// existing fixture's JSON output byte-identical to before this field
+    /// existed until a file actually uses it.
+    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
+    pub synchronous_sensors: IndexMap<String, SynchronousSensor>,
+}
+
+/// One named equation constant for a `SynchronousSensor`'s `algorithm_equation`
+/// (e.g. `a`/`b` for a Log-Linear fit: `log(ppm) = a*mA + b`). HDF5 source:
+/// one row of the `Derivation_Equation_Constants` compound dataset. A named
+/// row rather than a positional array so a reader never has to infer which
+/// index means what from `algorithm_type` alone, and so adding a constant is
+/// an additive row rather than an ordering hazard.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EquationConstant {
+    pub name: String,
+    pub value: f64,
+}
+
+/// One calibration sample pair for a `SynchronousSensor`. HDF5 source: one row
+/// of the `Calibration_Points` compound dataset.
+///
+/// `input_value` is in the sensor's `input_type` unit; `output_value` is in
+/// the sensor's `sensor_output_space` unit (**not** `units_derived_quantity`)
+/// — every row of a given sensor's calibration curve is in the same units by
+/// construction. Confirmed against the ZR800 reference example: both points
+/// satisfy `algorithm_equation` exactly in log-space
+/// (`0.4375 * 4 - 2.75 == -1.0`, `0.4375 * 20 - 2.75 == 6.0`), not linear ppm.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalibrationPoint {
+    pub input_value: f64,
+    pub output_value: f64,
+}
+
+/// A synchronous sensor attached to a `ClearBox`. HDF5 source: one sub-group
+/// under `.../ClearBox/Synchronous_Sensors/<key>/` — see
+/// `ClearBox::synchronous_sensors` for what `<key>` means.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SynchronousSensor {
+    /// HDF5 int 0/1.
+    pub enabled: Option<bool>,
+    pub sensor_name: Option<String>,
+    pub sensor_output_range_low: Option<f64>,
+    pub sensor_output_range_high: Option<f64>,
+    pub sensor_output_space: Option<String>,
+    pub sensor_model: Option<String>,
+    pub sensor_manufacturer: Option<String>,
+    pub sensor_scope: Option<String>,
+    pub units_derived_quantity: Option<String>,
+    pub port_id: Option<i64>,
+    pub sensor_type: Option<String>,
+    pub input_type: Option<String>,
+    pub algorithm_type: Option<String>,
+    pub algorithm_equation: Option<String>,
+    pub calibration_source: Option<String>,
+    /// HDF5 int 0/1.
+    pub calibration_verified: Option<bool>,
+    pub sample_period: Option<f64>,
+    pub metadata: Option<String>,
+    pub derivation_equation_constants: Vec<EquationConstant>,
+    pub calibration_points: Vec<CalibrationPoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -659,6 +729,7 @@ mod tests {
             volts_to_watts_params: None,
             correction_grid_domain_shape: None,
             inverse_grid_domain_shape: None,
+            synchronous_sensors: IndexMap::new(),
         });
         let mut config = sample_config();
         config.optical_trains = vec![train];

@@ -281,7 +281,55 @@
                   "volts_to_watts_algorithm":      { "type": ["string", "null"] },
                   "volts_to_watts_params":         { "type": ["string", "null"] },
                   "correction_grid_domain_shape":  { "type": ["string", "null"] },
-                  "inverse_grid_domain_shape":     { "type": ["string", "null"] }
+                  "inverse_grid_domain_shape":     { "type": ["string", "null"] },
+                  "synchronous_sensors": {
+                    "type": "object",
+                    "description": "Name-keyed collection of synchronous sensors attached to this ClearBox. The key is a free-form label chosen by the file's author (e.g. \"Oxygen Sensor\") and carries no schema meaning of its own.",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "enabled":                  { "type": ["boolean", "null"] },
+                        "sensor_name":              { "type": ["string", "null"] },
+                        "sensor_output_range_low":  { "type": ["number", "null"] },
+                        "sensor_output_range_high": { "type": ["number", "null"] },
+                        "sensor_output_space":      { "type": ["string", "null"] },
+                        "sensor_model":             { "type": ["string", "null"] },
+                        "sensor_manufacturer":      { "type": ["string", "null"] },
+                        "sensor_scope":             { "type": ["string", "null"] },
+                        "units_derived_quantity":   { "type": ["string", "null"] },
+                        "port_id":                  { "type": ["integer", "null"] },
+                        "sensor_type":              { "type": ["string", "null"] },
+                        "input_type":               { "type": ["string", "null"] },
+                        "algorithm_type":           { "type": ["string", "null"] },
+                        "algorithm_equation":       { "type": ["string", "null"] },
+                        "calibration_source":       { "type": ["string", "null"] },
+                        "calibration_verified":     { "type": ["boolean", "null"] },
+                        "sample_period":            { "type": ["number", "null"] },
+                        "metadata":                 { "type": ["string", "null"] },
+                        "derivation_equation_constants": {
+                          "type": ["array", "null"],
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name":  { "type": "string" },
+                              "value": { "type": "number" }
+                            }
+                          }
+                        },
+                        "calibration_points": {
+                          "type": ["array", "null"],
+                          "description": "input_value is in this sensor's Input_Type unit; output_value is in this sensor's Sensor_Output_Space unit (not Units_Derived_Quantity) — every row of a given sensor's calibration curve is in the same units by construction.",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "input_value":  { "type": "number" },
+                              "output_value": { "type": "number" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }

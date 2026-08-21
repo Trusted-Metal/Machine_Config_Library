@@ -516,6 +516,7 @@ func parseClearBox(f *h5c.File, path string, g *h5c.Group, includeBinary bool) (
 		VoltsToWattsParams:        readStrAttr(g, "Volts_To_Watts_Params"),
 		CorrectionGridDomainShape: readStrAttr(g, "Correction_Grid_Domain_Shape"),
 		InverseGridDomainShape:    readStrAttr(g, "Inverse_Grid_Domain_Shape"),
+		SynchronousSensors:        parseSynchronousSensors(g),
 	}
 	if includeBinary {
 		if grid, err := readFloatGrid(f, path+"/Correction_Data"); err == nil {
@@ -526,6 +527,82 @@ func parseClearBox(f *h5c.File, path string, g *h5c.Group, includeBinary bool) (
 		}
 	}
 	return cb, nil
+}
+
+// parseSynchronousSensors enumerates Synchronous_Sensors/<name> sub-groups,
+// the identical mechanism the OpcuaTrigger loop in parseOpcua uses for
+// OPCUA/Triggers/<name>. Returns an empty (non-nil) map when the group
+// doesn't exist at all — no separate "absent" state; ClearBox.SynchronousSensors's
+// `omitempty` JSON tag handles omitting the key from output either way.
+func parseSynchronousSensors(g *h5c.Group) map[string]SynchronousSensor {
+	sensors := map[string]SynchronousSensor{}
+	if !g.LinkExists("Synchronous_Sensors") {
+		return sensors
+	}
+	sensorsGrp, err := g.OpenGroup("Synchronous_Sensors")
+	if err != nil {
+		return sensors
+	}
+	defer sensorsGrp.Close()
+	for _, name := range sensorsGrp.SubGroupNames() {
+		sg, err := sensorsGrp.OpenGroup(name)
+		if err != nil {
+			continue
+		}
+		sensors[name] = parseSynchronousSensor(sg)
+		sg.Close()
+	}
+	return sensors
+}
+
+// parseSynchronousSensor reads one Synchronous Sensor's 18 scalar attributes
+// plus its two compound datasets, defaulting each dataset to an empty
+// (non-nil) slice if it's itself absent — the same permissive-reader
+// discipline already extended from attributes to datasets in the other four
+// languages.
+func parseSynchronousSensor(g *h5c.Group) SynchronousSensor {
+	enabled, _ := readBoolFromIntAttr(g, "Enabled")
+	rangeLow, _ := readFloatAttr(g, "Sensor_Output_Range_Low")
+	rangeHigh, _ := readFloatAttr(g, "Sensor_Output_Range_High")
+	portID, _ := readIntAttr(g, "Port_ID")
+	calibVerified, _ := readBoolFromIntAttr(g, "Calibration_Verified")
+	samplePeriod, _ := readFloatAttr(g, "Sample_Period")
+
+	constants := []EquationConstant{}
+	if rows, err := g.ReadEquationConstantsDataset("Derivation_Equation_Constants"); err == nil {
+		for _, r := range rows {
+			constants = append(constants, EquationConstant{Name: r.Name, Value: r.Value})
+		}
+	}
+	points := []CalibrationPoint{}
+	if rows, err := g.ReadCalibrationPointsDataset("Calibration_Points"); err == nil {
+		for _, r := range rows {
+			points = append(points, CalibrationPoint{InputValue: r.InputValue, OutputValue: r.OutputValue})
+		}
+	}
+
+	return SynchronousSensor{
+		Enabled:                     enabled,
+		SensorName:                  readStrAttr(g, "Sensor_Name"),
+		SensorOutputRangeLow:        rangeLow,
+		SensorOutputRangeHigh:       rangeHigh,
+		SensorOutputSpace:           readStrAttr(g, "Sensor_Output_Space"),
+		SensorModel:                 readStrAttr(g, "Sensor_Model"),
+		SensorManufacturer:          readStrAttr(g, "Sensor_Manufacturer"),
+		SensorScope:                 readStrAttr(g, "Sensor_Scope"),
+		UnitsDerivedQuantity:        readStrAttr(g, "Units_Derived_Quantity"),
+		PortID:                      portID,
+		SensorType:                  readStrAttr(g, "Sensor_Type"),
+		InputType:                   readStrAttr(g, "Input_Type"),
+		AlgorithmType:               readStrAttr(g, "Algorithm_Type"),
+		AlgorithmEquation:           readStrAttr(g, "Algorithm_Equation"),
+		CalibrationSource:           readStrAttr(g, "Calibration_Source"),
+		CalibrationVerified:         calibVerified,
+		SamplePeriod:                samplePeriod,
+		Metadata:                    readStrAttr(g, "Metadata"),
+		DerivationEquationConstants: constants,
+		CalibrationPoints:           points,
+	}
 }
 
 func readFloatGrid(f *h5c.File, path string) (*[][][]*float64, error) {

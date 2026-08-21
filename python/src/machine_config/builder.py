@@ -96,6 +96,10 @@ def _mock_clearbox(ip: str, serial: str) -> ClearBox:
         volts_to_watts_params="50.0,100.0",
         correction_grid_domain_shape=None,
         inverse_grid_domain_shape=None,
+        # Not populated by MockConfigBuilder, same as OPCUA — only the real
+        # fixtures (reference_config_synchronous_sensors.h5 and the combined
+        # OPCUA+sensors fixture) exercise this field today.
+        synchronous_sensors={},
     )
 
 

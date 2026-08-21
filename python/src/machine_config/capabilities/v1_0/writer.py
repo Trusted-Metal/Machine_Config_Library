@@ -28,9 +28,15 @@ from machine_config.models import (
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
+    SynchronousSensor,
 )
 
 from . import layout
+from .hdf5 import (
+    EQUATION_CONSTANT_NAME_MAX_BYTES,
+    _CALIBRATION_POINT_DTYPE,
+    _EQUATION_CONSTANT_DTYPE,
+)
 
 
 class Hdf5WriterV1_0:
@@ -290,6 +296,55 @@ class Hdf5WriterV1_0:
         ids.attrs["dimensions"] = "H,W,D"
         ids.attrs["dtype"]      = "float64"
         ids.attrs["shape"]      = f"{ids.shape[0]}x{ids.shape[1]}x{ids.shape[2]}"
+
+        # Synchronous_Sensors: only created when non-empty, so a ClearBox
+        # with no sensors looks identical on disk to before this field
+        # existed — no empty placeholder group. Mirrors ClearBox itself
+        # being entirely absent rather than an empty shell.
+        if cb.synchronous_sensors:
+            sensors_grp = grp.create_group("Synchronous_Sensors")
+            for name, sensor in cb.synchronous_sensors.items():
+                self._write_synchronous_sensor(sensors_grp.require_group(name), sensor)
+
+    def _write_synchronous_sensor(self, grp: h5py.Group, sensor: SynchronousSensor) -> None:
+        grp.attrs["Enabled"]                  = self._b(sensor.enabled)
+        grp.attrs["Sensor_Name"]              = self._s(sensor.sensor_name)
+        grp.attrs["Sensor_Output_Range_Low"]  = self._f(sensor.sensor_output_range_low)
+        grp.attrs["Sensor_Output_Range_High"] = self._f(sensor.sensor_output_range_high)
+        grp.attrs["Sensor_Output_Space"]      = self._s(sensor.sensor_output_space)
+        grp.attrs["Sensor_Model"]             = self._s(sensor.sensor_model)
+        grp.attrs["Sensor_Manufacturer"]      = self._s(sensor.sensor_manufacturer)
+        grp.attrs["Sensor_Scope"]             = self._s(sensor.sensor_scope)
+        grp.attrs["Units_Derived_Quantity"]   = self._s(sensor.units_derived_quantity)
+        grp.attrs["Port_ID"]                  = self._i(sensor.port_id)
+        grp.attrs["Sensor_Type"]              = self._s(sensor.sensor_type)
+        grp.attrs["Input_Type"]               = self._s(sensor.input_type)
+        grp.attrs["Algorithm_Type"]           = self._s(sensor.algorithm_type)
+        grp.attrs["Algorithm_Equation"]       = self._s(sensor.algorithm_equation)
+        grp.attrs["Calibration_Source"]       = self._s(sensor.calibration_source)
+        grp.attrs["Calibration_Verified"]     = self._b(sensor.calibration_verified)
+        grp.attrs["Sample_Period"]            = self._f(sensor.sample_period)
+        grp.attrs["Metadata"]                 = self._s(sensor.metadata)
+
+        for c in sensor.derivation_equation_constants:
+            name_bytes = len(c.name.encode("utf-8"))
+            if name_bytes > EQUATION_CONSTANT_NAME_MAX_BYTES:
+                raise ValueError(
+                    f"Derivation_Equation_Constants name {c.name!r} is {name_bytes} UTF-8 "
+                    f"bytes, which does not fit in the {EQUATION_CONSTANT_NAME_MAX_BYTES}-byte "
+                    "fixed-length field (would otherwise be silently truncated on write)."
+                )
+        constants = np.array(
+            [(c.name, c.value) for c in sensor.derivation_equation_constants],
+            dtype=_EQUATION_CONSTANT_DTYPE,
+        )
+        grp.create_dataset("Derivation_Equation_Constants", data=constants)
+
+        points = np.array(
+            [(p.input_value, p.output_value) for p in sensor.calibration_points],
+            dtype=_CALIBRATION_POINT_DTYPE,
+        )
+        grp.create_dataset("Calibration_Points", data=points)
 
     def _write_sfcf(
         self,

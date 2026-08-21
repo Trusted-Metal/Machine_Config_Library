@@ -3,10 +3,12 @@
 // Public MachineConfigWriter dispatches here after reading File_Version from the model.
 
 #include "machine_config/models.hpp"
+#include "machine_config/capabilities/v1_0/compound_types.hpp"
 #include "machine_config/capabilities/v1_0/layout.hpp"
 
 #include <highfive/H5File.hpp>
 
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <stdexcept>
@@ -313,6 +315,77 @@ private:
         ws(grp, "Inverse_Grid_Domain_Shape",   cb.inverse_grid_domain_shape.value_or(""));
         writeCorrectionDataset(grp, "Correction_Data",         cb.correction_data);
         writeCorrectionDataset(grp, "Inverse_Correction_Data", cb.inverse_correction_data);
+
+        // Only create the Synchronous_Sensors group at all when the map is
+        // non-empty, so a ClearBox with zero sensors is byte-identical on
+        // disk to before this field existed — no empty placeholder group.
+        // Matches Rust's/Python's/Node's/Go's choice, deliberately different
+        // from OPCUA/Triggers (always created, even with zero triggers).
+        if (!cb.synchronous_sensors.empty()) {
+            auto sensors_grp = grp.createGroup("Synchronous_Sensors");
+            for (const auto& [name, sensor] : cb.synchronous_sensors) {
+                auto sg = sensors_grp.createGroup(name);
+                writeSynchronousSensor(sg, sensor);
+            }
+        }
+    }
+
+    // Derivation_Equation_Constants.name is a 64-byte fixed-length field
+    // (see compound_types.hpp / SYNCHRONOUS_SENSOR_PLAN.md's "Compound
+    // dataset string convention"). A name whose UTF-8 encoding exceeds 64
+    // bytes is rejected here, not silently truncated on write.
+    void writeEquationConstants(HighFive::Group& grp,
+                                 const std::vector<EquationConstant>& constants) const {
+        std::vector<EquationConstantRow> rows;
+        rows.reserve(constants.size());
+        for (const auto& c : constants) {
+            if (c.name.size() > EquationConstantMaxNameBytes) {
+                throw std::runtime_error(
+                    "Derivation_Equation_Constants name '" + c.name + "' is " +
+                    std::to_string(c.name.size()) + " UTF-8 bytes, which does not fit in the " +
+                    std::to_string(EquationConstantMaxNameBytes) +
+                    "-byte fixed-length field (would otherwise be silently truncated on write).");
+            }
+            EquationConstantRow row{};
+            std::memset(row.name, 0, sizeof(row.name));
+            std::memcpy(row.name, c.name.data(), c.name.size());
+            row.value = c.value;
+            rows.push_back(row);
+        }
+        grp.createDataSet("Derivation_Equation_Constants", rows);
+    }
+
+    // All-f64, no string member — unaffected by the fixed-length decision above.
+    void writeCalibrationPoints(HighFive::Group& grp,
+                                 const std::vector<CalibrationPoint>& points) const {
+        std::vector<CalibrationPointRow> rows;
+        rows.reserve(points.size());
+        for (const auto& p : points)
+            rows.push_back({p.input_value, p.output_value});
+        grp.createDataSet("Calibration_Points", rows);
+    }
+
+    void writeSynchronousSensor(HighFive::Group& grp, const SynchronousSensor& s) const {
+        wb(grp, "Enabled", s.enabled);
+        ws(grp, "Sensor_Name", s.sensor_name.value_or(""));
+        wf(grp, "Sensor_Output_Range_Low", s.sensor_output_range_low);
+        wf(grp, "Sensor_Output_Range_High", s.sensor_output_range_high);
+        ws(grp, "Sensor_Output_Space", s.sensor_output_space.value_or(""));
+        ws(grp, "Sensor_Model", s.sensor_model.value_or(""));
+        ws(grp, "Sensor_Manufacturer", s.sensor_manufacturer.value_or(""));
+        ws(grp, "Sensor_Scope", s.sensor_scope.value_or(""));
+        ws(grp, "Units_Derived_Quantity", s.units_derived_quantity.value_or(""));
+        wi(grp, "Port_ID", s.port_id);
+        ws(grp, "Sensor_Type", s.sensor_type.value_or(""));
+        ws(grp, "Input_Type", s.input_type.value_or(""));
+        ws(grp, "Algorithm_Type", s.algorithm_type.value_or(""));
+        ws(grp, "Algorithm_Equation", s.algorithm_equation.value_or(""));
+        ws(grp, "Calibration_Source", s.calibration_source.value_or(""));
+        wb(grp, "Calibration_Verified", s.calibration_verified);
+        wf(grp, "Sample_Period", s.sample_period);
+        ws(grp, "Metadata", s.metadata.value_or(""));
+        writeEquationConstants(grp, s.derivation_equation_constants);
+        writeCalibrationPoints(grp, s.calibration_points);
     }
 
     void writeCorrectionDataset(HighFive::Group& grp, const std::string& name,

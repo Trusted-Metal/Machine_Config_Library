@@ -16,8 +16,10 @@ import numpy as np
 from machine_config.models import (
     AxisConfig,
     BuildPlate,
+    CalibrationPoint,
     ClearBox,
     Collimator,
+    EquationConstant,
     LightSource,
     Machine,
     MachineConfig,
@@ -31,6 +33,7 @@ from machine_config.models import (
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
+    SynchronousSensor,
 )
 from machine_config.capabilities.file_version import MissingRequiredGroup
 from machine_config.schema import SCHEMA_VERSION
@@ -66,6 +69,29 @@ _KNOWN_CLIENT_KEYS: frozenset[str] = frozenset(
 _KNOWN_PIPE_KEYS: frozenset[str] = frozenset(
     {"Pipe_Enabled", "Buffer_Size", "Configure_Client", "Inbound_Rate_Limit",
      "Max_Inbound_Message_Size", "Min_Integrity_Level", "Pipe_Name", "User_Access_Level"}
+)
+
+# Compound dtypes for SynchronousSensor's two datasets. First use of a
+# structured/compound HDF5 type anywhere in this codebase — no prior
+# precedent to match, confirmed by grep before writing this.
+#
+# `name` is a fixed-length (64-byte) UTF-8 string, not h5py's default
+# variable-length string — a deliberate, cross-language decision. The HDF5 C
+# library cannot convert between fixed-length and variable-length strings
+# when they're compound-type *members* (confirmed at the raw H5Tinsert/
+# H5Dread level), and Node.js's h5wasm cannot write a non-empty VLEN string
+# inside a compound row at all. Fixed-length is the one representation every
+# language's HDF5 binding can both read and write here. See
+# SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string convention" section.
+EQUATION_CONSTANT_NAME_MAX_BYTES = 64
+_EQUATION_CONSTANT_DTYPE = np.dtype(
+    [
+        ("name", h5py.string_dtype(encoding="utf-8", length=EQUATION_CONSTANT_NAME_MAX_BYTES)),
+        ("value", "f8"),
+    ]
+)
+_CALIBRATION_POINT_DTYPE = np.dtype(
+    [("input_value", "f8"), ("output_value", "f8")]
 )
 
 
@@ -483,6 +509,14 @@ class Hdf5AdapterV1_0:
         a = grp.attrs
         corr_data = self._nan_array_to_list(grp["Correction_Data"][:])
         inv_data  = self._nan_array_to_list(grp["Inverse_Correction_Data"][:])
+        # Synchronous_Sensors: absent entirely (e.g. today's plain
+        # reference_config.h5) and present-but-empty are the same state — an
+        # empty dict, not a separate "absent" marker.
+        synchronous_sensors: dict[str, SynchronousSensor] = {}
+        if "Synchronous_Sensors" in grp:
+            sensors_grp = grp["Synchronous_Sensors"]
+            for name in sensors_grp.keys():
+                synchronous_sensors[name] = self._parse_synchronous_sensor(sensors_grp[name])
         return ClearBox(
             ip_address=str(a.get("Ip_Address", "")),
             serial_number=self._read_str(a, "Serial_Number"),
@@ -506,6 +540,52 @@ class Hdf5AdapterV1_0:
                 a, "Correction_Grid_Domain_Shape"
             ),
             inverse_grid_domain_shape=self._read_str(a, "Inverse_Grid_Domain_Shape"),
+            synchronous_sensors=synchronous_sensors,
+        )
+
+    def _parse_synchronous_sensor(self, grp: h5py.Group) -> SynchronousSensor:
+        """Parses one ClearBox/Synchronous_Sensors/<key>/ sub-group. Both
+        compound datasets default to an empty list if the dataset itself is
+        absent — the same "never raise on missing optional data" discipline
+        used everywhere else in this reader, extended to datasets, not just
+        attributes.
+        """
+        a = grp.attrs
+        derivation_equation_constants: list[EquationConstant] = []
+        if "Derivation_Equation_Constants" in grp:
+            rows = grp["Derivation_Equation_Constants"][()]
+            derivation_equation_constants = [
+                EquationConstant(name=row["name"].decode("utf-8"), value=float(row["value"]))
+                for row in rows
+            ]
+        calibration_points: list[CalibrationPoint] = []
+        if "Calibration_Points" in grp:
+            rows = grp["Calibration_Points"][()]
+            calibration_points = [
+                CalibrationPoint(input_value=float(row["input_value"]), output_value=float(row["output_value"]))
+                for row in rows
+            ]
+        return SynchronousSensor(
+            enabled=self._read_bool_from_int(a, "Enabled"),
+            sensor_name=self._read_str(a, "Sensor_Name"),
+            sensor_output_range_low=self._read_float(a, "Sensor_Output_Range_Low"),
+            sensor_output_range_high=self._read_float(a, "Sensor_Output_Range_High"),
+            sensor_output_space=self._read_str(a, "Sensor_Output_Space"),
+            sensor_model=self._read_str(a, "Sensor_Model"),
+            sensor_manufacturer=self._read_str(a, "Sensor_Manufacturer"),
+            sensor_scope=self._read_str(a, "Sensor_Scope"),
+            units_derived_quantity=self._read_str(a, "Units_Derived_Quantity"),
+            port_id=self._read_int(a, "Port_ID"),
+            sensor_type=self._read_str(a, "Sensor_Type"),
+            input_type=self._read_str(a, "Input_Type"),
+            algorithm_type=self._read_str(a, "Algorithm_Type"),
+            algorithm_equation=self._read_str(a, "Algorithm_Equation"),
+            calibration_source=self._read_str(a, "Calibration_Source"),
+            calibration_verified=self._read_bool_from_int(a, "Calibration_Verified"),
+            sample_period=self._read_float(a, "Sample_Period"),
+            metadata=self._read_str(a, "Metadata"),
+            derivation_equation_constants=derivation_equation_constants,
+            calibration_points=calibration_points,
         )
 
     def _parse_sfcf(self, ds: h5py.Dataset) -> ScanFieldCorrectionFile:
@@ -803,6 +883,44 @@ class Hdf5AdapterV1_0:
         if include_binary:
             d["correction_data"] = cb.correction_data
             d["inverse_correction_data"] = cb.inverse_correction_data
+        # Omitted entirely when empty (unlike OpcuaConfig.triggers, which has
+        # no such gate) — keeps "no group on disk" and "no key in JSON"
+        # symmetric, and keeps every fixture that doesn't use this feature
+        # byte-identical to before it existed. Matches the same decision
+        # already made for Rust's serde output, for cross-language
+        # consistency — see SYNCHRONOUS_SENSOR_PLAN.md.
+        if cb.synchronous_sensors:
+            d["synchronous_sensors"] = {
+                name: {
+                    "enabled": s.enabled,
+                    "sensor_name": s.sensor_name,
+                    "sensor_output_range_low": s.sensor_output_range_low,
+                    "sensor_output_range_high": s.sensor_output_range_high,
+                    "sensor_output_space": s.sensor_output_space,
+                    "sensor_model": s.sensor_model,
+                    "sensor_manufacturer": s.sensor_manufacturer,
+                    "sensor_scope": s.sensor_scope,
+                    "units_derived_quantity": s.units_derived_quantity,
+                    "port_id": s.port_id,
+                    "sensor_type": s.sensor_type,
+                    "input_type": s.input_type,
+                    "algorithm_type": s.algorithm_type,
+                    "algorithm_equation": s.algorithm_equation,
+                    "calibration_source": s.calibration_source,
+                    "calibration_verified": s.calibration_verified,
+                    "sample_period": s.sample_period,
+                    "metadata": s.metadata,
+                    "derivation_equation_constants": [
+                        {"name": c.name, "value": c.value}
+                        for c in s.derivation_equation_constants
+                    ],
+                    "calibration_points": [
+                        {"input_value": p.input_value, "output_value": p.output_value}
+                        for p in s.calibration_points
+                    ],
+                }
+                for name, s in cb.synchronous_sensors.items()
+            }
         return d
 
     def _sfcf_to_dict(
@@ -1038,6 +1156,36 @@ def _train_from_dict(t: dict) -> OpticalTrain:
 
     clearbox: Optional[ClearBox] = None
     if cb_d is not None:
+        synchronous_sensors: dict[str, SynchronousSensor] = {}
+        for name, sd in cb_d.get("synchronous_sensors", {}).items():
+            synchronous_sensors[name] = SynchronousSensor(
+                enabled=sd.get("enabled"),
+                sensor_name=sd.get("sensor_name"),
+                sensor_output_range_low=sd.get("sensor_output_range_low"),
+                sensor_output_range_high=sd.get("sensor_output_range_high"),
+                sensor_output_space=sd.get("sensor_output_space"),
+                sensor_model=sd.get("sensor_model"),
+                sensor_manufacturer=sd.get("sensor_manufacturer"),
+                sensor_scope=sd.get("sensor_scope"),
+                units_derived_quantity=sd.get("units_derived_quantity"),
+                port_id=sd.get("port_id"),
+                sensor_type=sd.get("sensor_type"),
+                input_type=sd.get("input_type"),
+                algorithm_type=sd.get("algorithm_type"),
+                algorithm_equation=sd.get("algorithm_equation"),
+                calibration_source=sd.get("calibration_source"),
+                calibration_verified=sd.get("calibration_verified"),
+                sample_period=sd.get("sample_period"),
+                metadata=sd.get("metadata"),
+                derivation_equation_constants=[
+                    EquationConstant(name=c["name"], value=c["value"])
+                    for c in sd.get("derivation_equation_constants", [])
+                ],
+                calibration_points=[
+                    CalibrationPoint(input_value=p["input_value"], output_value=p["output_value"])
+                    for p in sd.get("calibration_points", [])
+                ],
+            )
         clearbox = ClearBox(
             ip_address=cb_d.get("ip_address", ""),
             serial_number=cb_d.get("serial_number"),
@@ -1059,6 +1207,7 @@ def _train_from_dict(t: dict) -> OpticalTrain:
             volts_to_watts_params=cb_d.get("volts_to_watts_params"),
             correction_grid_domain_shape=cb_d.get("correction_grid_domain_shape"),
             inverse_grid_domain_shape=cb_d.get("inverse_grid_domain_shape"),
+            synchronous_sensors=synchronous_sensors,
         )
 
     sfcf: Optional[ScanFieldCorrectionFile] = None

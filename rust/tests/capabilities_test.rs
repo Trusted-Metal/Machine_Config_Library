@@ -20,6 +20,14 @@ static OPCUA_MISSING_REQUIRED: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../docs/validation/fixtures/opcua_missing_required.h5"
 );
+static REFERENCE_SENSORS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../fixtures/reference_config_synchronous_sensors.h5"
+);
+static REFERENCE_OPCUA_SENSORS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../fixtures/reference_config_opcua_synchronous_sensors.h5"
+);
 
 #[test]
 fn supported_versions() {
@@ -164,6 +172,41 @@ fn opcua_optional_field_never_appears_in_missing_details() {
 fn clearbox_optional() {
     let file = open_machine_config(REFERENCE).unwrap();
     assert!(file.get_clearbox(0).unwrap().is_some());
+}
+
+#[test]
+fn clearbox_synchronous_sensors_empty_when_fixture_has_none() {
+    // reference_config.h5 deliberately has no Synchronous_Sensors group at
+    // all (see SYNCHRONOUS_SENSOR_PLAN.md Phase 0) — the map must read back
+    // empty, not missing/absent, since there is no separate "absent" state.
+    let file = open_machine_config(REFERENCE).unwrap();
+    let cb = file.get_clearbox(0).unwrap().unwrap();
+    assert!(cb.synchronous_sensors.is_empty());
+}
+
+#[test]
+fn clearbox_synchronous_sensors_present_and_named_on_dedicated_fixture() {
+    let file = open_machine_config(REFERENCE_SENSORS).unwrap();
+    let cb = file.get_clearbox(0).unwrap().unwrap();
+    assert_eq!(cb.synchronous_sensors.len(), 1);
+    let sensor = cb.synchronous_sensors.get("Oxygen Sensor")
+        .expect("key is this fixture's arbitrary label, not a schema-significant name");
+    assert_eq!(sensor.sensor_name, Some("ZR800 Oxygen Analyzer".to_string()));
+    assert_eq!(sensor.port_id, Some(5));
+}
+
+#[test]
+fn combined_fixture_has_opcua_and_synchronous_sensors_through_facade() {
+    // Third-layer check for the combined fixture: hdf5.rs's own test module
+    // proves the internal adapter, reader.rs proves the plain public
+    // MachineConfigReader, this proves the capabilities facade too.
+    let file = open_machine_config(REFERENCE_OPCUA_SENSORS).unwrap();
+    assert!(file.get_opcua().is_ok(), "OPCUA must be present on the combined fixture");
+    let cb = file.get_clearbox(0).unwrap().unwrap();
+    assert_eq!(
+        cb.synchronous_sensors["Oxygen Sensor"].sensor_name,
+        Some("ZR800 Oxygen Analyzer".to_string())
+    );
 }
 
 #[test]

@@ -777,6 +777,109 @@ func writeClearBox(g *h5c.Group, cb *ClearBox) error {
 	}
 	icdDS.Close()
 
+	// Only create the Synchronous_Sensors group at all when the map is
+	// non-empty, so a ClearBox with zero sensors is byte-identical on disk
+	// to before this field existed — no empty placeholder group. Matches
+	// Rust's/Python's/Node's choice, deliberately different from
+	// OPCUA/Triggers (always created, even with zero triggers).
+	if len(cb.SynchronousSensors) > 0 {
+		sensorsGrp, err := g.CreateGroup("Synchronous_Sensors")
+		if err != nil {
+			return err
+		}
+		defer sensorsGrp.Close()
+		for name, sensor := range cb.SynchronousSensors {
+			sGrp, err := sensorsGrp.CreateGroup(name)
+			if err != nil {
+				return err
+			}
+			if err := writeSynchronousSensor(sGrp, &sensor); err != nil {
+				sGrp.Close()
+				return err
+			}
+			sGrp.Close()
+		}
+	}
+
+	return nil
+}
+
+// writeSynchronousSensor writes one Synchronous Sensor's 18 scalar
+// attributes plus its two compound datasets. A zero-length row slice
+// produces a valid zero-row dataset (see h5c.CreateEquationConstantsDataset/
+// CreateCalibrationPointsDataset), not an absent dataset.
+func writeSynchronousSensor(g *h5c.Group, s *SynchronousSensor) error {
+	if err := wb(g, "Enabled", s.Enabled); err != nil {
+		return err
+	}
+	if err := ws(g, "Sensor_Name", strOrEmpty(s.SensorName)); err != nil {
+		return err
+	}
+	if err := wf(g, "Sensor_Output_Range_Low", s.SensorOutputRangeLow); err != nil {
+		return err
+	}
+	if err := wf(g, "Sensor_Output_Range_High", s.SensorOutputRangeHigh); err != nil {
+		return err
+	}
+	if err := ws(g, "Sensor_Output_Space", strOrEmpty(s.SensorOutputSpace)); err != nil {
+		return err
+	}
+	if err := ws(g, "Sensor_Model", strOrEmpty(s.SensorModel)); err != nil {
+		return err
+	}
+	if err := ws(g, "Sensor_Manufacturer", strOrEmpty(s.SensorManufacturer)); err != nil {
+		return err
+	}
+	if err := ws(g, "Sensor_Scope", strOrEmpty(s.SensorScope)); err != nil {
+		return err
+	}
+	if err := ws(g, "Units_Derived_Quantity", strOrEmpty(s.UnitsDerivedQuantity)); err != nil {
+		return err
+	}
+	if err := wi(g, "Port_ID", s.PortID); err != nil {
+		return err
+	}
+	if err := ws(g, "Sensor_Type", strOrEmpty(s.SensorType)); err != nil {
+		return err
+	}
+	if err := ws(g, "Input_Type", strOrEmpty(s.InputType)); err != nil {
+		return err
+	}
+	if err := ws(g, "Algorithm_Type", strOrEmpty(s.AlgorithmType)); err != nil {
+		return err
+	}
+	if err := ws(g, "Algorithm_Equation", strOrEmpty(s.AlgorithmEquation)); err != nil {
+		return err
+	}
+	if err := ws(g, "Calibration_Source", strOrEmpty(s.CalibrationSource)); err != nil {
+		return err
+	}
+	if err := wb(g, "Calibration_Verified", s.CalibrationVerified); err != nil {
+		return err
+	}
+	if err := wf(g, "Sample_Period", s.SamplePeriod); err != nil {
+		return err
+	}
+	if err := ws(g, "Metadata", strOrEmpty(s.Metadata)); err != nil {
+		return err
+	}
+
+	constRows := make([]h5c.EquationConstantRow, len(s.DerivationEquationConstants))
+	for i, c := range s.DerivationEquationConstants {
+		constRows[i] = h5c.EquationConstantRow{Name: c.Name, Value: c.Value}
+	}
+	if err := g.CreateEquationConstantsDataset("Derivation_Equation_Constants", constRows); err != nil {
+		return err
+	}
+
+	pointRows := make([]h5c.CalibrationPointRow, len(s.CalibrationPoints))
+	for i, p := range s.CalibrationPoints {
+		pointRows[i] = h5c.CalibrationPointRow{InputValue: p.InputValue, OutputValue: p.OutputValue}
+	}
+	if err := g.CreateCalibrationPointsDataset("Calibration_Points", pointRows); err != nil {
+		return err
+	}
+
 	return nil
 }
 

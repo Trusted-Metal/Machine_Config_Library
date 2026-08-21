@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"math"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	machineconfig "machine-config-go"
@@ -140,6 +142,175 @@ func TestWriterRoundtripClearboxScalars(t *testing.T) {
 	}
 	if (cbr.CorrectionGridDomainShape == nil) != (cbo.CorrectionGridDomainShape == nil) || (cbo.CorrectionGridDomainShape != nil && *cbr.CorrectionGridDomainShape != *cbo.CorrectionGridDomainShape) {
 		t.Errorf("correction_grid_domain_shape: got %v want %v", cbr.CorrectionGridDomainShape, cbo.CorrectionGridDomainShape)
+	}
+	if len(cbr.SynchronousSensors) != 0 {
+		t.Errorf("expected no sensors on reference_config.h5 roundtrip, got %v", cbr.SynchronousSensors)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Roundtrip: SynchronousSensor
+// ---------------------------------------------------------------------------
+
+// writeAndRead writes cfg to a temp file and reads it back.
+func writeAndRead(t *testing.T, cfg *machineconfig.MachineConfig) *machineconfig.MachineConfig {
+	t.Helper()
+	tmp := filepath.Join(t.TempDir(), "rt.h5")
+	if err := machineconfig.NewWriter().Write(cfg, tmp); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := machineconfig.NewReader(tmp).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt
+}
+
+func TestWriterRoundtripSynchronousSensorCompoundDatasetsExactValuesInOrder(t *testing.T) {
+	orig, rt := roundtrip(t, filepath.Join(fixturesDir(t), "reference_config_synchronous_sensors.h5"))
+	so := orig.OpticalTrains[0].OptionalComponents.Clearbox.SynchronousSensors["Oxygen Sensor"]
+	sr := rt.OpticalTrains[0].OptionalComponents.Clearbox.SynchronousSensors["Oxygen Sensor"]
+	if !reflect.DeepEqual(sr.DerivationEquationConstants, so.DerivationEquationConstants) {
+		t.Errorf("derivation_equation_constants: got %+v want %+v", sr.DerivationEquationConstants, so.DerivationEquationConstants)
+	}
+	if !reflect.DeepEqual(sr.CalibrationPoints, so.CalibrationPoints) {
+		t.Errorf("calibration_points: got %+v want %+v", sr.CalibrationPoints, so.CalibrationPoints)
+	}
+	if sr.SensorName == nil || *sr.SensorName != "ZR800 Oxygen Analyzer" {
+		t.Errorf("sensor_name: got %v", sr.SensorName)
+	}
+}
+
+// TestWriterRoundtripSynchronousSensorWithZeroRowCompoundDatasets is a
+// distinct edge case from the empty-*map* test above: here the sensor
+// itself exists (its group is created), but both compound datasets have
+// zero rows — proving 0-length compound dataset creation/read genuinely
+// works, not assumed.
+func TestWriterRoundtripSynchronousSensorWithZeroRowCompoundDatasets(t *testing.T) {
+	cfg, err := machineconfig.NewReader(filepath.Join(fixturesDir(t), "reference_config.h5")).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
+	cb.SynchronousSensors = map[string]machineconfig.SynchronousSensor{
+		"Untested Sensor": {
+			Enabled:                     machineconfig.BoolPtr(false),
+			SensorName:                  machineconfig.StrPtr("Placeholder"),
+			DerivationEquationConstants: []machineconfig.EquationConstant{},
+			CalibrationPoints:           []machineconfig.CalibrationPoint{},
+		},
+	}
+	rt := writeAndRead(t, cfg)
+	s, ok := rt.OpticalTrains[0].OptionalComponents.Clearbox.SynchronousSensors["Untested Sensor"]
+	if !ok {
+		t.Fatal(`expected key "Untested Sensor"`)
+	}
+	if len(s.DerivationEquationConstants) != 0 {
+		t.Errorf("derivation_equation_constants: got %+v, want empty", s.DerivationEquationConstants)
+	}
+	if len(s.CalibrationPoints) != 0 {
+		t.Errorf("calibration_points: got %+v, want empty", s.CalibrationPoints)
+	}
+	if s.SensorName == nil || *s.SensorName != "Placeholder" {
+		t.Errorf("sensor_name: got %v", s.SensorName)
+	}
+}
+
+// The map key is a free-form label with no schema meaning — proves a key
+// unlike the fixture's own "Oxygen Sensor" (different style: underscore-
+// joined, all-caps) survives a write->read cycle verbatim.
+func TestWriterRoundtripSynchronousSensorArbitraryDifferentlyStyledKey(t *testing.T) {
+	cfg, err := machineconfig.NewReader(filepath.Join(fixturesDir(t), "reference_config.h5")).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
+	cb.SynchronousSensors = map[string]machineconfig.SynchronousSensor{
+		"HUMIDITY_SENSOR_2": {
+			Enabled:                     machineconfig.BoolPtr(true),
+			PortID:                      machineconfig.IntPtr(9),
+			DerivationEquationConstants: []machineconfig.EquationConstant{},
+			CalibrationPoints:           []machineconfig.CalibrationPoint{},
+		},
+	}
+	rt := writeAndRead(t, cfg)
+	sensors := rt.OpticalTrains[0].OptionalComponents.Clearbox.SynchronousSensors
+	s, ok := sensors["HUMIDITY_SENSOR_2"]
+	if !ok {
+		t.Fatalf(`expected key "HUMIDITY_SENSOR_2", got keys %v`, sensors)
+	}
+	if s.PortID == nil || *s.PortID != 9 {
+		t.Errorf("port_id: got %v want 9", s.PortID)
+	}
+}
+
+// Proves the Writer side of the cross-feature guarantee: parses a real
+// OPCUA-only fixture, adds a sensor purely in memory, writes, and confirms
+// both survive re-reading (mirrors Rust's/Python's/Node's equivalent tests).
+func TestWriterOpcuaAndSynchronousSensorCoexist(t *testing.T) {
+	cfg, err := machineconfig.NewReader(filepath.Join(fixturesDir(t), "reference_config_opcua.h5")).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Opcua == nil {
+		t.Fatal("fixture must already have OPCUA before the test adds a sensor")
+	}
+	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
+	cb.SynchronousSensors = map[string]machineconfig.SynchronousSensor{
+		"Oxygen Sensor": {
+			Enabled:             machineconfig.BoolPtr(true),
+			SensorName:          machineconfig.StrPtr("ZR800 Oxygen Analyzer"),
+			CalibrationVerified: machineconfig.BoolPtr(false),
+			SamplePeriod:        machineconfig.Float64Ptr(5.0),
+			DerivationEquationConstants: []machineconfig.EquationConstant{
+				{Name: "a", Value: 0.4375},
+				{Name: "b", Value: -2.75},
+			},
+			CalibrationPoints: []machineconfig.CalibrationPoint{
+				{InputValue: 4.0, OutputValue: -1.0},
+				{InputValue: 20.0, OutputValue: 6.0},
+			},
+		},
+	}
+	rt := writeAndRead(t, cfg)
+	if rt.Opcua == nil {
+		t.Fatal("OPCUA must survive alongside the newly-added sensor")
+	}
+	s, ok := rt.OpticalTrains[0].OptionalComponents.Clearbox.SynchronousSensors["Oxygen Sensor"]
+	if !ok {
+		t.Fatal(`expected key "Oxygen Sensor"`)
+	}
+	want := []machineconfig.EquationConstant{{Name: "a", Value: 0.4375}, {Name: "b", Value: -2.75}}
+	if !reflect.DeepEqual(s.DerivationEquationConstants, want) {
+		t.Errorf("derivation_equation_constants: got %+v want %+v", s.DerivationEquationConstants, want)
+	}
+}
+
+// Derivation_Equation_Constants.name is a 64-byte fixed-length field (see
+// SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string convention"). A name
+// whose UTF-8 encoding exceeds 64 bytes must be rejected with a clear error
+// at write time, not silently truncated.
+func TestWriterRejectsEquationConstantNameOver64Bytes(t *testing.T) {
+	cfg, err := machineconfig.NewReader(filepath.Join(fixturesDir(t), "reference_config.h5")).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
+	cb.SynchronousSensors = map[string]machineconfig.SynchronousSensor{
+		"Oversized Name Sensor": {
+			DerivationEquationConstants: []machineconfig.EquationConstant{
+				{Name: strings.Repeat("a", 65), Value: 1.0},
+			},
+			CalibrationPoints: []machineconfig.CalibrationPoint{},
+		},
+	}
+	tmp := filepath.Join(t.TempDir(), "oversized.h5")
+	err = machineconfig.NewWriter().Write(cfg, tmp)
+	if err == nil {
+		t.Fatal("expected an error for an oversized constant name, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not fit") {
+		t.Fatalf("expected a 'does not fit' error, got: %v", err)
 	}
 }
 

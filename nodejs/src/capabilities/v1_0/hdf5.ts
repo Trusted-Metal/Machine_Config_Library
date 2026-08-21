@@ -21,6 +21,9 @@ import type {
   OpcuaClientConfig,
   OpcuaPipeConfig,
   OpcuaTrigger,
+  SynchronousSensor,
+  EquationConstant,
+  CalibrationPoint,
 } from "../../models.js";
 import * as layout from "./layout.js";
 
@@ -369,6 +372,83 @@ function parseScannerCard(grp: h5wasm.Group): ScannerCard {
   };
 }
 
+/**
+ * Read `Derivation_Equation_Constants`, defaulting to `[]` if the dataset
+ * itself is absent (same permissive-reader discipline as every scalar
+ * attribute). h5wasm returns a compound dataset's `.value` as Array-of-
+ * Structures rows (`[[name, value], ...]`) in declaration order — NOT the
+ * Map/SoA shape used to write it — so each row is mapped back to a named
+ * object positionally, not by column name.
+ */
+function readEquationConstants(grp: h5wasm.Group): EquationConstant[] {
+  const ent = grp.get("Derivation_Equation_Constants");
+  if (!(ent instanceof h5wasm.Dataset)) return [];
+  const rows = ent.value;
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row) => {
+    const [name, value] = row as unknown as [string, number];
+    return { name: String(name), value: Number(value) };
+  });
+}
+
+/** Read `Calibration_Points`, defaulting to `[]` if the dataset is absent. */
+function readCalibrationPoints(grp: h5wasm.Group): CalibrationPoint[] {
+  const ent = grp.get("Calibration_Points");
+  if (!(ent instanceof h5wasm.Dataset)) return [];
+  const rows = ent.value;
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row) => {
+    const [input_value, output_value] = row as unknown as [number, number];
+    return { input_value: Number(input_value), output_value: Number(output_value) };
+  });
+}
+
+function parseSynchronousSensor(grp: h5wasm.Group): SynchronousSensor {
+  const a = grp.attrs;
+  return {
+    enabled: attrBool(a, "Enabled"),
+    sensor_name: attrStr(a, "Sensor_Name"),
+    sensor_output_range_low: attrFloat(a, "Sensor_Output_Range_Low"),
+    sensor_output_range_high: attrFloat(a, "Sensor_Output_Range_High"),
+    sensor_output_space: attrStr(a, "Sensor_Output_Space"),
+    sensor_model: attrStr(a, "Sensor_Model"),
+    sensor_manufacturer: attrStr(a, "Sensor_Manufacturer"),
+    sensor_scope: attrStr(a, "Sensor_Scope"),
+    units_derived_quantity: attrStr(a, "Units_Derived_Quantity"),
+    port_id: attrInt(a, "Port_ID"),
+    sensor_type: attrStr(a, "Sensor_Type"),
+    input_type: attrStr(a, "Input_Type"),
+    algorithm_type: attrStr(a, "Algorithm_Type"),
+    algorithm_equation: attrStr(a, "Algorithm_Equation"),
+    calibration_source: attrStr(a, "Calibration_Source"),
+    calibration_verified: attrBool(a, "Calibration_Verified"),
+    sample_period: attrFloat(a, "Sample_Period"),
+    metadata: attrStr(a, "Metadata"),
+    derivation_equation_constants: readEquationConstants(grp),
+    calibration_points: readCalibrationPoints(grp),
+  };
+}
+
+/**
+ * Enumerate `Synchronous_Sensors/<name>` sub-groups, the identical mechanism
+ * `parseOpcua`'s trigger loop uses for `OPCUA/Triggers/<name>`. Returns
+ * `undefined` (not `{}`) when there are no sensors — whether the group is
+ * absent entirely or present with zero children — matching Rust's/Python's
+ * decision to omit `synchronous_sensors` from JSON entirely in that case
+ * (see `ClearBox.synchronous_sensors`'s doc comment in models.ts).
+ */
+function parseSynchronousSensors(grp: h5wasm.Group): Record<string, SynchronousSensor> | undefined {
+  const sensorsEnt = grp.get("Synchronous_Sensors");
+  const sensors: Record<string, SynchronousSensor> = {};
+  if (sensorsEnt instanceof h5wasm.Group) {
+    for (const name of sensorsEnt.keys()) {
+      const sGrp = asGroup(sensorsEnt.get(name), `ClearBox/Synchronous_Sensors/${name}`);
+      sensors[name] = parseSynchronousSensor(sGrp);
+    }
+  }
+  return Object.keys(sensors).length > 0 ? sensors : undefined;
+}
+
 function parseClearBox(grp: h5wasm.Group, includeBinary: boolean): ClearBox {
   const a = grp.attrs;
   const cb: ClearBox = {
@@ -390,6 +470,7 @@ function parseClearBox(grp: h5wasm.Group, includeBinary: boolean): ClearBox {
     volts_to_watts_params: attrStr(a, "Volts_To_Watts_Params"),
     correction_grid_domain_shape: attrStr(a, "Correction_Grid_Domain_Shape"),
     inverse_grid_domain_shape: attrStr(a, "Inverse_Grid_Domain_Shape"),
+    synchronous_sensors: parseSynchronousSensors(grp),
   };
 
   if (includeBinary) {

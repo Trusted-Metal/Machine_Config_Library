@@ -7,12 +7,40 @@ import { randomBytes, createHash } from 'node:crypto';
 import { MachineConfigWriter } from '../src/index.js';
 import { MachineConfigReader } from '../src/index.js';
 import { UnsupportedFileVersion } from '../src/capabilities/index.js';
-import type { MachineConfig } from '../src/index.js';
+import type { MachineConfig, SynchronousSensor } from '../src/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REFERENCE      = join(__dirname, '../../fixtures/reference_config.h5');
 const REFERENCE_OPCUA = join(__dirname, '../../fixtures/reference_config_opcua.h5');
+const REFERENCE_SENSORS = join(__dirname, '../../fixtures/reference_config_synchronous_sensors.h5');
 const SYNTHETIC      = join(__dirname, '../../fixtures/synthetic_2laser.h5');
+
+/** A SynchronousSensor with every field null/empty except what the caller overrides. */
+function blankSensor(overrides: Partial<SynchronousSensor> = {}): SynchronousSensor {
+  return {
+    enabled: null,
+    sensor_name: null,
+    sensor_output_range_low: null,
+    sensor_output_range_high: null,
+    sensor_output_space: null,
+    sensor_model: null,
+    sensor_manufacturer: null,
+    sensor_scope: null,
+    units_derived_quantity: null,
+    port_id: null,
+    sensor_type: null,
+    input_type: null,
+    algorithm_type: null,
+    algorithm_equation: null,
+    calibration_source: null,
+    calibration_verified: null,
+    sample_period: null,
+    metadata: null,
+    derivation_equation_constants: [],
+    calibration_points: [],
+    ...overrides,
+  };
+}
 
 /** Absolute path to a unique temp HDF5 file that does not exist yet. */
 function tmpH5(): string {
@@ -22,15 +50,17 @@ function tmpH5(): string {
 // Module-level fixture configs, parsed once in beforeAll.
 let reference: MachineConfig;
 let referenceOpcua: MachineConfig;
+let referenceSensors: MachineConfig;
 let synthetic: MachineConfig;
 
 // Paths to temp files created by write tests — deleted in afterAll.
 const tmpFiles: string[] = [];
 
 beforeAll(async () => {
-  [reference, referenceOpcua, synthetic] = await Promise.all([
+  [reference, referenceOpcua, referenceSensors, synthetic] = await Promise.all([
     new MachineConfigReader(REFERENCE).parse(),
     new MachineConfigReader(REFERENCE_OPCUA).parse(),
+    new MachineConfigReader(REFERENCE_SENSORS).parse(),
     new MachineConfigReader(SYNTHETIC).parse(),
   ]);
 }, 60_000);
@@ -140,6 +170,106 @@ describe('MachineConfigWriter — reference roundtrip', () => {
 
   it('no opcua in non-opcua fixture roundtrip', () => {
     expect(rt.opcua).toBeUndefined();
+  });
+
+  it('synchronous_sensors survives roundtrip as omitted (undefined), not {}', () => {
+    expect(rt.optical_trains[0].optional_components.clearbox?.synchronous_sensors).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Roundtrip: SynchronousSensor
+// ---------------------------------------------------------------------------
+
+describe('MachineConfigWriter — SynchronousSensor roundtrip', () => {
+  it('the real ZR800 example survives roundtrip with exact compound-dataset values in order', async () => {
+    const rt = await roundtrip(referenceSensors);
+    const sensor = rt.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
+    expect(sensor.sensor_name).toBe('ZR800 Oxygen Analyzer');
+    expect(sensor.derivation_equation_constants).toEqual([
+      { name: 'a', value: 0.4375 },
+      { name: 'b', value: -2.75 },
+    ]);
+    expect(sensor.calibration_points).toEqual([
+      { input_value: 4.0, output_value: -1.0 },
+      { input_value: 20.0, output_value: 6.0 },
+    ]);
+  });
+
+  it('a sensor that exists but has zero-row compound datasets roundtrips correctly', async () => {
+    // Distinct from the empty-*map* case above: here the sensor itself
+    // exists (its group is created), but both compound datasets have zero
+    // rows — proving 0-length compound dataset creation/read works, not
+    // just that an absent group defaults to empty.
+    const cfg: MachineConfig = structuredClone(reference);
+    cfg.optical_trains[0].optional_components.clearbox!.synchronous_sensors = {
+      'Untested Sensor': blankSensor({ enabled: false, sensor_name: 'Placeholder' }),
+    };
+    const rt = await roundtrip(cfg);
+    const sensor = rt.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Untested Sensor'];
+    expect(sensor.derivation_equation_constants).toEqual([]);
+    expect(sensor.calibration_points).toEqual([]);
+    expect(sensor.sensor_name).toBe('Placeholder');
+  });
+
+  it('an arbitrary, differently-styled key survives roundtrip verbatim', () => {
+    return roundtrip(
+      (() => {
+        const cfg: MachineConfig = structuredClone(reference);
+        cfg.optical_trains[0].optional_components.clearbox!.synchronous_sensors = {
+          HUMIDITY_SENSOR_2: blankSensor({ enabled: true, port_id: 9 }),
+        };
+        return cfg;
+      })(),
+    ).then((rt) => {
+      const sensors = rt.optical_trains[0].optional_components.clearbox!.synchronous_sensors!;
+      expect(Object.keys(sensors)).toContain('HUMIDITY_SENSOR_2');
+      expect(sensors.HUMIDITY_SENSOR_2.port_id).toBe(9);
+    });
+  });
+
+  it('OPCUA and a newly-added sensor coexist through the writer', async () => {
+    // Proves the Writer side of the cross-feature guarantee: parses a real
+    // OPCUA-only fixture, adds a sensor purely in memory, writes, and
+    // confirms both survive re-reading (mirrors Rust's and Python's
+    // equivalent tests).
+    const cfg: MachineConfig = structuredClone(referenceOpcua);
+    expect(cfg.opcua).toBeDefined();
+    cfg.optical_trains[0].optional_components.clearbox!.synchronous_sensors = {
+      'Oxygen Sensor': blankSensor({
+        enabled: true,
+        sensor_name: 'ZR800 Oxygen Analyzer',
+        calibration_verified: false,
+        sample_period: 5.0,
+        derivation_equation_constants: [
+          { name: 'a', value: 0.4375 },
+          { name: 'b', value: -2.75 },
+        ],
+        calibration_points: [
+          { input_value: 4.0, output_value: -1.0 },
+          { input_value: 20.0, output_value: 6.0 },
+        ],
+      }),
+    };
+    const rt = await roundtrip(cfg);
+    expect(rt.opcua).toBeDefined();
+    const sensor = rt.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
+    expect(sensor.derivation_equation_constants).toEqual([
+      { name: 'a', value: 0.4375 },
+      { name: 'b', value: -2.75 },
+    ]);
+  });
+
+  it('a constant name too long for the 64-byte fixed-length field is rejected, not truncated', async () => {
+    const cfg: MachineConfig = structuredClone(reference);
+    cfg.optical_trains[0].optional_components.clearbox!.synchronous_sensors = {
+      'Oversized Name Sensor': blankSensor({
+        derivation_equation_constants: [{ name: 'a'.repeat(65), value: 1.0 }],
+      }),
+    };
+    const out = tmpH5();
+    tmpFiles.push(out);
+    await expect(new MachineConfigWriter(cfg).write(out)).rejects.toThrow(/does not fit/);
   });
 });
 

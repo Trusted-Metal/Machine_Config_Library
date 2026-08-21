@@ -20,6 +20,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SYNTHETIC       = join(__dirname, '../../fixtures/synthetic_2laser.h5');
 const REFERENCE       = join(__dirname, '../../fixtures/reference_config.h5');
 const REFERENCE_OPCUA = join(__dirname, '../../fixtures/reference_config_opcua.h5');
+const REFERENCE_SENSORS = join(__dirname, '../../fixtures/reference_config_synchronous_sensors.h5');
+const REFERENCE_OPCUA_SENSORS = join(
+  __dirname, '../../fixtures/reference_config_opcua_synchronous_sensors.h5'
+);
 const OPCUA_MISSING_REQUIRED = join(
   __dirname, '../../docs/validation/fixtures/opcua_missing_required.h5'
 );
@@ -31,15 +35,20 @@ const OPCUA_MISSING_REQUIRED = join(
 let synthetic: MachineConfig;
 let reference: MachineConfig;
 let referenceOpcua: MachineConfig;
+let referenceSensors: MachineConfig;
+let referenceOpcuaSensors: MachineConfig;
 let opcuaMissingRequired: MachineConfig;
 
 beforeAll(async () => {
-  [synthetic, reference, referenceOpcua, opcuaMissingRequired] = await Promise.all([
-    new MachineConfigReader(SYNTHETIC).parse(),
-    new MachineConfigReader(REFERENCE).parse(),
-    new MachineConfigReader(REFERENCE_OPCUA).parse(),
-    new MachineConfigReader(OPCUA_MISSING_REQUIRED).parse(),
-  ]);
+  [synthetic, reference, referenceOpcua, referenceSensors, referenceOpcuaSensors, opcuaMissingRequired] =
+    await Promise.all([
+      new MachineConfigReader(SYNTHETIC).parse(),
+      new MachineConfigReader(REFERENCE).parse(),
+      new MachineConfigReader(REFERENCE_OPCUA).parse(),
+      new MachineConfigReader(REFERENCE_SENSORS).parse(),
+      new MachineConfigReader(REFERENCE_OPCUA_SENSORS).parse(),
+      new MachineConfigReader(OPCUA_MISSING_REQUIRED).parse(),
+    ]);
 }, 60_000);   // generous timeout to cover h5wasm WASM init on a cold run
 
 // ===========================================================================
@@ -268,6 +277,80 @@ describe('MachineConfigReader — ClearBox', () => {
   it('correction_data is absent by default (parse without includeBinary)', () => {
     const cd = reference.optical_trains[0].optional_components.clearbox?.correction_data;
     expect(cd).toBeUndefined();
+  });
+
+  it('synchronous_sensors is omitted (undefined) on the reference fixture, not {}', () => {
+    // Matches Rust's/Python's decision to omit the key entirely from JSON
+    // when there are no sensors — see ClearBox.synchronous_sensors's doc
+    // comment in models.ts.
+    expect(reference.optical_trains[0].optional_components.clearbox?.synchronous_sensors).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// SynchronousSensor — reference_config_synchronous_sensors.h5, not
+// reference_config.h5, which deliberately has no sensors (see
+// SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
+// ===========================================================================
+
+describe('MachineConfigReader — SynchronousSensor', () => {
+  it('the "Oxygen Sensor" entry is present under train 0', () => {
+    const sensors = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!;
+    expect(Object.keys(sensors)).toEqual(['Oxygen Sensor']);
+  });
+
+  it('all 18 scalar fields match the real ZR800 example', () => {
+    const s = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
+    expect(s.enabled).toBe(true);
+    expect(s.sensor_name).toBe('ZR800 Oxygen Analyzer');
+    expect(s.sensor_output_range_low).toBe(-1.0);
+    expect(s.sensor_output_range_high).toBe(6.0);
+    expect(s.sensor_output_space).toBe('log10(ppm)');
+    expect(s.sensor_model).toBe('ZR810');
+    expect(s.sensor_manufacturer).toBe('Industrial Physics');
+    expect(s.sensor_scope).toBe('Global');
+    expect(s.units_derived_quantity).toBe('ppm');
+    expect(s.port_id).toBe(5);
+    expect(s.sensor_type).toBe('Oxygen Sensor');
+    expect(s.input_type).toBe('4-20 mA');
+    expect(s.algorithm_type).toBe('Log-Linear');
+    expect(s.algorithm_equation).toBe('log(ppm) = a*mA + b');
+    expect(s.calibration_source).toBe('Datasheet');
+    expect(s.calibration_verified).toBe(false);
+    expect(s.sample_period).toBe(5.0);
+    expect(s.metadata).toContain('Synchronous Sensor because Clearbox is responsible');
+  });
+
+  it('derivation_equation_constants has both rows in order, matching the log-space fit', () => {
+    const s = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
+    expect(s.derivation_equation_constants).toEqual([
+      { name: 'a', value: 0.4375 },
+      { name: 'b', value: -2.75 },
+    ]);
+  });
+
+  it('calibration_points has both rows in order, both satisfying the log-space algorithm equation', () => {
+    const s = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
+    expect(s.calibration_points).toEqual([
+      { input_value: 4.0, output_value: -1.0 },
+      { input_value: 20.0, output_value: 6.0 },
+    ]);
+    // log(ppm) = a*mA + b, per algorithm_equation — proves the points are
+    // recorded in Sensor_Output_Space (log10(ppm)) units, not the linear
+    // Units_Derived_Quantity (ppm) units of the same underlying quantity.
+    const [a, b] = s.derivation_equation_constants.map((c) => c.value);
+    for (const p of s.calibration_points) {
+      expect(a * p.input_value + b).toBeCloseTo(p.output_value, 10);
+    }
+  });
+
+  it('the combined OPCUA+sensors fixture has both features present at once', () => {
+    expect(referenceOpcuaSensors.opcua).toBeDefined();
+    const sensors = referenceOpcuaSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!;
+    expect(sensors['Oxygen Sensor'].derivation_equation_constants).toEqual([
+      { name: 'a', value: 0.4375 },
+      { name: 'b', value: -2.75 },
+    ]);
   });
 });
 

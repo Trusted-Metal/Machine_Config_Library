@@ -259,6 +259,60 @@ def test_roundtrip_full_opcua_fixture(tmp_path, opcua_reader):
     assert set(rt.opcua.triggers.keys()) == set(config.opcua.triggers.keys())
 
 
+def test_opcua_and_synchronous_sensor_coexist_through_writer(tmp_path, opcua_reader):
+    """Proves the Writer side of the cross-feature guarantee (the Reader
+    side is proved directly against the pre-built combined fixture in
+    test_reader.py's TestSynchronousSensor) — parses a real OPCUA-only
+    fixture, adds a sensor purely in memory, writes, and confirms both
+    survive re-reading. See SYNCHRONOUS_SENSOR_PLAN.md's Phase 0
+    fixture-layout decision for why both tests are kept.
+    """
+    from machine_config import CalibrationPoint, EquationConstant, SynchronousSensor
+
+    config = opcua_reader.parse()
+    assert config.opcua is not None, "fixture must already have OPCUA before the test adds a sensor"
+
+    cb = config.optical_trains[0].optional_components.clearbox
+    cb.synchronous_sensors["Oxygen Sensor"] = SynchronousSensor(
+        enabled=True,
+        sensor_name="ZR800 Oxygen Analyzer",
+        sensor_output_range_low=-1.0,
+        sensor_output_range_high=6.0,
+        sensor_output_space="log10(ppm)",
+        sensor_model="ZR810",
+        sensor_manufacturer="Industrial Physics",
+        sensor_scope="Global",
+        units_derived_quantity="ppm",
+        port_id=5,
+        sensor_type="Oxygen Sensor",
+        input_type="4-20 mA",
+        algorithm_type="Log-Linear",
+        algorithm_equation="log(ppm) = a*mA + b",
+        calibration_source="Datasheet",
+        calibration_verified=False,
+        sample_period=5.0,
+        metadata=None,
+        derivation_equation_constants=[
+            EquationConstant(name="a", value=0.4375),
+            EquationConstant(name="b", value=-2.75),
+        ],
+        calibration_points=[
+            CalibrationPoint(input_value=4.0, output_value=-1.0),
+            CalibrationPoint(input_value=20.0, output_value=6.0),
+        ],
+    )
+
+    out = tmp_path / "opcua_and_sensor.h5"
+    MachineConfigWriter(config).write(out)
+    rt = MachineConfigReader(out).parse()
+
+    assert rt.opcua is not None, "OPCUA must survive alongside the newly-added sensor"
+    rt_sensor = rt.optical_trains[0].optional_components.clearbox.synchronous_sensors["Oxygen Sensor"]
+    assert rt_sensor.sensor_name == "ZR800 Oxygen Analyzer"
+    assert len(rt_sensor.derivation_equation_constants) == 2
+    assert len(rt_sensor.calibration_points) == 2
+
+
 # ---------------------------------------------------------------------------
 # Test 10: JSON round-trip (to_json → config_from_dict) for OpcuaConfig
 # ---------------------------------------------------------------------------

@@ -26,6 +26,8 @@ using machine_config::capabilities::openMachineConfig;
 
 static const std::string REF       = std::string(FIXTURES_DIR) + "/reference_config.h5";
 static const std::string OPCUA_REF = std::string(FIXTURES_DIR) + "/reference_config_opcua.h5";
+static const std::string SENSORS_REF =
+    std::string(FIXTURES_DIR) + "/reference_config_synchronous_sensors.h5";
 static const std::string OPCUA_MISSING_REQUIRED =
     std::string(VALIDATION_FIXTURES_DIR) + "/opcua_missing_required.h5";
 
@@ -242,6 +244,18 @@ TEST_CASE("CapabilityClearboxOptional") {
     REQUIRE(cb.errorCode() == "NotPresent");
     no_cb.value()->close();
     std::filesystem::remove(out);
+}
+
+// getClearbox() surfaces synchronous_sensors too, not just the scalar fields.
+TEST_CASE("CapabilityClearboxSynchronousSensors") {
+    auto opened = MachineConfigFileV1_0::open(SENSORS_REF);
+    REQUIRE(opened.ok());
+    auto cb = opened.value()->getClearbox(0);
+    REQUIRE(cb.ok());
+    REQUIRE(cb.value().synchronous_sensors.count("Oxygen Sensor") == 1);
+    REQUIRE(cb.value().synchronous_sensors.at("Oxygen Sensor").sensor_name ==
+            std::optional<std::string>{"ZR800 Oxygen Analyzer"});
+    opened.value()->close();
 }
 
 TEST_CASE("CapabilityCreateSetMetaSaveReopen") {

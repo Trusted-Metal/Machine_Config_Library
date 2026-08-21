@@ -23,6 +23,10 @@ using namespace machine_config;
 static const std::string REF       = std::string(FIXTURES_DIR) + "/reference_config.h5";
 static const std::string OPCUA_REF = std::string(FIXTURES_DIR) + "/reference_config_opcua.h5";
 static const std::string SYNTHETIC = std::string(FIXTURES_DIR) + "/synthetic_2laser.h5";
+static const std::string SENSORS_REF =
+    std::string(FIXTURES_DIR) + "/reference_config_synchronous_sensors.h5";
+static const std::string OPCUA_SENSORS_REF =
+    std::string(FIXTURES_DIR) + "/reference_config_opcua_synchronous_sensors.h5";
 
 // §4.8: ParsesMeta
 TEST_CASE("ParsesMeta") {
@@ -109,6 +113,82 @@ TEST_CASE("ClearBoxScalars") {
     // correction_data and inverse_correction_data deferred to §4.11
     REQUIRE_FALSE(cb.correction_data.has_value());
     REQUIRE_FALSE(cb.inverse_correction_data.has_value());
+}
+
+// ---------------------------------------------------------------------------
+// SynchronousSensor
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SynchronousSensorsEmptyWhenFixtureHasNone") {
+    MachineConfigReader reader{REF};
+    auto cfg = reader.parse();
+    const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
+    REQUIRE(cb.synchronous_sensors.empty());
+}
+
+// reference_config_synchronous_sensors.h5, not reference_config.h5, which
+// deliberately has no sensors (see SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
+TEST_CASE("SynchronousSensorFixtureHasRealValues") {
+    MachineConfigReader reader{SENSORS_REF};
+    auto cfg = reader.parse();
+    const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
+    REQUIRE(cb.synchronous_sensors.size() == 1);
+    REQUIRE(cb.synchronous_sensors.count("Oxygen Sensor") == 1);
+    const auto& s = cb.synchronous_sensors.at("Oxygen Sensor");
+
+    REQUIRE(s.enabled == std::optional<bool>{true});
+    REQUIRE(s.sensor_name == std::optional<std::string>{"ZR800 Oxygen Analyzer"});
+    REQUIRE(s.sensor_output_range_low == std::optional<double>{-1.0});
+    REQUIRE(s.sensor_output_range_high == std::optional<double>{6.0});
+    REQUIRE(s.sensor_output_space == std::optional<std::string>{"log10(ppm)"});
+    REQUIRE(s.sensor_model == std::optional<std::string>{"ZR810"});
+    REQUIRE(s.sensor_manufacturer == std::optional<std::string>{"Industrial Physics"});
+    REQUIRE(s.sensor_scope == std::optional<std::string>{"Global"});
+    REQUIRE(s.units_derived_quantity == std::optional<std::string>{"ppm"});
+    REQUIRE(s.port_id == std::optional<int64_t>{5});
+    REQUIRE(s.sensor_type == std::optional<std::string>{"Oxygen Sensor"});
+    REQUIRE(s.input_type == std::optional<std::string>{"4-20 mA"});
+    REQUIRE(s.algorithm_type == std::optional<std::string>{"Log-Linear"});
+    REQUIRE(s.algorithm_equation == std::optional<std::string>{"log(ppm) = a*mA + b"});
+    REQUIRE(s.calibration_source == std::optional<std::string>{"Datasheet"});
+    REQUIRE(s.calibration_verified == std::optional<bool>{false});
+    REQUIRE(s.sample_period == std::optional<double>{5.0});
+    REQUIRE(s.metadata.has_value());
+    REQUIRE(s.metadata->find("Synchronous Sensor because Clearbox is responsible") !=
+            std::string::npos);
+
+    REQUIRE(s.derivation_equation_constants.size() == 2);
+    REQUIRE(s.derivation_equation_constants[0].name == "a");
+    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
+    REQUIRE(s.derivation_equation_constants[1].name == "b");
+    REQUIRE(s.derivation_equation_constants[1].value == -2.75);
+
+    REQUIRE(s.calibration_points.size() == 2);
+    REQUIRE(s.calibration_points[0].input_value == 4.0);
+    REQUIRE(s.calibration_points[0].output_value == -1.0);
+    REQUIRE(s.calibration_points[1].input_value == 20.0);
+    REQUIRE(s.calibration_points[1].output_value == 6.0);
+
+    // log(ppm) = a*mA + b, per algorithm_equation — proves the points are
+    // recorded in Sensor_Output_Space (log10(ppm)) units, not the linear
+    // Units_Derived_Quantity (ppm) units of the same underlying quantity.
+    double a = s.derivation_equation_constants[0].value;
+    double b = s.derivation_equation_constants[1].value;
+    for (const auto& p : s.calibration_points) {
+        REQUIRE(std::abs(a * p.input_value + b - p.output_value) < 1e-10);
+    }
+}
+
+TEST_CASE("CombinedOpcuaAndSynchronousSensorsFixtureHasBoth") {
+    MachineConfigReader reader{OPCUA_SENSORS_REF};
+    auto cfg = reader.parse();
+    REQUIRE(cfg.opcua.has_value());
+    const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
+    REQUIRE(cb.synchronous_sensors.count("Oxygen Sensor") == 1);
+    const auto& s = cb.synchronous_sensors.at("Oxygen Sensor");
+    REQUIRE(s.derivation_equation_constants.size() == 2);
+    REQUIRE(s.derivation_equation_constants[0].name == "a");
+    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
 }
 
 // §4.9: AxisConfig3DNoFocus — reference fixture is Axis_Configuration='3D':

@@ -3,6 +3,7 @@
 // Public MachineConfigReader peeks File_Version then dispatches here.
 
 #include "machine_config/models.hpp"
+#include "machine_config/capabilities/v1_0/compound_types.hpp"
 #include "machine_config/capabilities/v1_0/layout.hpp"
 
 #include <highfive/H5File.hpp>
@@ -503,7 +504,85 @@ private:
         cb.volts_to_watts_params        = readStr(grp, "Volts_To_Watts_Params");
         cb.correction_grid_domain_shape = readStr(grp, "Correction_Grid_Domain_Shape");
         cb.inverse_grid_domain_shape    = readStr(grp, "Inverse_Grid_Domain_Shape");
+        cb.synchronous_sensors          = parseSynchronousSensors(grp);
         return cb;
+    }
+
+    // Trims a fixed-length char buffer at its first NUL byte. Unlike
+    // std::string(const char*), this never reads past `n` bytes — required
+    // here because a name that fills the full fixed-width field has no
+    // trailing NUL at all.
+    static std::string fixedBufToString(const char* buf, std::size_t n) {
+        std::size_t len = 0;
+        while (len < n && buf[len] != '\0') ++len;
+        return std::string(buf, len);
+    }
+
+    // Reads Derivation_Equation_Constants, defaulting to an empty (non-nil)
+    // vector if the dataset itself is absent — the same permissive-reader
+    // discipline already extended from attributes to datasets in the other
+    // four languages.
+    std::vector<EquationConstant> readEquationConstants(const HighFive::Group& grp) const {
+        std::vector<EquationConstant> out;
+        if (!grp.exist("Derivation_Equation_Constants")) return out;
+        std::vector<EquationConstantRow> rows;
+        grp.getDataSet("Derivation_Equation_Constants").read(rows);
+        out.reserve(rows.size());
+        for (const auto& r : rows)
+            out.push_back({fixedBufToString(r.name, EquationConstantMaxNameBytes), r.value});
+        return out;
+    }
+
+    // Reads Calibration_Points, defaulting to an empty (non-nil) vector if
+    // the dataset itself is absent.
+    std::vector<CalibrationPoint> readCalibrationPoints(const HighFive::Group& grp) const {
+        std::vector<CalibrationPoint> out;
+        if (!grp.exist("Calibration_Points")) return out;
+        std::vector<CalibrationPointRow> rows;
+        grp.getDataSet("Calibration_Points").read(rows);
+        out.reserve(rows.size());
+        for (const auto& r : rows)
+            out.push_back({r.input_value, r.output_value});
+        return out;
+    }
+
+    SynchronousSensor parseSynchronousSensor(const HighFive::Group& grp) const {
+        SynchronousSensor s;
+        s.enabled                    = readBoolFromInt(grp, "Enabled");
+        s.sensor_name                = readStr(grp, "Sensor_Name");
+        s.sensor_output_range_low    = readFloat(grp, "Sensor_Output_Range_Low");
+        s.sensor_output_range_high   = readFloat(grp, "Sensor_Output_Range_High");
+        s.sensor_output_space        = readStr(grp, "Sensor_Output_Space");
+        s.sensor_model               = readStr(grp, "Sensor_Model");
+        s.sensor_manufacturer        = readStr(grp, "Sensor_Manufacturer");
+        s.sensor_scope               = readStr(grp, "Sensor_Scope");
+        s.units_derived_quantity     = readStr(grp, "Units_Derived_Quantity");
+        s.port_id                    = readInt(grp, "Port_ID");
+        s.sensor_type                = readStr(grp, "Sensor_Type");
+        s.input_type                 = readStr(grp, "Input_Type");
+        s.algorithm_type             = readStr(grp, "Algorithm_Type");
+        s.algorithm_equation         = readStr(grp, "Algorithm_Equation");
+        s.calibration_source         = readStr(grp, "Calibration_Source");
+        s.calibration_verified       = readBoolFromInt(grp, "Calibration_Verified");
+        s.sample_period              = readFloat(grp, "Sample_Period");
+        s.metadata                   = readStr(grp, "Metadata");
+        s.derivation_equation_constants = readEquationConstants(grp);
+        s.calibration_points            = readCalibrationPoints(grp);
+        return s;
+    }
+
+    // Enumerates Synchronous_Sensors/<name> sub-groups, the identical
+    // mechanism the OpcuaTrigger loop uses for OPCUA/Triggers/<name>.
+    // Defaults to an empty map when the group doesn't exist at all — no
+    // separate "absent" state; ClearBox's to_json omits the key from
+    // output either way.
+    std::map<std::string, SynchronousSensor> parseSynchronousSensors(const HighFive::Group& grp) const {
+        std::map<std::string, SynchronousSensor> sensors;
+        if (!grp.exist("Synchronous_Sensors")) return sensors;
+        auto sensors_grp = grp.getGroup("Synchronous_Sensors");
+        for (const auto& name : sensors_grp.listObjectNames())
+            sensors[name] = parseSynchronousSensor(sensors_grp.getGroup(name));
+        return sensors;
     }
 
     // Scalar attrs only; raw_bytes deferred to \u00a74.11.

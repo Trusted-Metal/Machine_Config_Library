@@ -2,8 +2,10 @@
 from .models import (
     AxisConfig,
     BuildPlate,
+    CalibrationPoint,
     ClearBox,
     Collimator,
+    EquationConstant,
     LightSource,
     Machine,
     MachineConfig,
@@ -17,6 +19,7 @@ from .models import (
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
+    SynchronousSensor,
 )
 from .reader import MachineConfigReader, config_from_dict
 from .writer import MachineConfigWriter
@@ -36,9 +39,11 @@ from .capabilities import (
 __all__ = [
     "AxisConfig",
     "BuildPlate",
+    "CalibrationPoint",
     "ClearBox",
     "Collimator",
     "ConfigEditor",
+    "EquationConstant",
     "LightSource",
     "Machine",
     "MachineConfig",
@@ -55,6 +60,7 @@ __all__ = [
     "ScanFieldCorrectionFile",
     "Scanner",
     "ScannerCard",
+    "SynchronousSensor",
     "YamlConfigBuilder",
     "config_from_dict",
     "CapabilityError",

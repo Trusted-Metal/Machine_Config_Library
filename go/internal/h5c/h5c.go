@@ -105,6 +105,87 @@ static herr_t h5c_read_any_attr(hid_t id, const char *name,
 	H5Aclose(aid);
 	return ret;
 }
+
+// ---------------------------------------------------------------------------
+// Compound-dataset types for SynchronousSensor's two datasets. First use of
+// H5T_COMPOUND anywhere in this codebase — no prior precedent to match.
+//
+// h5c_equation_constant_t.name is a 64-byte fixed-length UTF-8 string
+// (NULLPAD-padded on disk), not a variable-length string — a deliberate,
+// cross-language decision, not a Go-specific shortcut: the HDF5 C library
+// cannot convert between fixed-length and variable-length strings when
+// they're compound-type *members* (confirmed at the raw H5Tinsert/H5Dread
+// level during the original cross-language investigation), and Node.js's
+// h5wasm cannot write a non-empty VLEN string in that position at all. A
+// 64-byte fixed-length UTF-8 string is the one representation every
+// language's HDF5 binding can both read and write here — see
+// SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string convention" for the
+// full investigation. Rust's FixedUnicode<64>, Python's
+// h5py.string_dtype(encoding="utf-8", length=64), Node's explicit "S64"
+// dtype, and this type must all agree exactly (same width, NULLPAD, UTF-8)
+// for cross-language read/write to succeed.
+#define H5C_EQUATION_CONSTANT_NAME_LEN 64
+
+typedef struct {
+	char name[H5C_EQUATION_CONSTANT_NAME_LEN];
+	double value;
+} h5c_equation_constant_t;
+
+typedef struct {
+	double input_value;
+	double output_value;
+} h5c_calibration_point_t;
+
+// h5c_create_equation_constant_type builds the on-disk H5T_COMPOUND type for
+// Derivation_Equation_Constants rows. Returns a negative hid_t on failure.
+// The returned type must be H5Tclose()d by the caller.
+static hid_t h5c_create_equation_constant_type(void) {
+	hid_t str_type = H5Tcopy(H5T_C_S1);
+	if (str_type < 0) return -1;
+	if (H5Tset_size(str_type, H5C_EQUATION_CONSTANT_NAME_LEN) < 0) {
+		H5Tclose(str_type);
+		return -1;
+	}
+	if (H5Tset_strpad(str_type, H5T_STR_NULLPAD) < 0) {
+		H5Tclose(str_type);
+		return -1;
+	}
+	if (H5Tset_cset(str_type, H5T_CSET_UTF8) < 0) {
+		H5Tclose(str_type);
+		return -1;
+	}
+
+	hid_t tid = H5Tcreate(H5T_COMPOUND, sizeof(h5c_equation_constant_t));
+	if (tid < 0) {
+		H5Tclose(str_type);
+		return -1;
+	}
+	if (H5Tinsert(tid, "name", HOFFSET(h5c_equation_constant_t, name), str_type) < 0 ||
+	    H5Tinsert(tid, "value", HOFFSET(h5c_equation_constant_t, value), H5T_NATIVE_DOUBLE) < 0) {
+		H5Tclose(str_type);
+		H5Tclose(tid);
+		return -1;
+	}
+	// H5Tinsert copies str_type's definition into tid; safe to close now.
+	H5Tclose(str_type);
+	return tid;
+}
+
+// h5c_create_calibration_point_type builds the on-disk H5T_COMPOUND type for
+// Calibration_Points rows (all-f64, no string member, no cross-language
+// restriction — kept as its own compound type anyway, for symmetry and so
+// the on-disk member names input_value/output_value exist for every
+// language to read, not just a positionally-matching float pair).
+static hid_t h5c_create_calibration_point_type(void) {
+	hid_t tid = H5Tcreate(H5T_COMPOUND, sizeof(h5c_calibration_point_t));
+	if (tid < 0) return -1;
+	if (H5Tinsert(tid, "input_value", HOFFSET(h5c_calibration_point_t, input_value), H5T_NATIVE_DOUBLE) < 0 ||
+	    H5Tinsert(tid, "output_value", HOFFSET(h5c_calibration_point_t, output_value), H5T_NATIVE_DOUBLE) < 0) {
+		H5Tclose(tid);
+		return -1;
+	}
+	return tid;
+}
 */
 import "C"
 
@@ -818,4 +899,200 @@ func (g *Group) CreateUint8DatasetOpen(name string, data []byte) (*Dataset, erro
 		}
 	}
 	return &Dataset{id: id}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Compound datasets — Derivation_Equation_Constants / Calibration_Points.
+// See the h5c_equation_constant_t/h5c_calibration_point_t cgo preamble above
+// for the on-disk type definitions and why the string member is fixed-length.
+// ---------------------------------------------------------------------------
+
+// EquationConstantNameMaxBytes is the fixed on-disk width, in UTF-8 bytes,
+// of an EquationConstantRow.Name. Matches every other language's convention
+// exactly (see SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string
+// convention").
+const EquationConstantNameMaxBytes = 64
+
+// EquationConstantRow is one row of a Derivation_Equation_Constants dataset.
+type EquationConstantRow struct {
+	Name  string
+	Value float64
+}
+
+// CalibrationPointRow is one row of a Calibration_Points dataset.
+type CalibrationPointRow struct {
+	InputValue  float64
+	OutputValue float64
+}
+
+// CreateEquationConstantsDataset creates and writes the
+// Derivation_Equation_Constants compound dataset. A zero-length rows slice
+// creates a valid zero-row dataset (no write call), the same convention
+// CreateUint8Dataset already uses for empty data. Name is validated to fit
+// within EquationConstantNameMaxBytes UTF-8 bytes; an oversized name is
+// rejected with an error, not silently truncated on write.
+func (g *Group) CreateEquationConstantsDataset(name string, rows []EquationConstantRow) error {
+	ctype := C.h5c_create_equation_constant_type()
+	if ctype < 0 {
+		return fmt.Errorf("h5c_create_equation_constant_type failed")
+	}
+	defer C.H5Tclose(ctype)
+
+	cbuf := make([]C.h5c_equation_constant_t, len(rows))
+	for i, r := range rows {
+		nb := []byte(r.Name)
+		if len(nb) > EquationConstantNameMaxBytes {
+			return fmt.Errorf(
+				"equation constant name %q is %d UTF-8 bytes, which does not fit in the "+
+					"%d-byte fixed-length field (would otherwise be silently truncated on write)",
+				r.Name, len(nb), EquationConstantNameMaxBytes,
+			)
+		}
+		for j, b := range nb {
+			cbuf[i].name[j] = C.char(b)
+		}
+		cbuf[i].value = C.double(r.Value)
+	}
+
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	n := C.hsize_t(len(rows))
+	space := C.H5Screate_simple(1, &n, nil)
+	if space < 0 {
+		return fmt.Errorf("H5Screate_simple failed")
+	}
+	defer C.H5Sclose(space)
+	id := C.H5Dcreate2(g.id, cname, ctype, space, C.H5P_DEFAULT, C.H5P_DEFAULT, C.H5P_DEFAULT)
+	if id < 0 {
+		return fmt.Errorf("H5Dcreate2(%s) failed", name)
+	}
+	defer C.H5Dclose(id)
+	if len(rows) > 0 {
+		if C.H5Dwrite(id, ctype, C.H5S_ALL, C.H5S_ALL, C.H5P_DEFAULT, unsafe.Pointer(&cbuf[0])) < 0 {
+			return fmt.Errorf("H5Dwrite(%s) failed", name)
+		}
+	}
+	return nil
+}
+
+// ReadEquationConstantsDataset opens and reads a Derivation_Equation_Constants
+// dataset relative to the group. Returns an empty (non-nil) slice for a
+// zero-row dataset.
+func (g *Group) ReadEquationConstantsDataset(name string) ([]EquationConstantRow, error) {
+	ds, err := g.OpenDataset(name)
+	if err != nil {
+		return nil, err
+	}
+	defer ds.Close()
+
+	dims, err := ds.Dims()
+	if err != nil || len(dims) != 1 {
+		return nil, fmt.Errorf("%s: expected a 1-D dataset", name)
+	}
+	n := dims[0]
+	if n == 0 {
+		return []EquationConstantRow{}, nil
+	}
+
+	ctype := C.h5c_create_equation_constant_type()
+	if ctype < 0 {
+		return nil, fmt.Errorf("h5c_create_equation_constant_type failed")
+	}
+	defer C.H5Tclose(ctype)
+
+	cbuf := make([]C.h5c_equation_constant_t, n)
+	if C.H5Dread(ds.id, ctype, C.H5S_ALL, C.H5S_ALL, C.H5P_DEFAULT, unsafe.Pointer(&cbuf[0])) < 0 {
+		return nil, fmt.Errorf("H5Dread(%s) failed", name)
+	}
+
+	rows := make([]EquationConstantRow, n)
+	for i := range cbuf {
+		buf := make([]byte, EquationConstantNameMaxBytes)
+		for j := 0; j < EquationConstantNameMaxBytes; j++ {
+			buf[j] = byte(cbuf[i].name[j])
+		}
+		k := 0
+		for k < len(buf) && buf[k] != 0 {
+			k++
+		}
+		rows[i] = EquationConstantRow{Name: string(buf[:k]), Value: float64(cbuf[i].value)}
+	}
+	return rows, nil
+}
+
+// CreateCalibrationPointsDataset creates and writes the Calibration_Points
+// compound dataset. A zero-length rows slice creates a valid zero-row
+// dataset (no write call).
+func (g *Group) CreateCalibrationPointsDataset(name string, rows []CalibrationPointRow) error {
+	ctype := C.h5c_create_calibration_point_type()
+	if ctype < 0 {
+		return fmt.Errorf("h5c_create_calibration_point_type failed")
+	}
+	defer C.H5Tclose(ctype)
+
+	cbuf := make([]C.h5c_calibration_point_t, len(rows))
+	for i, r := range rows {
+		cbuf[i].input_value = C.double(r.InputValue)
+		cbuf[i].output_value = C.double(r.OutputValue)
+	}
+
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	n := C.hsize_t(len(rows))
+	space := C.H5Screate_simple(1, &n, nil)
+	if space < 0 {
+		return fmt.Errorf("H5Screate_simple failed")
+	}
+	defer C.H5Sclose(space)
+	id := C.H5Dcreate2(g.id, cname, ctype, space, C.H5P_DEFAULT, C.H5P_DEFAULT, C.H5P_DEFAULT)
+	if id < 0 {
+		return fmt.Errorf("H5Dcreate2(%s) failed", name)
+	}
+	defer C.H5Dclose(id)
+	if len(rows) > 0 {
+		if C.H5Dwrite(id, ctype, C.H5S_ALL, C.H5S_ALL, C.H5P_DEFAULT, unsafe.Pointer(&cbuf[0])) < 0 {
+			return fmt.Errorf("H5Dwrite(%s) failed", name)
+		}
+	}
+	return nil
+}
+
+// ReadCalibrationPointsDataset opens and reads a Calibration_Points dataset
+// relative to the group. Returns an empty (non-nil) slice for a zero-row
+// dataset.
+func (g *Group) ReadCalibrationPointsDataset(name string) ([]CalibrationPointRow, error) {
+	ds, err := g.OpenDataset(name)
+	if err != nil {
+		return nil, err
+	}
+	defer ds.Close()
+
+	dims, err := ds.Dims()
+	if err != nil || len(dims) != 1 {
+		return nil, fmt.Errorf("%s: expected a 1-D dataset", name)
+	}
+	n := dims[0]
+	if n == 0 {
+		return []CalibrationPointRow{}, nil
+	}
+
+	ctype := C.h5c_create_calibration_point_type()
+	if ctype < 0 {
+		return nil, fmt.Errorf("h5c_create_calibration_point_type failed")
+	}
+	defer C.H5Tclose(ctype)
+
+	cbuf := make([]C.h5c_calibration_point_t, n)
+	if C.H5Dread(ds.id, ctype, C.H5S_ALL, C.H5S_ALL, C.H5P_DEFAULT, unsafe.Pointer(&cbuf[0])) < 0 {
+		return nil, fmt.Errorf("H5Dread(%s) failed", name)
+	}
+
+	rows := make([]CalibrationPointRow, n)
+	for i := range cbuf {
+		rows[i] = CalibrationPointRow{
+			InputValue:  float64(cbuf[i].input_value),
+			OutputValue: float64(cbuf[i].output_value),
+		}
+	}
+	return rows, nil
 }

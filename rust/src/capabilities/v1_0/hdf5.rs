@@ -14,10 +14,49 @@
 
 use std::path::{Path, PathBuf};
 
-use hdf5::types::{TypeDescriptor, VarLenAscii, VarLenUnicode};
+use hdf5::types::{FixedUnicode, TypeDescriptor, VarLenAscii, VarLenUnicode};
 use hdf5::{Dataset, File as H5File, Group, Location};
 use indexmap::IndexMap;
 use ndarray::Array3;
+
+/// On-disk compound-dataset row for `Derivation_Equation_Constants`. Distinct
+/// from the model-facing [`EquationConstant`] (which uses `String`) because
+/// `String` doesn't implement `H5Type` — `FixedUnicode<64>` is the
+/// HDF5-compound equivalent; converted to/from `String` at the model
+/// boundary, the same way every other field already converts between its
+/// on-disk and in-memory representation.
+///
+/// **Fixed-length, not `VarLenUnicode` — deliberate, cross-language decision.**
+/// The HDF5 C library cannot convert between fixed-length and variable-length
+/// strings when they're compound-type *members* (confirmed at the raw
+/// `H5Tinsert`/`H5Dread` level, independent of any single binding), and
+/// Node.js's h5wasm cannot write a non-empty VLEN string inside a compound
+/// row at all. A 64-byte fixed-length UTF-8 string (NULLPAD-padded on disk)
+/// is the one representation every language's HDF5 binding can both read and
+/// write here. 64 bytes is generous relative to real usage (`a`/`b`, or
+/// `c0`..`cN` for `POLYNOMIAL`) while leaving room for more descriptive
+/// names. `FixedUnicode::from_str` (used at the model boundary) rejects
+/// names whose UTF-8 encoding exceeds 64 bytes with `StringError`, rather
+/// than silently truncating. See `SYNCHRONOUS_SENSOR_PLAN.md`'s "Compound
+/// dataset string convention" section for the full cross-language
+/// investigation.
+#[derive(hdf5::H5Type, Clone, Debug)]
+#[repr(C)]
+pub(crate) struct RawEquationConstant {
+    pub(crate) name: FixedUnicode<64>,
+    pub(crate) value: f64,
+}
+
+/// On-disk compound-dataset row for `Calibration_Points`. All-`f64`, so there
+/// is no string-conversion concern here — kept as its own type anyway, for
+/// symmetry with [`RawEquationConstant`] and to keep the model layer
+/// (`crate::models`) free of any HDF5-specific derive.
+#[derive(hdf5::H5Type, Clone, Debug)]
+#[repr(C)]
+pub(crate) struct RawCalibrationPoint {
+    pub(crate) input_value: f64,
+    pub(crate) output_value: f64,
+}
 
 use super::layout;
 use crate::error::{MachineConfigError, Result};
@@ -674,6 +713,22 @@ impl Hdf5AdapterV1_0 {
         } else {
             (None, None)
         };
+        // Synchronous_Sensors: absent entirely (e.g. today's plain
+        // reference_config.h5) and present-but-empty are the same state —
+        // an empty IndexMap, not a separate "absent" marker. member_names()
+        // only ever enumerates sensor sub-groups here since nothing else is
+        // ever placed directly under Synchronous_Sensors itself.
+        let synchronous_sensors = match grp.group("Synchronous_Sensors") {
+            Ok(sensors_grp) => {
+                let mut map = IndexMap::new();
+                for name in sensors_grp.member_names()? {
+                    let sg = sensors_grp.group(&name)?;
+                    map.insert(name, self.parse_synchronous_sensor(&sg)?);
+                }
+                map
+            }
+            Err(_) => IndexMap::new(),
+        };
         Ok(ClearBox {
             ip_address: read_required_str(grp, "Ip_Address")?,
             serial_number: read_str(grp, "Serial_Number")?,
@@ -695,6 +750,53 @@ impl Hdf5AdapterV1_0 {
             volts_to_watts_params: read_str(grp, "Volts_To_Watts_Params")?,
             correction_grid_domain_shape: read_str(grp, "Correction_Grid_Domain_Shape")?,
             inverse_grid_domain_shape: read_str(grp, "Inverse_Grid_Domain_Shape")?,
+            synchronous_sensors,
+        })
+    }
+
+    /// Parses one `ClearBox/Synchronous_Sensors/<key>/` sub-group. Both
+    /// compound datasets default to an empty `Vec` if the dataset itself is
+    /// absent — the same "never panic on missing optional data" discipline
+    /// used everywhere else in this reader, extended to datasets, not just
+    /// attributes.
+    fn parse_synchronous_sensor(&self, grp: &Group) -> Result<SynchronousSensor> {
+        let derivation_equation_constants = match grp.dataset("Derivation_Equation_Constants") {
+            Ok(ds) => ds
+                .read_raw::<RawEquationConstant>()?
+                .into_iter()
+                .map(|r| EquationConstant { name: r.name.as_str().to_string(), value: r.value })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        let calibration_points = match grp.dataset("Calibration_Points") {
+            Ok(ds) => ds
+                .read_raw::<RawCalibrationPoint>()?
+                .into_iter()
+                .map(|r| CalibrationPoint { input_value: r.input_value, output_value: r.output_value })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        Ok(SynchronousSensor {
+            enabled: read_bool_from_int(grp, "Enabled")?,
+            sensor_name: read_str(grp, "Sensor_Name")?,
+            sensor_output_range_low: read_float(grp, "Sensor_Output_Range_Low")?,
+            sensor_output_range_high: read_float(grp, "Sensor_Output_Range_High")?,
+            sensor_output_space: read_str(grp, "Sensor_Output_Space")?,
+            sensor_model: read_str(grp, "Sensor_Model")?,
+            sensor_manufacturer: read_str(grp, "Sensor_Manufacturer")?,
+            sensor_scope: read_str(grp, "Sensor_Scope")?,
+            units_derived_quantity: read_str(grp, "Units_Derived_Quantity")?,
+            port_id: read_int(grp, "Port_ID")?,
+            sensor_type: read_str(grp, "Sensor_Type")?,
+            input_type: read_str(grp, "Input_Type")?,
+            algorithm_type: read_str(grp, "Algorithm_Type")?,
+            algorithm_equation: read_str(grp, "Algorithm_Equation")?,
+            calibration_source: read_str(grp, "Calibration_Source")?,
+            calibration_verified: read_bool_from_int(grp, "Calibration_Verified")?,
+            sample_period: read_float(grp, "Sample_Period")?,
+            metadata: read_str(grp, "Metadata")?,
+            derivation_equation_constants,
+            calibration_points,
         })
     }
 
@@ -808,6 +910,14 @@ mod tests {
     );
     const SYNTHETIC: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/synthetic_2laser.h5");
+    const REFERENCE_SENSORS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/reference_config_synchronous_sensors.h5"
+    );
+    const REFERENCE_OPCUA_SENSORS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/reference_config_opcua_synchronous_sensors.h5"
+    );
 
     #[test]
     fn open_rejects_nonexistent_path() {
@@ -875,6 +985,84 @@ mod tests {
             .expect("scan field correction file present");
         assert_eq!(sfcf.file_size, 1138799);
         assert!(sfcf.raw_bytes.is_none(), "parse() must not read raw .fc3 bytes");
+    }
+
+    #[test]
+    fn reference_fixture_has_no_synchronous_sensors() {
+        // reference_config.h5 deliberately has no Synchronous_Sensors group
+        // (SYNCHRONOUS_SENSOR_PLAN.md Phase 0) — must read back as an empty
+        // map, not an error, not a panic.
+        let config = Hdf5AdapterV1_0::open(REFERENCE).unwrap().parse().unwrap();
+        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        assert!(cb.synchronous_sensors.is_empty());
+    }
+
+    /// Every one of the 18 scalar fields plus both compound datasets, checked
+    /// against the real ZR800 example values in
+    /// `reference_config_synchronous_sensors.h5` — verified directly via
+    /// h5py before writing this test (SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
+    #[test]
+    fn synchronous_sensor_fixture_has_real_values() {
+        let config = Hdf5AdapterV1_0::open(REFERENCE_SENSORS).unwrap().parse().unwrap();
+        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        assert_eq!(cb.synchronous_sensors.len(), 1);
+        let sensor = &cb.synchronous_sensors["Oxygen Sensor"];
+
+        assert_eq!(sensor.enabled, Some(true));
+        assert_eq!(sensor.sensor_name, Some("ZR800 Oxygen Analyzer".to_string()));
+        assert_eq!(sensor.sensor_output_range_low, Some(-1.0));
+        assert_eq!(sensor.sensor_output_range_high, Some(6.0));
+        assert_eq!(sensor.sensor_output_space, Some("log10(ppm)".to_string()));
+        assert_eq!(sensor.sensor_model, Some("ZR810".to_string()));
+        assert_eq!(sensor.sensor_manufacturer, Some("Industrial Physics".to_string()));
+        assert_eq!(sensor.sensor_scope, Some("Global".to_string()));
+        assert_eq!(sensor.units_derived_quantity, Some("ppm".to_string()));
+        assert_eq!(sensor.port_id, Some(5));
+        assert_eq!(sensor.sensor_type, Some("Oxygen Sensor".to_string()));
+        assert_eq!(sensor.input_type, Some("4-20 mA".to_string()));
+        assert_eq!(sensor.algorithm_type, Some("Log-Linear".to_string()));
+        assert_eq!(sensor.algorithm_equation, Some("log(ppm) = a*mA + b".to_string()));
+        assert_eq!(sensor.calibration_source, Some("Datasheet".to_string()));
+        assert_eq!(sensor.calibration_verified, Some(false));
+        assert_eq!(sensor.sample_period, Some(5.0));
+        assert!(sensor.metadata.as_deref().unwrap_or("").contains("100KHz"));
+
+        // Compound datasets — exact values, in on-disk row order.
+        assert_eq!(sensor.derivation_equation_constants.len(), 2);
+        assert_eq!(sensor.derivation_equation_constants[0].name, "a");
+        assert_eq!(sensor.derivation_equation_constants[0].value, 0.4375);
+        assert_eq!(sensor.derivation_equation_constants[1].name, "b");
+        assert_eq!(sensor.derivation_equation_constants[1].value, -2.75);
+
+        assert_eq!(sensor.calibration_points.len(), 2);
+        assert_eq!(sensor.calibration_points[0].input_value, 4.0);
+        assert_eq!(sensor.calibration_points[0].output_value, -1.0);
+        assert_eq!(sensor.calibration_points[1].input_value, 20.0);
+        assert_eq!(sensor.calibration_points[1].output_value, 6.0);
+
+        // Confirms the calibration points are in Sensor_Output_Space
+        // (log-space), not Units_Derived_Quantity (linear ppm) — the exact
+        // proof from SYNCHRONOUS_SENSOR_PLAN.md's unit-convention discussion.
+        let a = sensor.derivation_equation_constants[0].value;
+        let b = sensor.derivation_equation_constants[1].value;
+        for point in &sensor.calibration_points {
+            assert!((a * point.input_value + b - point.output_value).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn combined_opcua_and_synchronous_sensors_fixture_has_both() {
+        let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA_SENSORS).unwrap().parse().unwrap();
+
+        let opcua = config.opcua.as_ref().expect("OPCUA present on the combined fixture");
+        assert!(!opcua.client.server_url.is_empty());
+
+        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        assert_eq!(cb.synchronous_sensors.len(), 1);
+        assert_eq!(
+            cb.synchronous_sensors["Oxygen Sensor"].sensor_name,
+            Some("ZR800 Oxygen Analyzer".to_string())
+        );
     }
 
     #[test]

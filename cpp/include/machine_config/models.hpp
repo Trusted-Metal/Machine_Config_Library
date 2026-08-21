@@ -89,6 +89,54 @@ struct ScanFieldCorrectionFile {
     std::optional<std::vector<std::uint8_t>> raw_bytes;
 };
 
+// One named constant used to derive an equation (e.g. `a`/`b` for a
+// Log-Linear fit, `c0`..`cN` for a polynomial fit). Stored on disk as a
+// 64-byte fixed-length UTF-8 string (see SYNCHRONOUS_SENSOR_PLAN.md's
+// "Compound dataset string convention") — name here is a plain
+// std::string; the fixed-width conversion happens only at the HDF5 adapter
+// layer (capabilities::v1_0's EquationConstantRow).
+struct EquationConstant {
+    std::string name;
+    double value{0.0};
+};
+
+// One raw calibration pair. input_value is in whatever unit
+// SynchronousSensor::input_type implies; output_value is in whatever unit
+// SynchronousSensor::sensor_output_space implies (no per-row unit tag) —
+// see SYNCHRONOUS_SENSOR_PLAN.md's "Why compound datasets" for the
+// convention.
+struct CalibrationPoint {
+    double input_value{0.0};
+    double output_value{0.0};
+};
+
+// One Synchronous Sensor record. The map key (on ClearBox::synchronous_sensors)
+// is a free-form label chosen by the file's author — not required to equal
+// any attribute value inside the sensor's own group (same convention as
+// OpcuaConfig::triggers's keys).
+struct SynchronousSensor {
+    std::optional<bool>        enabled;
+    std::optional<std::string> sensor_name;
+    std::optional<double>      sensor_output_range_low;
+    std::optional<double>      sensor_output_range_high;
+    std::optional<std::string> sensor_output_space;
+    std::optional<std::string> sensor_model;
+    std::optional<std::string> sensor_manufacturer;
+    std::optional<std::string> sensor_scope;
+    std::optional<std::string> units_derived_quantity;
+    std::optional<std::int64_t> port_id;
+    std::optional<std::string> sensor_type;
+    std::optional<std::string> input_type;
+    std::optional<std::string> algorithm_type;
+    std::optional<std::string> algorithm_equation;
+    std::optional<std::string> calibration_source;
+    std::optional<bool>        calibration_verified;
+    std::optional<double>      sample_period;
+    std::optional<std::string> metadata;
+    std::vector<EquationConstant> derivation_equation_constants;
+    std::vector<CalibrationPoint> calibration_points;
+};
+
 // Optional ClearBox add-on.  HDF5: .../Optional_Components/ClearBox/.
 struct ClearBox {
     std::string ip_address;
@@ -113,6 +161,15 @@ struct ClearBox {
     std::optional<std::string>  volts_to_watts_params;
     std::optional<std::string>  correction_grid_domain_shape;
     std::optional<std::string>  inverse_grid_domain_shape;
+    // Omitted entirely (not "{}") when there are no sensors — matches
+    // Rust's skip_serializing_if and Python's _clearbox_to_dict choice to
+    // omit the key when empty, so every fixture that doesn't use this
+    // feature stays byte-for-byte identical in JSON shape to before it
+    // existed. Same optional-whole-feature shape as MachineConfig::opcua,
+    // not OpcuaConfig::triggers (which is always present, even as "{}") —
+    // deliberately different from that precedent (see the Node.js bug this
+    // exact mismatch caused, corrected before this language's Phase 1).
+    std::map<std::string, SynchronousSensor> synchronous_sensors;
 };
 
 // Optional add-on hardware present on an optical train.
@@ -420,6 +477,74 @@ inline void from_json(const nlohmann::json& j, ScanFieldCorrectionFile& s) {
     // raw_bytes base64 decode implemented in the writer (§4.14).
 }
 
+// --- EquationConstant / CalibrationPoint / SynchronousSensor ---
+
+inline void to_json(nlohmann::json& j, const EquationConstant& c) {
+    j = {{"name", c.name}, {"value", c.value}};
+}
+
+inline void from_json(const nlohmann::json& j, EquationConstant& c) {
+    j.at("name").get_to(c.name);
+    j.at("value").get_to(c.value);
+}
+
+inline void to_json(nlohmann::json& j, const CalibrationPoint& c) {
+    j = {{"input_value", c.input_value}, {"output_value", c.output_value}};
+}
+
+inline void from_json(const nlohmann::json& j, CalibrationPoint& c) {
+    j.at("input_value").get_to(c.input_value);
+    j.at("output_value").get_to(c.output_value);
+}
+
+inline void to_json(nlohmann::json& j, const SynchronousSensor& s) {
+    j = {
+        {"enabled",                       detail::opt_to_j(s.enabled)},
+        {"sensor_name",                   detail::opt_to_j(s.sensor_name)},
+        {"sensor_output_range_low",       detail::opt_to_j(s.sensor_output_range_low)},
+        {"sensor_output_range_high",      detail::opt_to_j(s.sensor_output_range_high)},
+        {"sensor_output_space",           detail::opt_to_j(s.sensor_output_space)},
+        {"sensor_model",                  detail::opt_to_j(s.sensor_model)},
+        {"sensor_manufacturer",           detail::opt_to_j(s.sensor_manufacturer)},
+        {"sensor_scope",                  detail::opt_to_j(s.sensor_scope)},
+        {"units_derived_quantity",        detail::opt_to_j(s.units_derived_quantity)},
+        {"port_id",                       detail::opt_to_j(s.port_id)},
+        {"sensor_type",                   detail::opt_to_j(s.sensor_type)},
+        {"input_type",                    detail::opt_to_j(s.input_type)},
+        {"algorithm_type",                detail::opt_to_j(s.algorithm_type)},
+        {"algorithm_equation",            detail::opt_to_j(s.algorithm_equation)},
+        {"calibration_source",            detail::opt_to_j(s.calibration_source)},
+        {"calibration_verified",          detail::opt_to_j(s.calibration_verified)},
+        {"sample_period",                 detail::opt_to_j(s.sample_period)},
+        {"metadata",                      detail::opt_to_j(s.metadata)},
+        {"derivation_equation_constants", s.derivation_equation_constants},
+        {"calibration_points",            s.calibration_points},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, SynchronousSensor& s) {
+    s.enabled                  = detail::j_to_opt<bool>(j, "enabled");
+    s.sensor_name               = detail::j_to_opt<std::string>(j, "sensor_name");
+    s.sensor_output_range_low   = detail::j_to_opt<double>(j, "sensor_output_range_low");
+    s.sensor_output_range_high  = detail::j_to_opt<double>(j, "sensor_output_range_high");
+    s.sensor_output_space       = detail::j_to_opt<std::string>(j, "sensor_output_space");
+    s.sensor_model              = detail::j_to_opt<std::string>(j, "sensor_model");
+    s.sensor_manufacturer       = detail::j_to_opt<std::string>(j, "sensor_manufacturer");
+    s.sensor_scope              = detail::j_to_opt<std::string>(j, "sensor_scope");
+    s.units_derived_quantity    = detail::j_to_opt<std::string>(j, "units_derived_quantity");
+    s.port_id                   = detail::j_to_opt<std::int64_t>(j, "port_id");
+    s.sensor_type               = detail::j_to_opt<std::string>(j, "sensor_type");
+    s.input_type                = detail::j_to_opt<std::string>(j, "input_type");
+    s.algorithm_type            = detail::j_to_opt<std::string>(j, "algorithm_type");
+    s.algorithm_equation        = detail::j_to_opt<std::string>(j, "algorithm_equation");
+    s.calibration_source        = detail::j_to_opt<std::string>(j, "calibration_source");
+    s.calibration_verified      = detail::j_to_opt<bool>(j, "calibration_verified");
+    s.sample_period             = detail::j_to_opt<double>(j, "sample_period");
+    s.metadata                  = detail::j_to_opt<std::string>(j, "metadata");
+    j.at("derivation_equation_constants").get_to(s.derivation_equation_constants);
+    j.at("calibration_points").get_to(s.calibration_points);
+}
+
 // --- ClearBox ---
 
 inline void to_json(nlohmann::json& j, const ClearBox& c) {
@@ -448,6 +573,10 @@ inline void to_json(nlohmann::json& j, const ClearBox& c) {
         j["correction_data"] = detail::grid3d_to_json(*c.correction_data);
     if (c.inverse_correction_data.has_value())
         j["inverse_correction_data"] = detail::grid3d_to_json(*c.inverse_correction_data);
+    // synchronous_sensors: omitted entirely when empty, not serialised as
+    // "{}" — see the field's doc comment on ClearBox above.
+    if (!c.synchronous_sensors.empty())
+        j["synchronous_sensors"] = c.synchronous_sensors;
 }
 
 inline void from_json(const nlohmann::json& j, ClearBox& c) {
@@ -473,6 +602,9 @@ inline void from_json(const nlohmann::json& j, ClearBox& c) {
         c.correction_data = detail::grid3d_from_json(j.at("correction_data"));
     if (j.contains("inverse_correction_data") && !j.at("inverse_correction_data").is_null())
         c.inverse_correction_data = detail::grid3d_from_json(j.at("inverse_correction_data"));
+    c.synchronous_sensors.clear();
+    if (j.contains("synchronous_sensors"))
+        j.at("synchronous_sensors").get_to(c.synchronous_sensors);
 }
 
 // --- OptionalComponents ---

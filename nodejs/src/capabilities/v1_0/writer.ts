@@ -11,6 +11,9 @@ import type {
   ClearBox,
   ScanFieldCorrectionFile,
   OpcuaConfig,
+  SynchronousSensor,
+  EquationConstant,
+  CalibrationPoint,
 } from "../../models.js";
 import * as layout from "./layout.js";
 
@@ -162,6 +165,82 @@ function writeCorrectionDataset(
 }
 
 // ---------------------------------------------------------------------------
+// Synchronous Sensor compound-dataset helpers
+//
+// Derivation_Equation_Constants.name is a 64-byte fixed-length UTF-8 string
+// on disk, not h5wasm's default variable-length string — a deliberate,
+// cross-language decision (see SYNCHRONOUS_SENSOR_PLAN.md's "Compound
+// dataset string convention"): the HDF5 C library can't convert between
+// fixed- and variable-length strings inside compound-type members, and
+// h5wasm can't write a non-empty VLEN string there at all. h5wasm silently
+// truncates a too-long fixed-length string rather than erroring (confirmed
+// directly), so this writer rejects an oversized name explicitly instead —
+// matching Rust's and Python's writers.
+// ---------------------------------------------------------------------------
+
+const EQUATION_CONSTANT_NAME_MAX_BYTES = 64;
+
+function writeEquationConstants(grp: h5wasm.Group, rows: EquationConstant[]): void {
+  for (const c of rows) {
+    const nameBytes = Buffer.byteLength(c.name, "utf-8");
+    if (nameBytes > EQUATION_CONSTANT_NAME_MAX_BYTES) {
+      throw new Error(
+        `Derivation_Equation_Constants name ${JSON.stringify(c.name)} is ${nameBytes} UTF-8 ` +
+          `bytes, which does not fit in the ${EQUATION_CONSTANT_NAME_MAX_BYTES}-byte ` +
+          "fixed-length field (would otherwise be silently truncated on write).",
+      );
+    }
+  }
+  const data = new Map<string, unknown>([
+    ["name", rows.map((c) => c.name)],
+    ["value", new Float64Array(rows.map((c) => c.value))],
+  ]);
+  grp.create_dataset({
+    name: "Derivation_Equation_Constants",
+    data,
+    dtype: [["name", `S${EQUATION_CONSTANT_NAME_MAX_BYTES}`], ["value", "<d"]],
+    shape: [rows.length],
+  });
+}
+
+/** All-`f64`, no string member — unaffected by the fixed-length decision above. */
+function writeCalibrationPoints(grp: h5wasm.Group, rows: CalibrationPoint[]): void {
+  const data = new Map<string, unknown>([
+    ["input_value", new Float64Array(rows.map((p) => p.input_value))],
+    ["output_value", new Float64Array(rows.map((p) => p.output_value))],
+  ]);
+  grp.create_dataset({
+    name: "Calibration_Points",
+    data,
+    dtype: [["input_value", "<d"], ["output_value", "<d"]],
+    shape: [rows.length],
+  });
+}
+
+function writeSynchronousSensor(grp: h5wasm.Group, sensor: SynchronousSensor): void {
+  wb(grp, "Enabled", sensor.enabled);
+  ws(grp, "Sensor_Name", sensor.sensor_name);
+  wf(grp, "Sensor_Output_Range_Low", sensor.sensor_output_range_low);
+  wf(grp, "Sensor_Output_Range_High", sensor.sensor_output_range_high);
+  ws(grp, "Sensor_Output_Space", sensor.sensor_output_space);
+  ws(grp, "Sensor_Model", sensor.sensor_model);
+  ws(grp, "Sensor_Manufacturer", sensor.sensor_manufacturer);
+  ws(grp, "Sensor_Scope", sensor.sensor_scope);
+  ws(grp, "Units_Derived_Quantity", sensor.units_derived_quantity);
+  wi(grp, "Port_ID", sensor.port_id);
+  ws(grp, "Sensor_Type", sensor.sensor_type);
+  ws(grp, "Input_Type", sensor.input_type);
+  ws(grp, "Algorithm_Type", sensor.algorithm_type);
+  ws(grp, "Algorithm_Equation", sensor.algorithm_equation);
+  ws(grp, "Calibration_Source", sensor.calibration_source);
+  wb(grp, "Calibration_Verified", sensor.calibration_verified);
+  wf(grp, "Sample_Period", sensor.sample_period);
+  ws(grp, "Metadata", sensor.metadata);
+  writeEquationConstants(grp, sensor.derivation_equation_constants);
+  writeCalibrationPoints(grp, sensor.calibration_points);
+}
+
+// ---------------------------------------------------------------------------
 // Sub-tree writers — one function per HDF5 group, mirroring reader.ts
 // ---------------------------------------------------------------------------
 
@@ -280,6 +359,15 @@ function writeClearBox(grp: h5wasm.Group, cb: ClearBox): void {
   ws(grp, "Inverse_Grid_Domain_Shape", cb.inverse_grid_domain_shape);
   writeCorrectionDataset(grp, "Correction_Data", cb.correction_data);
   writeCorrectionDataset(grp, "Inverse_Correction_Data", cb.inverse_correction_data);
+
+  const sensors = cb.synchronous_sensors ?? {};
+  const sensorNames = Object.keys(sensors);
+  if (sensorNames.length > 0) {
+    const sensorsGrp = grp.create_group("Synchronous_Sensors");
+    for (const name of sensorNames) {
+      writeSynchronousSensor(sensorsGrp.create_group(name), sensors[name]);
+    }
+  }
 }
 
 function writeSfcf(trainGrp: h5wasm.Group, sfcf: ScanFieldCorrectionFile): void {

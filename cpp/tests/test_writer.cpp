@@ -1,6 +1,7 @@
 // Catch2 writer tests — §4.14 acceptance criteria.
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
 
@@ -19,6 +20,8 @@ using namespace machine_config;
 
 static const std::string REF      = std::string(FIXTURES_DIR) + "/reference_config.h5";
 static const std::string OPCUA_REF= std::string(FIXTURES_DIR) + "/reference_config_opcua.h5";
+static const std::string SENSORS_REF =
+    std::string(FIXTURES_DIR) + "/reference_config_synchronous_sensors.h5";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -115,6 +118,9 @@ TEST_CASE("RoundtripAllScalarFields") {
     REQUIRE(rb0.scan_field_correction_file->file_size ==
             t0.scan_field_correction_file->file_size);
 
+    // synchronous_sensors: reference_config.h5 has none — stays empty, not absent.
+    REQUIRE(rb0.optional_components.clearbox->synchronous_sensors.empty());
+
     std::filesystem::remove(out);
 }
 
@@ -136,6 +142,126 @@ TEST_CASE("RoundtripWithoutClearBox") {
     REQUIRE_FALSE(rb.opcua.has_value());
 
     std::filesystem::remove(out);
+}
+
+// ---------------------------------------------------------------------------
+// SynchronousSensor
+// ---------------------------------------------------------------------------
+
+TEST_CASE("RoundtripSynchronousSensorCompoundDatasetsExactValuesInOrder") {
+    auto out = tmpPath("sensor_roundtrip");
+    MachineConfigReader src{SENSORS_REF};
+    auto orig = src.parse();
+    REQUIRE_NOTHROW(MachineConfigWriter{orig}.write(out));
+
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    const auto& s = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors.at("Oxygen Sensor");
+    REQUIRE(s.sensor_name == std::optional<std::string>{"ZR800 Oxygen Analyzer"});
+    REQUIRE(s.derivation_equation_constants.size() == 2);
+    REQUIRE(s.derivation_equation_constants[0].name == "a");
+    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
+    REQUIRE(s.derivation_equation_constants[1].name == "b");
+    REQUIRE(s.derivation_equation_constants[1].value == -2.75);
+    REQUIRE(s.calibration_points.size() == 2);
+    REQUIRE(s.calibration_points[0].input_value == 4.0);
+    REQUIRE(s.calibration_points[0].output_value == -1.0);
+    REQUIRE(s.calibration_points[1].input_value == 20.0);
+    REQUIRE(s.calibration_points[1].output_value == 6.0);
+
+    std::filesystem::remove(out);
+}
+
+// Distinct from the empty-*map* case above: here the sensor itself exists
+// (its group is created), but both compound datasets have zero rows —
+// proving 0-length compound dataset creation/read genuinely works, not
+// assumed.
+TEST_CASE("RoundtripSynchronousSensorWithZeroRowCompoundDatasets") {
+    auto out = tmpPath("sensor_zero_row");
+    MachineConfigReader src{REF};
+    auto cfg = src.parse();
+    SynchronousSensor sensor;
+    sensor.enabled = false;
+    sensor.sensor_name = "Placeholder";
+    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["Untested Sensor"] = sensor;
+
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    const auto& s = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors.at("Untested Sensor");
+    REQUIRE(s.derivation_equation_constants.empty());
+    REQUIRE(s.calibration_points.empty());
+    REQUIRE(s.sensor_name == std::optional<std::string>{"Placeholder"});
+
+    std::filesystem::remove(out);
+}
+
+// The map key is a free-form label with no schema meaning — proves a key
+// unlike the fixture's own "Oxygen Sensor" (different style: underscore-
+// joined, all-caps) survives a write->read cycle verbatim.
+TEST_CASE("RoundtripSynchronousSensorArbitraryDifferentlyStyledKey") {
+    auto out = tmpPath("sensor_arbitrary_key");
+    MachineConfigReader src{REF};
+    auto cfg = src.parse();
+    SynchronousSensor sensor;
+    sensor.enabled = true;
+    sensor.port_id = 9;
+    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["HUMIDITY_SENSOR_2"] = sensor;
+
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    const auto& sensors = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors;
+    REQUIRE(sensors.count("HUMIDITY_SENSOR_2") == 1);
+    REQUIRE(sensors.at("HUMIDITY_SENSOR_2").port_id == std::optional<int64_t>{9});
+
+    std::filesystem::remove(out);
+}
+
+// Proves the Writer side of the cross-feature guarantee: parses a real
+// OPCUA-only fixture, adds a sensor purely in memory, writes, and confirms
+// both survive re-reading (mirrors Rust's/Python's/Node's/Go's equivalent
+// tests).
+TEST_CASE("RoundtripOpcuaAndSynchronousSensorCoexist") {
+    auto out = tmpPath("opcua_and_sensor");
+    MachineConfigReader src{OPCUA_REF};
+    auto cfg = src.parse();
+    REQUIRE(cfg.opcua.has_value());
+
+    SynchronousSensor sensor;
+    sensor.enabled = true;
+    sensor.sensor_name = "ZR800 Oxygen Analyzer";
+    sensor.calibration_verified = false;
+    sensor.sample_period = 5.0;
+    sensor.derivation_equation_constants = {{"a", 0.4375}, {"b", -2.75}};
+    sensor.calibration_points = {{4.0, -1.0}, {20.0, 6.0}};
+    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["Oxygen Sensor"] = sensor;
+
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    REQUIRE(rb.opcua.has_value());
+    const auto& s = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors.at("Oxygen Sensor");
+    REQUIRE(s.derivation_equation_constants.size() == 2);
+    REQUIRE(s.derivation_equation_constants[0].name == "a");
+    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
+
+    std::filesystem::remove(out);
+}
+
+// Derivation_Equation_Constants.name is a 64-byte fixed-length field (see
+// SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string convention"). A name
+// whose UTF-8 encoding exceeds 64 bytes must be rejected with a clear error
+// at write time, not silently truncated.
+TEST_CASE("WriterRejectsEquationConstantNameOver64Bytes") {
+    auto out = tmpPath("oversized_name");
+    MachineConfigReader src{REF};
+    auto cfg = src.parse();
+    SynchronousSensor sensor;
+    sensor.derivation_equation_constants = {{std::string(65, 'a'), 1.0}};
+    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["Oversized Name Sensor"] = sensor;
+
+    REQUIRE_THROWS_WITH(MachineConfigWriter{cfg}.write(out), Catch::Matchers::ContainsSubstring("does not fit"));
 }
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,10 @@ mod tests {
         concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_config_opcua.h5");
     const SYNTHETIC: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/synthetic_2laser.h5");
+    const REFERENCE_SENSORS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/reference_config_synchronous_sensors.h5"
+    );
 
     fn roundtrip(src: &str) -> crate::models::MachineConfig {
         let original = MachineConfigReader::open(src).unwrap().parse().unwrap();
@@ -127,14 +131,27 @@ mod tests {
 
     #[test]
     fn roundtrip_clearbox_scalar_fields() {
-        let orig = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
-        let rt = roundtrip(REFERENCE);
+        // reference_config_synchronous_sensors.h5, not reference_config.h5,
+        // which deliberately has no sensors — the two fixtures are
+        // byte-identical outside the new group, so every pre-existing
+        // assertion below still holds.
+        let orig = MachineConfigReader::open(REFERENCE_SENSORS).unwrap().parse().unwrap();
+        let rt = roundtrip(REFERENCE_SENSORS);
         let cb_orig = orig.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
         let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
         assert_eq!(cb_orig.ip_address, cb_rt.ip_address);
         assert_eq!(cb_orig.data_port, cb_rt.data_port);
         assert_eq!(cb_orig.show_console, cb_rt.show_console);
         assert_eq!(cb_orig.correction_grid_domain_shape, cb_rt.correction_grid_domain_shape);
+
+        let sensor_orig = &cb_orig.synchronous_sensors["Oxygen Sensor"];
+        let sensor_rt = &cb_rt.synchronous_sensors["Oxygen Sensor"];
+        assert_eq!(sensor_orig.sensor_name, sensor_rt.sensor_name);
+        assert_eq!(
+            sensor_orig.derivation_equation_constants,
+            sensor_rt.derivation_equation_constants
+        );
+        assert_eq!(sensor_orig.calibration_points, sensor_rt.calibration_points);
     }
 
     #[test]
