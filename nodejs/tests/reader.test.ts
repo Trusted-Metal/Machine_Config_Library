@@ -194,6 +194,23 @@ describe('MachineConfigReader — scanner', () => {
       expect(train.scanner.serial_number).toBeTruthy();
     }
   });
+
+  it('invert_* flags default to false when absent from the fixture (reference)', () => {
+    const s = reference.optical_trains[0].scanner;
+    expect(s.invert_actual_x).toBe(false);
+    expect(s.invert_actual_y).toBe(false);
+    expect(s.invert_commanded_x).toBe(false);
+    expect(s.invert_commanded_y).toBe(false);
+  });
+
+  it('invert_* flags are omitted from JSON output when false (reference)', async () => {
+    const json = JSON.parse(await new MachineConfigReader(REFERENCE).toJson());
+    const scanner = json.optical_trains[0].scanner;
+    expect('invert_actual_x' in scanner).toBe(false);
+    expect('invert_actual_y' in scanner).toBe(false);
+    expect('invert_commanded_x' in scanner).toBe(false);
+    expect('invert_commanded_y' in scanner).toBe(false);
+  });
 });
 
 // ===========================================================================

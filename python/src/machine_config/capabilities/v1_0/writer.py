@@ -194,6 +194,16 @@ class Hdf5WriterV1_0:
         grp.attrs["Scan_Head_Rotation"]      = self._f(s.scan_head_rotation)
         grp.attrs["Scan_Head_Rotation_unit"] = s.scan_head_rotation_unit or "degrees"
         grp.attrs["Axis_Configuration"]      = self._s(s.axis_configuration)
+        # Written only when True — never written at all (not even as 0) when
+        # False, unlike every other bool attribute (user-confirmed, 2026-08-21).
+        if s.invert_actual_x:
+            grp.attrs["Invert_Actual_X"] = 1
+        if s.invert_actual_y:
+            grp.attrs["Invert_Actual_Y"] = 1
+        if s.invert_commanded_x:
+            grp.attrs["Invert_Commanded_X"] = 1
+        if s.invert_commanded_y:
+            grp.attrs["Invert_Commanded_Y"] = 1
         self._write_axis(grp.require_group("X_Axis"), s.x_axis)
         self._write_axis(grp.require_group("Y_Axis"), s.y_axis)
         if s.z_axis is not None:

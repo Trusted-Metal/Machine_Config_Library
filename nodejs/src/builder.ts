@@ -181,6 +181,10 @@ function mockTrain(
     y_axis: mockAxis(),
     z_axis: mockAxis(),
     focus: null,
+    invert_actual_x: false,
+    invert_actual_y: false,
+    invert_commanded_x: false,
+    invert_commanded_y: false,
   };
 
   const lightSource: LightSource = {

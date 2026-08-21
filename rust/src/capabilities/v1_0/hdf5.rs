@@ -655,6 +655,10 @@ impl Hdf5AdapterV1_0 {
             y_axis,
             z_axis,
             focus,
+            invert_actual_x: read_bool_from_int(grp, "Invert_Actual_X")?.unwrap_or(false),
+            invert_actual_y: read_bool_from_int(grp, "Invert_Actual_Y")?.unwrap_or(false),
+            invert_commanded_x: read_bool_from_int(grp, "Invert_Commanded_X")?.unwrap_or(false),
+            invert_commanded_y: read_bool_from_int(grp, "Invert_Commanded_Y")?.unwrap_or(false),
         })
     }
 

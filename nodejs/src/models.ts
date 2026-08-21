@@ -50,6 +50,18 @@ export interface Scanner {
   y_axis: AxisConfig | null;
   z_axis: AxisConfig | null;
   focus: AxisConfig | null;
+  /**
+   * Plain boolean, not `boolean | null` — deliberately different from every
+   * other field on this interface. Always `true` or `false` at the API
+   * layer (defaults to `false` whether the on-disk attribute is absent or
+   * explicitly 0); `false` never appears in JSON output (stripped by a
+   * `JSON.stringify` replacer in `toJson()`), only `true` does
+   * (user-confirmed, 2026-08-21).
+   */
+  invert_actual_x: boolean;
+  invert_actual_y: boolean;
+  invert_commanded_x: boolean;
+  invert_commanded_y: boolean;
 }
 
 export interface LightSource {

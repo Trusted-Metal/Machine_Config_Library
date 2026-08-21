@@ -109,6 +109,20 @@ func wb(g *h5c.Group, key string, v *bool) error {
 	return g.WriteInt64Attr(key, 0)
 }
 
+// wbIfTrue writes an int64 attribute (1) only when v is true; writes
+// nothing at all when v is false — unlike wb, there is no "absent"
+// placeholder written for the false case. Used for Scanner's four
+// Invert_* fields, which never appear in any output unless true
+// (user-confirmed, 2026-08-21): a write->read round-trip is deliberately
+// lossy for an explicit false, which becomes indistinguishable from
+// "never set".
+func wbIfTrue(g *h5c.Group, key string, v bool) error {
+	if !v {
+		return nil
+	}
+	return g.WriteInt64Attr(key, 1)
+}
+
 func wsDS(d *h5c.Dataset, key, val string) error {
 	return d.WriteStringAttr(key, val)
 }
@@ -527,6 +541,18 @@ func writeScanner(g *h5c.Group, s *Scanner) error {
 		return err
 	}
 	if err := ws(g, "Axis_Configuration", strOrEmpty(s.AxisConfiguration)); err != nil {
+		return err
+	}
+	if err := wbIfTrue(g, "Invert_Actual_X", s.InvertActualX); err != nil {
+		return err
+	}
+	if err := wbIfTrue(g, "Invert_Actual_Y", s.InvertActualY); err != nil {
+		return err
+	}
+	if err := wbIfTrue(g, "Invert_Commanded_X", s.InvertCommandedX); err != nil {
+		return err
+	}
+	if err := wbIfTrue(g, "Invert_Commanded_Y", s.InvertCommandedY); err != nil {
 		return err
 	}
 

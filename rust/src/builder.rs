@@ -129,6 +129,10 @@ impl MockConfigBuilder {
             y_axis: mock_axis(),
             z_axis: Some(mock_axis()),
             focus: None,
+            invert_actual_x: false,
+            invert_actual_y: false,
+            invert_commanded_x: false,
+            invert_commanded_y: false,
         };
 
         let light_source = LightSource {

@@ -148,6 +148,17 @@ type Scanner struct {
 	YAxis                AxisConfig  `json:"y_axis"`
 	ZAxis                *AxisConfig `json:"z_axis"`
 	Focus                *AxisConfig `json:"focus"`
+	// Plain bool, not *bool — deliberately different from every other bool
+	// field in this schema. Defaults to false whether the on-disk attribute
+	// is absent or explicitly 0 (user-confirmed, 2026-08-21). `omitempty` on
+	// a plain bool omits the key for the zero value (false), which is
+	// exactly the desired rule: only true ever appears in output (MCF or
+	// JSON) — a write->read round-trip is deliberately lossy for an
+	// explicit false, which becomes indistinguishable from "never set".
+	InvertActualX    bool `json:"invert_actual_x,omitempty"`
+	InvertActualY    bool `json:"invert_actual_y,omitempty"`
+	InvertCommandedX bool `json:"invert_commanded_x,omitempty"`
+	InvertCommandedY bool `json:"invert_commanded_y,omitempty"`
 }
 
 // AxisConfig holds one scanner axis tuning subgroup (X_Axis, Y_Axis, Z_Axis, Focus).

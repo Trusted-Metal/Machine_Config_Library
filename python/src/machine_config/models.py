@@ -174,6 +174,17 @@ class Scanner:
     y_axis: AxisConfig
     z_axis: Optional[AxisConfig] = None
     focus: Optional[AxisConfig] = None
+    # Plain bool, not Optional[bool] — deliberately different from every
+    # other bool field in this schema. Defaults to False whether the on-disk
+    # attribute is absent or explicitly 0; the API never distinguishes those
+    # two cases (user-confirmed, 2026-08-21). Read faithfully, but never
+    # appears in any output (MCF or JSON) unless True — a write→read
+    # round-trip is deliberately lossy for an explicit False, which becomes
+    # indistinguishable from "never set".
+    invert_actual_x: bool = False
+    invert_actual_y: bool = False
+    invert_commanded_x: bool = False
+    invert_commanded_y: bool = False
 
     def __post_init__(self) -> None:
         cfg = self.axis_configuration

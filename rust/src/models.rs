@@ -248,6 +248,23 @@ pub struct Scanner {
     pub y_axis: AxisConfig,
     pub z_axis: Option<AxisConfig>,
     pub focus: Option<AxisConfig>,
+    /// Plain `bool`, not `Option<bool>` — deliberately different from every
+    /// other bool field in this schema. Defaults to `false` whether the
+    /// on-disk attribute is absent or explicitly `0`; the API never
+    /// distinguishes those two cases (user-confirmed, 2026-08-21). Read
+    /// faithfully (0/1/absent all map correctly on read), but serialised
+    /// AND written back to HDF5 only when `true` — `false` never appears in
+    /// any output, MCF or JSON, so a write→read round-trip is lossy for an
+    /// explicit `false` specifically (it becomes indistinguishable from
+    /// "never set"), by design.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_actual_x: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_actual_y: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_commanded_x: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_commanded_y: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -534,6 +551,10 @@ mod tests {
                 y_axis: sample_axis(),
                 z_axis: Some(sample_axis()),
                 focus: None,
+                invert_actual_x: false,
+                invert_actual_y: false,
+                invert_commanded_x: false,
+                invert_commanded_y: false,
             },
             light_source: LightSource {
                 manufacturer: "IPG".into(),

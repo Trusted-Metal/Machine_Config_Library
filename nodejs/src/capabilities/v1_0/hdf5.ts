@@ -234,6 +234,22 @@ function float64ToNested3D(
   return out;
 }
 
+/**
+ * `JSON.stringify` replacer: drops Scanner's four `invert_*` keys when their
+ * value is exactly `false`. Only `true` ever appears in JSON output — the
+ * model/API layer keeps a plain, always-true-or-false field (never
+ * `undefined`); this is the one place the "omit unless true" business rule
+ * (user-confirmed, 2026-08-21) actually applies, since there's no separate
+ * to-dict serialisation layer in this language to hold it instead.
+ */
+const INVERT_FLAG_KEYS = new Set([
+  "invert_actual_x", "invert_actual_y", "invert_commanded_x", "invert_commanded_y",
+]);
+function omitFalseInvertFlags(key: string, value: unknown): unknown {
+  if (INVERT_FLAG_KEYS.has(key) && value === false) return undefined;
+  return value;
+}
+
 // ---------------------------------------------------------------------------
 // Parsing functions — one per HDF5 sub-tree
 // ---------------------------------------------------------------------------
@@ -323,6 +339,10 @@ function parseScanner(grp: h5wasm.Group): Scanner {
     y_axis: yEnt ? parseAxis(asGroup(yEnt, "Scanner/Y_Axis")) : null,
     z_axis: zEnt ? parseAxis(asGroup(zEnt, "Scanner/Z_Axis")) : null,
     focus: focusEnt ? parseAxis(asGroup(focusEnt, "Scanner/Focus")) : null,
+    invert_actual_x: attrBool(a, "Invert_Actual_X") ?? false,
+    invert_actual_y: attrBool(a, "Invert_Actual_Y") ?? false,
+    invert_commanded_x: attrBool(a, "Invert_Commanded_X") ?? false,
+    invert_commanded_y: attrBool(a, "Invert_Commanded_Y") ?? false,
   };
 }
 
@@ -700,7 +720,7 @@ export class Hdf5AdapterV1_0 {
   async toJson(options: ToJsonOptions = {}): Promise<string> {
     const config = await this.parse(options);
     const indent = options.indent ?? 2;
-    return JSON.stringify(config, null, indent || undefined);
+    return JSON.stringify(config, omitFalseInvertFlags, indent || undefined);
   }
 
   /**

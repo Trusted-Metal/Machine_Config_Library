@@ -437,6 +437,13 @@ private:
         s.y_axis = parseAxis(grp.getGroup("Y_Axis"));
         if (grp.exist("Z_Axis")) s.z_axis = parseAxis(grp.getGroup("Z_Axis"));
         if (grp.exist("Focus"))  s.focus  = parseAxis(grp.getGroup("Focus"));
+        // Plain bool, defaults to false whether the attribute is absent or
+        // explicitly 0 (user-confirmed, 2026-08-21) — see Scanner's doc
+        // comment in models.hpp.
+        s.invert_actual_x = readBoolFromInt(grp, "Invert_Actual_X").value_or(false);
+        s.invert_actual_y = readBoolFromInt(grp, "Invert_Actual_Y").value_or(false);
+        s.invert_commanded_x = readBoolFromInt(grp, "Invert_Commanded_X").value_or(false);
+        s.invert_commanded_y = readBoolFromInt(grp, "Invert_Commanded_Y").value_or(false);
         return s;
     }
 

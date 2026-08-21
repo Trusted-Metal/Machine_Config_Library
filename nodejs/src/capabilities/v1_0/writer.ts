@@ -81,6 +81,20 @@ function wb(grp: h5wasm.Group, key: string, val: boolean | null | undefined): vo
   }
 }
 
+/**
+ * Writes an int64 attribute (`1`) only when `val` is `true`; writes nothing
+ * at all when `false` — unlike `wb`, there is no "absent" placeholder
+ * written for the `false` case. Used for Scanner's four `invert_*` fields,
+ * which never appear in any output unless `true` (user-confirmed,
+ * 2026-08-21): a write→read round-trip is deliberately lossy for an
+ * explicit `false`, which becomes indistinguishable from "never set".
+ */
+function wbIfTrue(grp: h5wasm.Group, key: string, val: boolean): void {
+  if (val) {
+    grp.create_attribute(key, 1, [], "<i8");
+  }
+}
+
 /** Write a string attribute on a Dataset (used for SFCF metadata). */
 function ws_ds(ds: h5wasm.Dataset, key: string, val: string): void {
   ds.create_attribute(key, val, [], "S");
@@ -292,6 +306,10 @@ function writeScanner(grp: h5wasm.Group, s: Scanner): void {
   wf(grp, "Scan_Head_Rotation", s.scan_head_rotation);
   ws(grp, "Scan_Head_Rotation_unit", s.scan_head_rotation_unit ?? "degrees");
   ws(grp, "Axis_Configuration", s.axis_configuration);
+  wbIfTrue(grp, "Invert_Actual_X", s.invert_actual_x);
+  wbIfTrue(grp, "Invert_Actual_Y", s.invert_actual_y);
+  wbIfTrue(grp, "Invert_Commanded_X", s.invert_commanded_x);
+  wbIfTrue(grp, "Invert_Commanded_Y", s.invert_commanded_y);
   // X and Y axes are always written (even if null — written with empty defaults).
   writeAxis(grp.create_group("X_Axis"), s.x_axis);
   writeAxis(grp.create_group("Y_Axis"), s.y_axis);

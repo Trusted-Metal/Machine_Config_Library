@@ -55,6 +55,19 @@ inline void wb(Loc& loc, const std::string& key, std::optional<bool> val) {
     }
 }
 
+// Writes an int64 attribute (1) only when val is true; writes nothing at
+// all when val is false — unlike wb, there is no "absent" placeholder
+// written for the false case. Used for Scanner's four invert_* fields,
+// which never appear in any output unless true (user-confirmed,
+// 2026-08-21): a write->read round-trip is deliberately lossy for an
+// explicit false, which becomes indistinguishable from "never set".
+template <typename Loc>
+inline void wbIfTrue(Loc& loc, const std::string& key, bool val) {
+    if (val) {
+        loc.template createAttribute<int64_t>(key, HighFive::DataSpace::Scalar()).write(int64_t{1});
+    }
+}
+
 // Write extra attrs back preserving type (string / int / float).
 template <typename Loc>
 inline void writeExtra(Loc& loc, const ExtraAttrs& extra) {
@@ -247,6 +260,10 @@ private:
         wf(grp, "Scan_Head_Rotation",      s.scan_head_rotation);
         ws(grp, "Scan_Head_Rotation_unit", s.scan_head_rotation_unit.value_or("degrees"));
         ws(grp, "Axis_Configuration",      s.axis_configuration.value_or(""));
+        wbIfTrue(grp, "Invert_Actual_X",      s.invert_actual_x);
+        wbIfTrue(grp, "Invert_Actual_Y",      s.invert_actual_y);
+        wbIfTrue(grp, "Invert_Commanded_X",   s.invert_commanded_x);
+        wbIfTrue(grp, "Invert_Commanded_Y",   s.invert_commanded_y);
         auto xg = grp.createGroup("X_Axis"); writeAxis(xg, s.x_axis);
         auto yg = grp.createGroup("Y_Axis"); writeAxis(yg, s.y_axis);
         if (s.z_axis) { auto zg = grp.createGroup("Z_Axis"); writeAxis(zg, *s.z_axis); }

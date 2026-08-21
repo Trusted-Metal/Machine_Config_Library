@@ -205,6 +205,27 @@ TEST_CASE("AxisConfig3DNoFocus") {
     REQUIRE_FALSE(s.focus.has_value());
 }
 
+TEST_CASE("ScannerInvertFlagsAbsentFromFixtureReadAsFalse") {
+    // reference_config.h5 has none of the four Invert_* attributes at all.
+    MachineConfigReader reader{REF};
+    auto cfg = reader.parse();
+    const auto& s = cfg.optical_trains[0].scanner;
+    REQUIRE_FALSE(s.invert_actual_x);
+    REQUIRE_FALSE(s.invert_actual_y);
+    REQUIRE_FALSE(s.invert_commanded_x);
+    REQUIRE_FALSE(s.invert_commanded_y);
+}
+
+TEST_CASE("ScannerInvertFlagsOmittedFromJSONWhenFalse") {
+    MachineConfigReader reader{REF};
+    auto cfg = reader.parse();
+    nlohmann::json j = cfg.optical_trains[0].scanner;
+    REQUIRE_FALSE(j.contains("invert_actual_x"));
+    REQUIRE_FALSE(j.contains("invert_actual_y"));
+    REQUIRE_FALSE(j.contains("invert_commanded_x"));
+    REQUIRE_FALSE(j.contains("invert_commanded_y"));
+}
+
 // §4.11: CorrectionDataShape — 3-D grid for train 0 has the canonical dimensions.
 TEST_CASE("CorrectionDataShape") {
     MachineConfigReader reader{REF};

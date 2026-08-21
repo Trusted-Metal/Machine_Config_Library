@@ -104,6 +104,10 @@
               "scan_head_rotation":      { "type": ["number", "null"] },
               "scan_head_rotation_unit": { "type": ["string", "null"] },
               "axis_configuration":      { "type": ["string", "null"] },
+              "invert_actual_x":         { "type": "boolean", "description": "Omitted entirely (not present as false) unless true." },
+              "invert_actual_y":         { "type": "boolean", "description": "Omitted entirely (not present as false) unless true." },
+              "invert_commanded_x":      { "type": "boolean", "description": "Omitted entirely (not present as false) unless true." },
+              "invert_commanded_y":      { "type": "boolean", "description": "Omitted entirely (not present as false) unless true." },
               "x_axis": {
                 "type": ["object", "null"],
                 "properties": {

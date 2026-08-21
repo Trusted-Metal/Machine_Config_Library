@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { unlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
+import * as h5wasm from 'h5wasm/node';
 import { MachineConfigWriter } from '../src/index.js';
 import { MachineConfigReader } from '../src/index.js';
 import { UnsupportedFileVersion } from '../src/capabilities/index.js';
@@ -174,6 +175,60 @@ describe('MachineConfigWriter — reference roundtrip', () => {
 
   it('synchronous_sensors survives roundtrip as omitted (undefined), not {}', () => {
     expect(rt.optical_trains[0].optional_components.clearbox?.synchronous_sensors).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scanner invert_* flags
+// ---------------------------------------------------------------------------
+
+describe('MachineConfigWriter — Scanner invert_* flags', () => {
+  it('default to false and are omitted from JSON when the fixture has none', async () => {
+    const rt = await roundtrip(reference);
+    const s = rt.optical_trains[0].scanner;
+    expect(s.invert_actual_x).toBe(false);
+    expect(s.invert_actual_y).toBe(false);
+    expect(s.invert_commanded_x).toBe(false);
+    expect(s.invert_commanded_y).toBe(false);
+  });
+
+  it('only true values survive as real HDF5 attributes', async () => {
+    const cfg: MachineConfig = structuredClone(reference);
+    cfg.optical_trains[0].scanner.invert_actual_x = true;
+    cfg.optical_trains[0].scanner.invert_actual_y = false;
+    cfg.optical_trains[0].scanner.invert_commanded_x = true;
+    cfg.optical_trains[0].scanner.invert_commanded_y = false;
+
+    const out = tmpH5();
+    tmpFiles.push(out);
+    await new MachineConfigWriter(cfg).write(out);
+
+    // Raw HDF5 inspection: only the two true-valued attributes exist at all.
+    await h5wasm.ready;
+    const f = new h5wasm.File(out, 'r');
+    const scannerGrp = f.get('Machine/Optical_Trains/Optical_Train_01/Scanner') as h5wasm.Group;
+    const attrNames = Object.keys(scannerGrp.attrs);
+    f.close();
+    expect(attrNames).toContain('Invert_Actual_X');
+    expect(attrNames).toContain('Invert_Commanded_X');
+    expect(attrNames).not.toContain('Invert_Actual_Y');
+    expect(attrNames).not.toContain('Invert_Commanded_Y');
+
+    // Read path returns the correct value either way.
+    const rt = await new MachineConfigReader(out).parse();
+    const s = rt.optical_trains[0].scanner;
+    expect(s.invert_actual_x).toBe(true);
+    expect(s.invert_actual_y).toBe(false);
+    expect(s.invert_commanded_x).toBe(true);
+    expect(s.invert_commanded_y).toBe(false);
+
+    // JSON output only ever shows the true ones.
+    const json = JSON.parse(await new MachineConfigReader(out).toJson());
+    const scannerJson = json.optical_trains[0].scanner;
+    expect(scannerJson.invert_actual_x).toBe(true);
+    expect(scannerJson.invert_commanded_x).toBe(true);
+    expect('invert_actual_y' in scannerJson).toBe(false);
+    expect('invert_commanded_y' in scannerJson).toBe(false);
   });
 });
 

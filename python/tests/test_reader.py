@@ -104,6 +104,23 @@ class TestScanner:
     def test_axis_configuration_is_3D(self, reference_config):
         assert reference_config.optical_trains[0].scanner.axis_configuration == "3D"
 
+    def test_invert_flags_absent_from_fixture_read_as_false(self, reference_config):
+        # reference_config.h5 has none of the four Invert_* attributes at all.
+        s = reference_config.optical_trains[0].scanner
+        assert s.invert_actual_x is False
+        assert s.invert_actual_y is False
+        assert s.invert_commanded_x is False
+        assert s.invert_commanded_y is False
+
+    def test_invert_flags_omitted_from_json_when_false(self, reference_reader):
+        import json
+        d = json.loads(reference_reader.to_json())
+        scanner_d = d["optical_trains"][0]["scanner"]
+        assert "invert_actual_x" not in scanner_d
+        assert "invert_actual_y" not in scanner_d
+        assert "invert_commanded_x" not in scanner_d
+        assert "invert_commanded_y" not in scanner_d
+
     def test_x_axis_smoothing_kernel(self, reference_config):
         assert reference_config.optical_trains[0].scanner.x_axis.smoothing_kernel == "GAUSSIAN"
 

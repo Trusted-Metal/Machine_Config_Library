@@ -63,6 +63,19 @@ fn wb(grp: &Group, key: &str, val: Option<bool>) -> Result<()> {
     Ok(())
 }
 
+/// Writes an i64 attribute (`1`) only when `val` is `true`; writes nothing
+/// at all when `false` — unlike `wb`, there is no "absent" placeholder
+/// written for the `false` case. Used for Scanner's four `invert_*` fields,
+/// which never appear in any output unless `true` (user-confirmed,
+/// 2026-08-21): a write→read round-trip is deliberately lossy for an
+/// explicit `false`, which becomes indistinguishable from "never set".
+fn wb_if_true(grp: &Group, key: &str, val: bool) -> Result<()> {
+    if val {
+        grp.new_attr::<i64>().create(key)?.write_scalar(&1i64)?;
+    }
+    Ok(())
+}
+
 /// Writes a string attribute on a `Dataset` (used for SFCF attrs).
 fn ws_ds(ds: &Dataset, key: &str, val: &str) -> Result<()> {
     let vlu: VarLenUnicode = val.parse()
@@ -289,6 +302,10 @@ impl<'a> Hdf5WriterV1_0<'a> {
         wf(grp, "Scan_Head_Rotation", s.scan_head_rotation)?;
         ws(grp, "Scan_Head_Rotation_unit", s.scan_head_rotation_unit.as_deref().unwrap_or("degrees"))?;
         ws(grp, "Axis_Configuration", s.axis_configuration.as_deref().unwrap_or(""))?;
+        wb_if_true(grp, "Invert_Actual_X", s.invert_actual_x)?;
+        wb_if_true(grp, "Invert_Actual_Y", s.invert_actual_y)?;
+        wb_if_true(grp, "Invert_Commanded_X", s.invert_commanded_x)?;
+        wb_if_true(grp, "Invert_Commanded_Y", s.invert_commanded_y)?;
 
         let x_grp = grp.create_group("X_Axis")?;
         self.write_axis(&x_grp, &s.x_axis)?;
@@ -641,6 +658,69 @@ mod tests {
             orig.optical_trains[0].scanner.working_distance,
             rt.optical_trains[0].scanner.working_distance,
         );
+    }
+
+    #[test]
+    fn invert_flags_absent_from_fixture_read_as_false_and_omitted_from_json() {
+        // reference_config.h5 has none of the four Invert_* attributes at all.
+        let orig = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let s = &orig.optical_trains[0].scanner;
+        assert!(!s.invert_actual_x);
+        assert!(!s.invert_actual_y);
+        assert!(!s.invert_commanded_x);
+        assert!(!s.invert_commanded_y);
+
+        let json = serde_json::to_value(s).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(!obj.contains_key("invert_actual_x"));
+        assert!(!obj.contains_key("invert_actual_y"));
+        assert!(!obj.contains_key("invert_commanded_x"));
+        assert!(!obj.contains_key("invert_commanded_y"));
+    }
+
+    #[test]
+    fn invert_flags_write_only_true_values_survive_as_real_hdf5_attributes() {
+        // Not just "reads back as false" — confirms the false-valued
+        // attributes are genuinely absent from the written file, not merely
+        // present-and-zero (user-confirmed convention, 2026-08-21).
+        let mut config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        {
+            let s = &mut config.optical_trains[0].scanner;
+            s.invert_actual_x = true;
+            s.invert_actual_y = false;
+            s.invert_commanded_x = true;
+            s.invert_commanded_y = false;
+        }
+
+        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+        Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap();
+
+        // Raw HDF5 inspection: only the two true-valued attributes exist at all.
+        let file = hdf5::File::open(tmp.path()).unwrap();
+        let scanner_grp = file
+            .group("Machine/Optical_Trains/Optical_Train_01/Scanner")
+            .unwrap();
+        let names = scanner_grp.attr_names().unwrap();
+        assert!(names.iter().any(|n| n == "Invert_Actual_X"));
+        assert!(names.iter().any(|n| n == "Invert_Commanded_X"));
+        assert!(!names.iter().any(|n| n == "Invert_Actual_Y"));
+        assert!(!names.iter().any(|n| n == "Invert_Commanded_Y"));
+
+        // Read path still returns the correct value either way.
+        let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
+        let s = &rt.optical_trains[0].scanner;
+        assert!(s.invert_actual_x);
+        assert!(!s.invert_actual_y);
+        assert!(s.invert_commanded_x);
+        assert!(!s.invert_commanded_y);
+
+        // JSON output only ever shows the true ones.
+        let json = serde_json::to_value(s).unwrap();
+        let obj = json.as_object().unwrap();
+        assert_eq!(obj.get("invert_actual_x").unwrap(), true);
+        assert_eq!(obj.get("invert_commanded_x").unwrap(), true);
+        assert!(!obj.contains_key("invert_actual_y"));
+        assert!(!obj.contains_key("invert_commanded_y"));
     }
 
     #[test]

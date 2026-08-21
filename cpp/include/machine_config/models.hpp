@@ -235,6 +235,16 @@ struct Scanner {
     AxisConfig y_axis;
     std::optional<AxisConfig> z_axis;
     std::optional<AxisConfig> focus;
+    // Plain bool, not std::optional<bool> — deliberately different from
+    // every other bool field in this schema. Defaults to false whether the
+    // on-disk attribute is absent or explicitly 0 (user-confirmed,
+    // 2026-08-21). Never serialised (or written back to HDF5) unless
+    // true — a write->read round-trip is deliberately lossy for an
+    // explicit false, which becomes indistinguishable from "never set".
+    bool invert_actual_x{false};
+    bool invert_actual_y{false};
+    bool invert_commanded_x{false};
+    bool invert_commanded_y{false};
 };
 
 struct LightSource {
@@ -723,6 +733,13 @@ inline void to_json(nlohmann::json& j, const Scanner& s) {
         {"y_axis",                  s.y_axis},
         {"z_axis",                  detail::opt_to_j(s.z_axis)},
     };
+    // Omitted entirely (not serialised as false) unless true — deliberately
+    // different from every other bool field above (user-confirmed,
+    // 2026-08-21).
+    if (s.invert_actual_x) j["invert_actual_x"] = true;
+    if (s.invert_actual_y) j["invert_actual_y"] = true;
+    if (s.invert_commanded_x) j["invert_commanded_x"] = true;
+    if (s.invert_commanded_y) j["invert_commanded_y"] = true;
 }
 
 inline void from_json(const nlohmann::json& j, Scanner& s) {
@@ -752,6 +769,10 @@ inline void from_json(const nlohmann::json& j, Scanner& s) {
         s.z_axis = j.at("z_axis").get<AxisConfig>();
     if (j.contains("focus") && !j.at("focus").is_null())
         s.focus = j.at("focus").get<AxisConfig>();
+    s.invert_actual_x = j.value("invert_actual_x", false);
+    s.invert_actual_y = j.value("invert_actual_y", false);
+    s.invert_commanded_x = j.value("invert_commanded_x", false);
+    s.invert_commanded_y = j.value("invert_commanded_y", false);
 }
 
 // --- LightSource ---

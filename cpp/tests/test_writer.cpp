@@ -12,6 +12,8 @@
 #include "machine_config/reader.hpp"
 #include "machine_config/writer.hpp"
 
+#include <highfive/H5File.hpp>
+
 #ifndef FIXTURES_DIR
 #  error "FIXTURES_DIR must be defined by tests/CMakeLists.txt"
 #endif
@@ -140,6 +142,66 @@ TEST_CASE("RoundtripWithoutClearBox") {
     REQUIRE(rb.optical_trains.size() == 1);
     REQUIRE_FALSE(rb.optical_trains[0].optional_components.clearbox.has_value());
     REQUIRE_FALSE(rb.opcua.has_value());
+
+    std::filesystem::remove(out);
+}
+
+// ---------------------------------------------------------------------------
+// Scanner invert_* flags
+// ---------------------------------------------------------------------------
+
+TEST_CASE("RoundtripInvertFlagsDefaultFalseAndOmittedFromJSON") {
+    auto out = tmpPath("invert_defaults");
+    MachineConfigReader src{REF};
+    auto orig = src.parse();
+    REQUIRE_NOTHROW(MachineConfigWriter{orig}.write(out));
+
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    const auto& s = rb.optical_trains[0].scanner;
+    REQUIRE_FALSE(s.invert_actual_x);
+    REQUIRE_FALSE(s.invert_actual_y);
+    REQUIRE_FALSE(s.invert_commanded_x);
+    REQUIRE_FALSE(s.invert_commanded_y);
+
+    nlohmann::json j = s;
+    REQUIRE_FALSE(j.contains("invert_actual_x"));
+    REQUIRE_FALSE(j.contains("invert_actual_y"));
+    REQUIRE_FALSE(j.contains("invert_commanded_x"));
+    REQUIRE_FALSE(j.contains("invert_commanded_y"));
+
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("OnlyTrueInvertFlagsSurviveAsRealHDF5Attributes") {
+    auto out = tmpPath("invert_mixed");
+    MachineConfigReader src{REF};
+    auto cfg = src.parse();
+    cfg.optical_trains[0].scanner.invert_actual_x = true;
+    cfg.optical_trains[0].scanner.invert_actual_y = false;
+    cfg.optical_trains[0].scanner.invert_commanded_x = true;
+    cfg.optical_trains[0].scanner.invert_commanded_y = false;
+
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
+
+    // Raw HDF5 inspection: only the two true-valued attributes exist at all.
+    {
+        HighFive::File f(out.string(), HighFive::File::ReadOnly);
+        auto scanner_grp = f.getGroup("Machine/Optical_Trains/Optical_Train_01/Scanner");
+        REQUIRE(scanner_grp.hasAttribute("Invert_Actual_X"));
+        REQUIRE(scanner_grp.hasAttribute("Invert_Commanded_X"));
+        REQUIRE_FALSE(scanner_grp.hasAttribute("Invert_Actual_Y"));
+        REQUIRE_FALSE(scanner_grp.hasAttribute("Invert_Commanded_Y"));
+    }
+
+    // Read path still returns the correct value either way.
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    const auto& s = rb.optical_trains[0].scanner;
+    REQUIRE(s.invert_actual_x);
+    REQUIRE_FALSE(s.invert_actual_y);
+    REQUIRE(s.invert_commanded_x);
+    REQUIRE_FALSE(s.invert_commanded_y);
 
     std::filesystem::remove(out);
 }

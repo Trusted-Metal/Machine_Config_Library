@@ -443,6 +443,10 @@ class Hdf5AdapterV1_0:
             y_axis=y_axis,
             z_axis=z_axis,
             focus=focus,
+            invert_actual_x=self._read_bool_from_int(a, "Invert_Actual_X") or False,
+            invert_actual_y=self._read_bool_from_int(a, "Invert_Actual_Y") or False,
+            invert_commanded_x=self._read_bool_from_int(a, "Invert_Commanded_X") or False,
+            invert_commanded_y=self._read_bool_from_int(a, "Invert_Commanded_Y") or False,
         )
 
     def _parse_light_source(self, grp: h5py.Group) -> LightSource:
@@ -788,7 +792,7 @@ class Hdf5AdapterV1_0:
         }
 
     def _scanner_to_dict(self, s: Scanner) -> dict:
-        return {
+        d = {
             "manufacturer": s.manufacturer,
             "model": s.model,
             "serial_number": s.serial_number,
@@ -814,6 +818,18 @@ class Hdf5AdapterV1_0:
             "z_axis": self._axis_to_dict(s.z_axis),
             "focus": self._axis_to_dict(s.focus),
         }
+        # Plain bool fields, omitted entirely unless True (user-confirmed,
+        # 2026-08-21) — never serialised as False, unlike every other bool
+        # field in this schema.
+        if s.invert_actual_x:
+            d["invert_actual_x"] = True
+        if s.invert_actual_y:
+            d["invert_actual_y"] = True
+        if s.invert_commanded_x:
+            d["invert_commanded_x"] = True
+        if s.invert_commanded_y:
+            d["invert_commanded_y"] = True
+        return d
 
     def _light_source_to_dict(self, ls: LightSource) -> dict:
         return {
@@ -1115,6 +1131,10 @@ def _train_from_dict(t: dict) -> OpticalTrain:
         y_axis=_axis_from_dict(y_axis_d),
         z_axis=_axis_from_dict(s.get("z_axis")),
         focus=_axis_from_dict(s.get("focus")),
+        invert_actual_x=s.get("invert_actual_x", False),
+        invert_actual_y=s.get("invert_actual_y", False),
+        invert_commanded_x=s.get("invert_commanded_x", False),
+        invert_commanded_y=s.get("invert_commanded_y", False),
     )
 
     light_source = LightSource(

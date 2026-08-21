@@ -3,6 +3,7 @@ package machineconfig_test
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"math"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	machineconfig "machine-config-go"
+	"machine-config-go/internal/h5c"
 )
 
 // roundtrip writes original to a temp file and reads it back.
@@ -94,6 +96,77 @@ func TestWriterRoundtripScannerOffsets(t *testing.T) {
 	}
 	if (sr.WorkingDistance == nil) != (so.WorkingDistance == nil) || (so.WorkingDistance != nil && math.Abs(*sr.WorkingDistance-*so.WorkingDistance) > 1e-9) {
 		t.Errorf("working_distance: got %v want %v", sr.WorkingDistance, so.WorkingDistance)
+	}
+}
+
+func TestWriterRoundtripInvertFlagsDefaultFalseAndOmittedFromJSON(t *testing.T) {
+	_, rt := roundtrip(t, filepath.Join(fixturesDir(t), "reference_config.h5"))
+	s := rt.OpticalTrains[0].Scanner
+	if s.InvertActualX || s.InvertActualY || s.InvertCommandedX || s.InvertCommandedY {
+		t.Fatalf("expected all invert flags false, got %+v", s)
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"invert_actual_x", "invert_actual_y", "invert_commanded_x", "invert_commanded_y"} {
+		if _, ok := m[key]; ok {
+			t.Errorf("expected %q to be omitted from JSON, got %v", key, m[key])
+		}
+	}
+}
+
+func TestWriterOnlyTrueInvertFlagsSurviveAsRealHDF5Attributes(t *testing.T) {
+	cfg, err := machineconfig.NewReader(filepath.Join(fixturesDir(t), "reference_config.h5")).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpticalTrains[0].Scanner.InvertActualX = true
+	cfg.OpticalTrains[0].Scanner.InvertActualY = false
+	cfg.OpticalTrains[0].Scanner.InvertCommandedX = true
+	cfg.OpticalTrains[0].Scanner.InvertCommandedY = false
+
+	out := filepath.Join(t.TempDir(), "invert.h5")
+	if err := machineconfig.NewWriter().Write(cfg, out); err != nil {
+		t.Fatal(err)
+	}
+
+	// Raw HDF5 inspection: only the two true-valued attributes exist at all.
+	f, err := h5c.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	scannerGrp, err := f.Group("Machine/Optical_Trains/Optical_Train_01/Scanner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scannerGrp.Close()
+	if !scannerGrp.HasAttr("Invert_Actual_X") {
+		t.Error("expected Invert_Actual_X attribute to exist")
+	}
+	if !scannerGrp.HasAttr("Invert_Commanded_X") {
+		t.Error("expected Invert_Commanded_X attribute to exist")
+	}
+	if scannerGrp.HasAttr("Invert_Actual_Y") {
+		t.Error("expected Invert_Actual_Y attribute to be absent")
+	}
+	if scannerGrp.HasAttr("Invert_Commanded_Y") {
+		t.Error("expected Invert_Commanded_Y attribute to be absent")
+	}
+
+	// Read path still returns the correct value either way.
+	rt, err := machineconfig.NewReader(out).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := rt.OpticalTrains[0].Scanner
+	if !s.InvertActualX || s.InvertActualY || !s.InvertCommandedX || s.InvertCommandedY {
+		t.Fatalf("got %+v", s)
 	}
 }
 

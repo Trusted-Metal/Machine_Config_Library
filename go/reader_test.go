@@ -447,6 +447,39 @@ func TestScannerRotationAndOffsetY(t *testing.T) {
 	}
 }
 
+func TestScannerInvertFlagsAbsentFromFixtureReadAsFalse(t *testing.T) {
+	path := filepath.Join(fixturesDir(t), "reference_config.h5")
+	cfg, err := machineconfig.NewReader(path).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.OpticalTrains[0].Scanner
+	if s.InvertActualX || s.InvertActualY || s.InvertCommandedX || s.InvertCommandedY {
+		t.Fatalf("expected all invert flags false, got %+v", s)
+	}
+}
+
+func TestScannerInvertFlagsOmittedFromJSONWhenFalse(t *testing.T) {
+	path := filepath.Join(fixturesDir(t), "reference_config.h5")
+	cfg, err := machineconfig.NewReader(path).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(cfg.OpticalTrains[0].Scanner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"invert_actual_x", "invert_actual_y", "invert_commanded_x", "invert_commanded_y"} {
+		if _, ok := m[key]; ok {
+			t.Errorf("expected %q to be omitted from JSON, got %v", key, m[key])
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Light source and scanner card
 // ---------------------------------------------------------------------------

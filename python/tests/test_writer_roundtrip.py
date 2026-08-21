@@ -795,6 +795,46 @@ class TestScannerAxisConfigurations:
         assert ax.range_of_motion == pytest.approx(120.5)
 
 
+class TestScannerInvertFlags:
+    """Invert_Actual_X/Y, Invert_Commanded_X/Y — plain bool, written (and
+    JSON-serialised) only when True; False and absent are indistinguishable
+    everywhere except immediately after a read (user-confirmed, 2026-08-21).
+    """
+
+    def test_defaults_to_false_and_omitted_from_json(self, tmp_path: Path) -> None:
+        rt = _roundtrip(_config(), tmp_path / "defaults.h5")
+        s = rt.optical_trains[0].scanner
+        assert s.invert_actual_x is False
+        assert s.invert_actual_y is False
+        assert s.invert_commanded_x is False
+        assert s.invert_commanded_y is False
+
+    def test_only_true_values_survive_as_real_hdf5_attributes(self, tmp_path: Path) -> None:
+        import h5py
+
+        cfg = _config()
+        cfg.optical_trains[0].scanner.invert_actual_x = True
+        cfg.optical_trains[0].scanner.invert_actual_y = False
+        cfg.optical_trains[0].scanner.invert_commanded_x = True
+        cfg.optical_trains[0].scanner.invert_commanded_y = False
+        out = tmp_path / "invert.h5"
+        rt = _roundtrip(cfg, out)
+
+        # Raw HDF5 inspection: only the two True-valued attributes exist at all.
+        with h5py.File(out, "r") as f:
+            attrs = f["Machine/Optical_Trains/Optical_Train_01/Scanner"].attrs
+            assert "Invert_Actual_X" in attrs
+            assert "Invert_Commanded_X" in attrs
+            assert "Invert_Actual_Y" not in attrs
+            assert "Invert_Commanded_Y" not in attrs
+
+        s = rt.optical_trains[0].scanner
+        assert s.invert_actual_x is True
+        assert s.invert_actual_y is False
+        assert s.invert_commanded_x is True
+        assert s.invert_commanded_y is False
+
+
 class TestSynchronousSensorEdgeCases:
     """Edge cases distinct from TestClearBoxAttributeRoundtrip's happy path."""
 

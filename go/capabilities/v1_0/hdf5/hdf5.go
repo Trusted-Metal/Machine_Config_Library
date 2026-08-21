@@ -360,6 +360,25 @@ func parseScanner(g *h5c.Group) (Scanner, error) {
 		return Scanner{}, err
 	}
 	wdu, _ := readStrLocked(g, "Working_Distance_unit", "mm")
+	// Plain bool, not *bool — defaults to false whether the attribute is
+	// absent or explicitly 0 (user-confirmed, 2026-08-21). See the doc
+	// comment on Scanner.InvertActualX in models.go.
+	iax, err := readBoolFromIntAttr(g, "Invert_Actual_X")
+	if err != nil {
+		return Scanner{}, err
+	}
+	iay, err := readBoolFromIntAttr(g, "Invert_Actual_Y")
+	if err != nil {
+		return Scanner{}, err
+	}
+	icx, err := readBoolFromIntAttr(g, "Invert_Commanded_X")
+	if err != nil {
+		return Scanner{}, err
+	}
+	icy, err := readBoolFromIntAttr(g, "Invert_Commanded_Y")
+	if err != nil {
+		return Scanner{}, err
+	}
 	return Scanner{
 		Manufacturer:         readRequiredStr(g, "Manufacturer"),
 		Model:                readRequiredStr(g, "Model"),
@@ -385,6 +404,10 @@ func parseScanner(g *h5c.Group) (Scanner, error) {
 		YAxis:                ya,
 		ZAxis:                za,
 		Focus:                focus,
+		InvertActualX:        iax != nil && *iax,
+		InvertActualY:        iay != nil && *iay,
+		InvertCommandedX:     icx != nil && *icx,
+		InvertCommandedY:     icy != nil && *icy,
 	}, nil
 }
 
