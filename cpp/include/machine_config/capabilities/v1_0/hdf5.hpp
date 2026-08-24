@@ -9,7 +9,6 @@
 #include <highfive/H5File.hpp>
 
 #include <algorithm>
-#include <cmath>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -222,8 +221,8 @@ DS_CORRECTION_DATA);
                 auto icd = readCorrectionGrid(f,
 clearboxPathById(tid) + "/" +
 DS_INVERSE_CORRECTION_DATA);
-                ot.optional_components.clearbox->correction_data         = correctionDataToGrid3D(cd);
-                ot.optional_components.clearbox->inverse_correction_data = correctionDataToGrid3D(icd);
+                ot.optional_components.clearbox->correction_data         = detail::correctionDataToGrid3D(cd);
+                ot.optional_components.clearbox->inverse_correction_data = detail::correctionDataToGrid3D(icd);
             }
             if (ot.scan_field_correction_file) {
                 auto ds   = f.getDataSet(trainPathById(tid) + "/" +
@@ -710,18 +709,6 @@ private:
         return cd;
     }
 
-    // Convert a flat CorrectionData buffer to a nested Grid3D; NaN → nullopt.
-    static Grid3D correctionDataToGrid3D(const CorrectionData& cd) {
-        auto d0 = cd.shape[0], d1 = cd.shape[1], d2 = cd.shape[2];
-        Grid3D grid(d0, std::vector<std::vector<GridCell>>(d1, std::vector<GridCell>(d2)));
-        for (size_t i = 0; i < d0; ++i)
-            for (size_t j = 0; j < d1; ++j)
-                for (size_t k = 0; k < d2; ++k) {
-                    double v = cd.data[i * d1 * d2 + j * d2 + k];
-                    grid[i][j][k] = std::isnan(v) ? GridCell{} : GridCell{v};
-                }
-        return grid;
-    }
 };
 
 }  // namespace capabilities::v1_0

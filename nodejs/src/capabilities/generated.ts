@@ -14,6 +14,7 @@ import type {
   ScannerCard,
   ClearBox,
   OpcuaConfig,
+  CorrectionData,
 } from "../models.js";
 
 /** Write mode for set* model APIs. Default is Merge. */
@@ -76,6 +77,8 @@ export interface MachineConfigFile {
   opticalTrains(): TrainCollection;
   opticalTrain(index: number): Result<TrainHandle, CapabilityError>;
   opcua(): Result<OpcuaHandle, CapabilityError>;
+  getCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;
+  getInverseCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;
   save(path?: string): Promise<Result<void, CapabilityError>>;
   close(): void;
 }

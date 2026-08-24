@@ -2,6 +2,37 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import numpy as np
+
+
+def nan_array_to_nested(arr: np.ndarray) -> list:
+    """Convert a float64 ndarray to a nested Python list, mapping NaN -> None.
+
+    Lives at the model layer rather than in a version-specific adapter: the
+    NaN<->None convention is part of ClearBox's own field shape
+    (``list[list[list[float | None]]] | None``), not an on-disk detail of any
+    particular File_Version, so every adapter can share it.
+    """
+    obj = arr.astype(object)
+    obj[np.isnan(arr)] = None
+    return obj.tolist()
+
+
+def nested_to_array(data: Optional[list], shape: tuple = (257, 257, 2)) -> np.ndarray:
+    """Convert a nested Python list (None = NaN) back to a float64 ndarray.
+
+    Mirrors :func:`nan_array_to_nested` above; a ``None`` (or absent) grid
+    produces a zero-filled array of ``shape``.
+    """
+    if data is None:
+        return np.zeros(shape, dtype=np.float64)
+    obj = np.array(data, dtype=object)
+    result = np.empty(obj.shape, dtype=np.float64)
+    result.flat[:] = [
+        float("nan") if v is None else float(v) for v in obj.flat
+    ]
+    return result
+
 
 @dataclass
 class ScanFieldCorrectionFile:

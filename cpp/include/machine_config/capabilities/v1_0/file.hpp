@@ -189,6 +189,29 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
     return Result<void>::Ok();
   }
 
+  // Returns the (257, 257, 2) float64 correction grid for optical train
+  // `index` as a version-agnostic CorrectionData — same type as
+  // MachineConfigReader::getCorrectionData. Converts the already-loaded
+  // in-memory ClearBox model rather than re-reading the file, so this works
+  // for both open()- and create()-based instances alike.
+  Result<CorrectionData> getCorrectionData(std::size_t index) const {
+    auto cb = getClearbox(index);
+    if (!cb.ok()) return Result<CorrectionData>::Err(cb.errorCode(), cb.errorMessage());
+    CorrectionData cd;
+    cd.data = detail::gridToFlat(cb.value().correction_data, cd.shape);
+    return Result<CorrectionData>::Ok(std::move(cd));
+  }
+
+  // Returns the (257, 257, 2) float64 *inverse* correction grid for optical
+  // train `index`. See getCorrectionData() for details.
+  Result<CorrectionData> getInverseCorrectionData(std::size_t index) const {
+    auto cb = getClearbox(index);
+    if (!cb.ok()) return Result<CorrectionData>::Err(cb.errorCode(), cb.errorMessage());
+    CorrectionData cd;
+    cd.data = detail::gridToFlat(cb.value().inverse_correction_data, cd.shape);
+    return Result<CorrectionData>::Ok(std::move(cd));
+  }
+
   // Returns the OPCUA config, or Err("ValidationError", ...) if OPCUA is
   // present but missing one or more required fields. Collects every missing
   // field at once (in errorDetails()) rather than failing on the first one —

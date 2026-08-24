@@ -2,7 +2,6 @@ package hdf5
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
 	"machine-config-go/capabilities/v1_0/layout"
@@ -643,24 +642,7 @@ func readFloatGrid(f *h5c.File, path string) (*[][][]*float64, error) {
 	if err := ds.ReadFloat64(flat); err != nil {
 		return nil, err
 	}
-	out := make([][][]*float64, dims[0])
-	idx := 0
-	for i := range out {
-		out[i] = make([][]*float64, dims[1])
-		for j := range out[i] {
-			out[i][j] = make([]*float64, dims[2])
-			for k := range out[i][j] {
-				v := flat[idx]
-				idx++
-				if math.IsNaN(v) {
-					out[i][j][k] = nil
-				} else {
-					vv := v
-					out[i][j][k] = &vv
-				}
-			}
-		}
-	}
+	out := NestedGridFromFlat(flat, [3]int{int(dims[0]), int(dims[1]), int(dims[2])})
 	return &out, nil
 }
 

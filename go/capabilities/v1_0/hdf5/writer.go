@@ -4,7 +4,6 @@ package hdf5
 
 import (
 	"fmt"
-	"math"
 
 	"machine-config-go/capabilities/v1_0/layout"
 	"machine-config-go/internal/h5c"
@@ -201,43 +200,6 @@ func strOrDefault(s *string, def string) string {
 		return def
 	}
 	return *s
-}
-
-// flattenGrid converts *[][][]*float64 to a row-major flat []float64 of length 257*257*2.
-// nil outer pointer → all zeros; nil cell pointers → NaN.
-// Uses the canonical IEEE 754 quiet NaN (0x7FF8000000000000) matching Python/Rust/C++ convention.
-func flattenGrid(data *[][][]*float64) []float64 {
-	const (
-		d0    = 257
-		d1    = 257
-		d2    = 2
-		total = d0 * d1 * d2
-	)
-	// canonical quiet NaN — matches Python float('nan') and Rust f64::NAN bit pattern
-	qNaN := math.Float64frombits(0x7FF8000000000000)
-	flat := make([]float64, total)
-	if data == nil {
-		return flat
-	}
-	outer := *data
-	for i := 0; i < d0; i++ {
-		for j := 0; j < d1; j++ {
-			for k := 0; k < d2; k++ {
-				idx := i*d1*d2 + j*d2 + k
-				if i < len(outer) && j < len(outer[i]) && k < len(outer[i][j]) {
-					cell := outer[i][j][k]
-					if cell == nil {
-						flat[idx] = qNaN
-					} else {
-						flat[idx] = *cell
-					}
-				} else {
-					flat[idx] = qNaN
-				}
-			}
-		}
-	}
-	return flat
 }
 
 // ---------------------------------------------------------------------------
@@ -765,7 +727,7 @@ func writeClearBox(g *h5c.Group, cb *ClearBox) error {
 		return err
 	}
 
-	cdFlat := flattenGrid(cb.CorrectionData)
+	cdFlat := FlatFromNestedGrid(cb.CorrectionData)
 	cdDS, err := g.CreateFloat64DatasetOpen(layout.DSCorrectionData, []uint64{257, 257, 2}, cdFlat)
 	if err != nil {
 		return err
@@ -784,7 +746,7 @@ func writeClearBox(g *h5c.Group, cb *ClearBox) error {
 	}
 	cdDS.Close()
 
-	icdFlat := flattenGrid(cb.InverseCorrectionData)
+	icdFlat := FlatFromNestedGrid(cb.InverseCorrectionData)
 	icdDS, err := g.CreateFloat64DatasetOpen(layout.DSInverseCorrectionData, []uint64{257, 257, 2}, icdFlat)
 	if err != nil {
 		return err

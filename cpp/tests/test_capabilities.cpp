@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -34,6 +35,24 @@ static const std::string OPCUA_MISSING_REQUIRED =
 static std::filesystem::path tmpPath(const std::string& tag) {
     return std::filesystem::temp_directory_path() /
            ("mc_cap_test_" + tag + ".h5");
+}
+
+// CorrectionData has no operator==; IEEE 754 NaN != NaN would make a naive
+// element-wise == fail even on bit-for-bit identical real correction grids
+// (which always contain NaN cells). Treat "both NaN" as equal.
+static bool correctionDataEqual(const machine_config::CorrectionData& a,
+                                 const machine_config::CorrectionData& b) {
+    if (a.shape != b.shape) return false;
+    if (a.data.size() != b.data.size()) return false;
+    for (std::size_t i = 0; i < a.data.size(); ++i) {
+        bool an = std::isnan(a.data[i]), bn = std::isnan(b.data[i]);
+        if (an || bn) {
+            if (!(an && bn)) return false;
+        } else if (a.data[i] != b.data[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 TEST_CASE("CapabilityOpenGetScannerMatchesReader") {
@@ -256,6 +275,76 @@ TEST_CASE("CapabilityClearboxSynchronousSensors") {
     REQUIRE(cb.value().synchronous_sensors.at("Oxygen Sensor").sensor_name ==
             std::optional<std::string>{"ZR800 Oxygen Analyzer"});
     opened.value()->close();
+}
+
+TEST_CASE("CapabilityGetCorrectionDataMatchesReader") {
+    auto opened = MachineConfigFileV1_0::open(REF);
+    REQUIRE(opened.ok());
+    auto file = opened.value();
+
+    MachineConfigReader reader(REF);
+    auto expected = reader.getCorrectionData(0);
+    auto result = file->getCorrectionData(0);
+    REQUIRE(result.ok());
+    REQUIRE(correctionDataEqual(result.value(), expected));
+
+    auto expectedInv = reader.getInverseCorrectionData(0);
+    auto resultInv = file->getInverseCorrectionData(0);
+    REQUIRE(resultInv.ok());
+    REQUIRE(correctionDataEqual(resultInv.value(), expectedInv));
+    file->close();
+}
+
+TEST_CASE("CapabilityGetCorrectionDataShapeAndNaNPresentThroughFacade") {
+    auto opened = MachineConfigFileV1_0::open(REF);
+    REQUIRE(opened.ok());
+    auto cd = opened.value()->getCorrectionData(0);
+    REQUIRE(cd.ok());
+    REQUIRE(cd.value().shape == std::array<std::size_t, 3>{257, 257, 2});
+    bool any_nan = false;
+    for (double v : cd.value().data) {
+        if (std::isnan(v)) { any_nan = true; break; }
+    }
+    REQUIRE(any_nan);
+    opened.value()->close();
+}
+
+TEST_CASE("CapabilityGetCorrectionDataMissingClearboxIsNotPresent") {
+    // Every stock fixture's trains have a ClearBox, so build one without.
+    machine_config::MockConfigBuilder b;
+    b.laser_count = 1;
+    b.include_clearbox = false;
+    auto cfg = b.build();
+    auto out = tmpPath("cd_no_cb");
+    machine_config::MachineConfigWriter{cfg}.write(out);
+
+    auto opened = MachineConfigFileV1_0::open(out);
+    REQUIRE(opened.ok());
+    auto result = opened.value()->getCorrectionData(0);
+    REQUIRE_FALSE(result.ok());
+    REQUIRE(result.errorCode() == "NotPresent");
+    auto resultInv = opened.value()->getInverseCorrectionData(0);
+    REQUIRE_FALSE(resultInv.ok());
+    REQUIRE(resultInv.errorCode() == "NotPresent");
+    opened.value()->close();
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityGetCorrectionDataWorksOnCreateBasedInstanceWithoutTouchingDisk") {
+    // The specific case that rules out delegate-to-Reader-by-reopening: a
+    // create()-d facade has no path at all, so this must convert the
+    // already-loaded in-memory model, not re-read from anywhere.
+    auto created = createMachineConfig("1.0");
+    REQUIRE(created.ok());
+    auto file = created.value();
+
+    auto cd = file->getCorrectionData(0);
+    REQUIRE(cd.ok());
+    REQUIRE(cd.value().shape == std::array<std::size_t, 3>{257, 257, 2});
+    auto icd = file->getInverseCorrectionData(0);
+    REQUIRE(icd.ok());
+    REQUIRE(icd.value().shape == std::array<std::size_t, 3>{257, 257, 2});
+    file->close();
 }
 
 TEST_CASE("CapabilityCreateSetMetaSaveReopen") {

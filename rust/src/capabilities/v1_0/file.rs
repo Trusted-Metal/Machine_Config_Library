@@ -6,8 +6,8 @@ use crate::capabilities::generated::SetMode;
 use crate::capabilities::merge::apply_set_mode;
 use crate::capabilities::result::Result;
 use crate::models::{
-    ClearBox, Collimator, LightSource, Machine, MachineConfig, MachineConfigMeta, OpcuaConfig,
-    OpticalTrain, Scanner, ScannerCard,
+    nested_to_array3, ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfig,
+    MachineConfigMeta, OpcuaConfig, OpticalTrain, Scanner, ScannerCard,
 };
 use super::hdf5::Hdf5AdapterV1_0;
 use crate::writer::MachineConfigWriter;
@@ -268,6 +268,32 @@ impl MachineConfigFileV1_0 {
         Ok(())
     }
 
+    /// Returns the `(257, 257, 2)` float64 correction grid for optical train
+    /// `index` as a version-agnostic [`CorrectionData`] — same type and shape
+    /// as [`crate::reader::MachineConfigReader::get_correction_data`].
+    /// Converts the already-loaded in-memory `ClearBox` model rather than
+    /// re-reading the file, so this works for both `open()`- and
+    /// `create()`-based instances alike. Errors with `NotPresent` if the
+    /// train has no ClearBox installed.
+    pub fn get_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError> {
+        let cb = self.get_clearbox(index)?.ok_or_else(|| {
+            CapabilityError::NotPresent("clearbox is not present".into())
+        })?;
+        Ok(grid_to_correction_data(&cb.correction_data))
+    }
+
+    /// Returns the `(257, 257, 2)` float64 *inverse* correction grid for
+    /// optical train `index`. See [`Self::get_correction_data`] for details.
+    pub fn get_inverse_correction_data(
+        &self,
+        index: usize,
+    ) -> Result<CorrectionData, CapabilityError> {
+        let cb = self.get_clearbox(index)?.ok_or_else(|| {
+            CapabilityError::NotPresent("clearbox is not present".into())
+        })?;
+        Ok(grid_to_correction_data(&cb.inverse_correction_data))
+    }
+
     /// Returns the OPCUA config, or `Err(ValidationError)` if OPCUA is present
     /// but missing one or more required fields. Collects every missing field
     /// at once (in `details`) rather than failing on the first one — see
@@ -348,5 +374,19 @@ impl MachineConfigFileV1_0 {
 
     pub fn close(&mut self) {
         self.closed = true;
+    }
+}
+
+/// Converts a `ClearBox` grid field to a flat [`CorrectionData`] buffer via
+/// the model-layer `Array3` helper — the same conversion the HDF5 adapter's
+/// `get_correction_data`/`get_inverse_correction_data` use, just starting
+/// from the in-memory model instead of a freshly-read dataset.
+fn grid_to_correction_data(data: &Option<Vec<Vec<Vec<Option<f64>>>>>) -> CorrectionData {
+    let arr = nested_to_array3(data);
+    let shape = arr.shape();
+    let shape = [shape[0], shape[1], shape[2]];
+    CorrectionData {
+        data: arr.into_raw_vec_and_offset().0,
+        shape,
     }
 }

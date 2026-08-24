@@ -1,5 +1,7 @@
 package models
 
+import "math"
+
 // StrPtr returns a pointer to s.
 func StrPtr(s string) *string { return &s }
 
@@ -18,6 +20,75 @@ func BoolPtr(b bool) *bool { return &b }
 type CorrectionData struct {
 	Data  []float64
 	Shape [3]int
+}
+
+// NestedGridFromFlat converts a flat, row-major float64 buffer (as read from
+// an HDF5 dataset) into a nested [][][]*float64, mapping IEEE 754 NaN cells
+// to nil (Rule: NaN in float64 dataset -> JSON null).
+//
+// Lives at the model layer rather than in a version-specific adapter: the
+// NaN<->nil convention is part of ClearBox's own field shape
+// (*[][][]*float64), not an on-disk detail of any particular File_Version,
+// so every adapter can share it.
+func NestedGridFromFlat(flat []float64, shape [3]int) [][][]*float64 {
+	d0, d1, d2 := shape[0], shape[1], shape[2]
+	out := make([][][]*float64, d0)
+	idx := 0
+	for i := range out {
+		out[i] = make([][]*float64, d1)
+		for j := range out[i] {
+			out[i][j] = make([]*float64, d2)
+			for k := range out[i][j] {
+				v := flat[idx]
+				idx++
+				if math.IsNaN(v) {
+					out[i][j][k] = nil
+				} else {
+					vv := v
+					out[i][j][k] = &vv
+				}
+			}
+		}
+	}
+	return out
+}
+
+// FlatFromNestedGrid converts *[][][]*float64 to a row-major flat []float64
+// of length 257*257*2. A nil outer pointer produces all zeros; nil cell
+// pointers become NaN. Mirrors NestedGridFromFlat above. Uses the canonical
+// IEEE 754 quiet NaN (0x7FF8000000000000), matching the Python/Rust/C++
+// convention.
+func FlatFromNestedGrid(data *[][][]*float64) []float64 {
+	const (
+		d0    = 257
+		d1    = 257
+		d2    = 2
+		total = d0 * d1 * d2
+	)
+	qNaN := math.Float64frombits(0x7FF8000000000000)
+	flat := make([]float64, total)
+	if data == nil {
+		return flat
+	}
+	outer := *data
+	for i := 0; i < d0; i++ {
+		for j := 0; j < d1; j++ {
+			for k := 0; k < d2; k++ {
+				idx := i*d1*d2 + j*d2 + k
+				if i < len(outer) && j < len(outer[i]) && k < len(outer[i][j]) {
+					cell := outer[i][j][k]
+					if cell == nil {
+						flat[idx] = qNaN
+					} else {
+						flat[idx] = *cell
+					}
+				} else {
+					flat[idx] = qNaN
+				}
+			}
+		}
+	}
+	return flat
 }
 
 // MachineConfig is the top-level configuration document.

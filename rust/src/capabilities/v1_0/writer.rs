@@ -90,37 +90,6 @@ fn wi_ds(ds: &Dataset, key: &str, val: i64) -> Result<()> {
     Ok(())
 }
 
-/// Converts `Option<Vec<Vec<Vec<Option<f64>>>>>` back to an `Array3<f64>`.
-/// `None` list cells become NaN; a `None` outer value produces a zero-filled
-/// `(257, 257, 2)` array — required when the model was parsed without binary
-/// data (see §3.12 writer rules).
-fn nested_to_array3(
-    data: &Option<Vec<Vec<Vec<Option<f64>>>>>,
-) -> ndarray::Array3<f64> {
-    const SHAPE: (usize, usize, usize) = (257, 257, 2);
-    let zero = || ndarray::Array3::<f64>::zeros(SHAPE);
-    let outer = match data {
-        None => return zero(),
-        Some(v) if v.is_empty() => return zero(),
-        Some(v) => v,
-    };
-    let d0 = outer.len();
-    let d1 = outer[0].len();
-    let d2 = if d1 > 0 { outer[0][0].len() } else { 0 };
-    if d0 == 0 || d1 == 0 || d2 == 0 {
-        return zero();
-    }
-    let mut arr = ndarray::Array3::<f64>::from_elem((d0, d1, d2), f64::NAN);
-    for (i, row) in outer.iter().enumerate() {
-        for (j, col) in row.iter().enumerate() {
-            for (k, &v) in col.iter().enumerate() {
-                arr[[i, j, k]] = v.unwrap_or(f64::NAN);
-            }
-        }
-    }
-    arr
-}
-
 /// Writes a `serde_json::Value` from an `.extra` map back as an HDF5 attribute,
 /// preserving the natural type (string → VarLenUnicode, integer → i64, float → f64).
 fn write_extra_value(grp: &Group, key: &str, val: &serde_json::Value) -> Result<()> {

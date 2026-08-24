@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 use hdf5::types::{FixedUnicode, TypeDescriptor, VarLenAscii, VarLenUnicode};
 use hdf5::{Dataset, File as H5File, Group, Location};
 use indexmap::IndexMap;
-use ndarray::Array3;
 
 /// On-disk compound-dataset row for `Derivation_Equation_Constants`. Distinct
 /// from the model-facing [`EquationConstant`] (which uses `String`) because
@@ -334,31 +333,6 @@ fn require_group(parent: &Group, path: &str) -> Result<Group> {
     parent
         .group(path)
         .map_err(|_| MachineConfigError::MissingGroup(path.to_string()))
-}
-
-/// Converts a `(257, 257, 2)` float64 grid to nested lists, mapping IEEE 754
-/// NaN cells to `None` (Rule: NaN in float64 dataset → JSON `null`).
-fn nan_array3_to_nested(arr: &Array3<f64>) -> Vec<Vec<Vec<Option<f64>>>> {
-    let shape = arr.shape();
-    let (d0, d1, d2) = (shape[0], shape[1], shape[2]);
-    (0..d0)
-        .map(|i| {
-            (0..d1)
-                .map(|j| {
-                    (0..d2)
-                        .map(|k| {
-                            let v = arr[[i, j, k]];
-                            if v.is_nan() {
-                                None
-                            } else {
-                                Some(v)
-                            }
-                        })
-                        .collect()
-                })
-                .collect()
-        })
-        .collect()
 }
 
 // ---------------------------------------------------------------------------

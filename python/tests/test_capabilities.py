@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from machine_config.capabilities import (
     create_machine_config,
     open_machine_config,
@@ -182,6 +184,67 @@ def test_optional_components_and_clearbox():
     assert isinstance(t0.value.set_model(model, SetMode.REPLACE), Ok)
     assert t0.value.optional_components() is None
     created.value.close()
+
+
+def test_get_correction_data_matches_reader():
+    file = open_machine_config(FIXTURE).value
+    reader_adapter = MachineConfigReader(str(FIXTURE))
+    # MachineConfigReader.parse() doesn't expose get_correction_data directly;
+    # the v1_0 adapter it dispatches to does — same method the facade should
+    # match exactly.
+    from machine_config.capabilities.v1_0.hdf5 import Hdf5AdapterV1_0
+    adapter = Hdf5AdapterV1_0(str(FIXTURE))
+
+    result = file.get_correction_data(0)
+    assert isinstance(result, Ok)
+    expected = adapter.get_correction_data(0)
+    np.testing.assert_array_equal(result.value, expected)  # NaN-aware equality
+
+    inv_result = file.get_inverse_correction_data(0)
+    assert isinstance(inv_result, Ok)
+    inv_expected = adapter.get_inverse_correction_data(0)
+    np.testing.assert_array_equal(inv_result.value, inv_expected)
+    file.close()
+
+
+def test_get_correction_data_shape_and_nan_present_through_facade():
+    file = open_machine_config(FIXTURE).value
+    grid = file.get_correction_data(0).value
+    assert grid.shape == (257, 257, 2)
+    assert np.isnan(grid).any()
+    file.close()
+
+
+def test_get_correction_data_missing_clearbox_is_not_present(tmp_path):
+    # Every stock fixture's trains have a ClearBox, so build one without: take
+    # the reference config, strip train 0's ClearBox, re-write to a temp file.
+    config = MachineConfigReader(str(FIXTURE)).parse()
+    config.optical_trains[0].optional_components.clearbox = None
+    out = tmp_path / "no_clearbox.h5"
+    MachineConfigWriter(config).write(out)
+
+    file = open_machine_config(out).value
+    result = file.get_correction_data(0)
+    assert not result.ok
+    assert result.error.code == "NotPresent"
+    inv_result = file.get_inverse_correction_data(0)
+    assert not inv_result.ok
+    assert inv_result.error.code == "NotPresent"
+    file.close()
+
+
+def test_get_correction_data_works_on_create_based_instance_without_touching_disk():
+    # The specific case that rules out delegate-to-Reader-by-reopening: a
+    # create()-d facade has no path at all, so this must convert the
+    # already-loaded in-memory model, not re-read from anywhere.
+    file = create_machine_config("1.0").value
+    grid = file.get_correction_data(0)
+    assert isinstance(grid, Ok)
+    assert grid.value.shape == (257, 257, 2)
+    inv_grid = file.get_inverse_correction_data(0)
+    assert isinstance(inv_grid, Ok)
+    assert inv_grid.value.shape == (257, 257, 2)
+    file.close()
 
 
 def test_create_set_machine_save_reopen(tmp_path):

@@ -24,7 +24,11 @@ import type {
   SynchronousSensor,
   EquationConstant,
   CalibrationPoint,
+  CorrectionData,
 } from "../../models.js";
+import { float64ToNested3D } from "../../models.js";
+
+export type { CorrectionData } from "../../models.js";
 import * as layout from "./layout.js";
 
 export interface ReadOptions {
@@ -35,12 +39,6 @@ export interface ReadOptions {
 export interface ToJsonOptions extends ReadOptions {
   /** JSON indentation spaces (default 2). Pass 0 for compact. */
   indent?: number;
-}
-
-/** A raw ClearBox correction grid — flat, row-major, NaN preserved (not JSON-safe). */
-export interface CorrectionData {
-  data: Float64Array;
-  shape: [number, number, number];
 }
 
 // ---------------------------------------------------------------------------
@@ -207,32 +205,6 @@ const KNOWN_TRIGGER = new Set([
 // ---------------------------------------------------------------------------
 // Dataset helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Convert a flat Float64Array (from an HDF5 dataset) into a nested 3-D
- * JavaScript array, mapping IEEE-754 NaN → null to produce valid JSON.
- */
-function float64ToNested3D(
-  data: Float64Array,
-  shape: number[],
-): Array<Array<Array<number | null>>> {
-  const [d0, d1, d2] = shape;
-  const out: Array<Array<Array<number | null>>> = [];
-  let offset = 0;
-  for (let i = 0; i < d0; i++) {
-    const row: Array<Array<number | null>> = [];
-    for (let j = 0; j < d1; j++) {
-      const cell: Array<number | null> = [];
-      for (let k = 0; k < d2; k++) {
-        const v = data[offset++];
-        cell.push(isNaN(v) ? null : v);
-      }
-      row.push(cell);
-    }
-    out.push(row);
-  }
-  return out;
-}
 
 /**
  * `JSON.stringify` replacer: drops Scanner's four `invert_*` keys when their

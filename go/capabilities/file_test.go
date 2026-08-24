@@ -1,6 +1,7 @@
 package capabilities_test
 
 import (
+	"math"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -9,6 +10,32 @@ import (
 	machineconfig "machine-config-go"
 	"machine-config-go/capabilities"
 )
+
+// correctionDataEqual compares two CorrectionData buffers treating "both NaN"
+// as equal — plain == (and reflect.DeepEqual) treat NaN != NaN, which would
+// make a straightforward comparison fail even on bit-for-bit identical
+// real correction grids (which always contain NaN cells).
+func correctionDataEqual(a, b *machineconfig.CorrectionData) bool {
+	if a.Shape != b.Shape {
+		return false
+	}
+	if len(a.Data) != len(b.Data) {
+		return false
+	}
+	for i := range a.Data {
+		x, y := a.Data[i], b.Data[i]
+		if math.IsNaN(x) || math.IsNaN(y) {
+			if !(math.IsNaN(x) && math.IsNaN(y)) {
+				return false
+			}
+			continue
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
 
 func fixturesDir(t *testing.T) string {
 	t.Helper()
@@ -450,4 +477,116 @@ func TestSaveRoundTrip(t *testing.T) {
 			t.Errorf("train 1 serial: got %q want %q", rt1.SerialNumber, sc1.SerialNumber)
 		}
 	})
+}
+
+func TestGetCorrectionDataMatchesReader(t *testing.T) {
+	path := filepath.Join(fixturesDir(t), "reference_config.h5")
+	f, err := capabilities.OpenMachineConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	expected, rdErr := machineconfig.NewReader(path).GetCorrectionData(0)
+	if rdErr != nil {
+		t.Fatal(rdErr)
+	}
+	got, capErr := f.GetCorrectionData(0)
+	if capErr != nil {
+		t.Fatal(capErr)
+	}
+	if !correctionDataEqual(got, expected) {
+		t.Fatalf("facade GetCorrectionData does not match Reader")
+	}
+
+	expectedInv, rdErr := machineconfig.NewReader(path).GetInverseCorrectionData(0)
+	if rdErr != nil {
+		t.Fatal(rdErr)
+	}
+	gotInv, capErr := f.GetInverseCorrectionData(0)
+	if capErr != nil {
+		t.Fatal(capErr)
+	}
+	if !correctionDataEqual(gotInv, expectedInv) {
+		t.Fatalf("facade GetInverseCorrectionData does not match Reader")
+	}
+}
+
+func TestGetCorrectionDataShapeAndNaNPresentThroughFacade(t *testing.T) {
+	path := filepath.Join(fixturesDir(t), "reference_config.h5")
+	f, err := capabilities.OpenMachineConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	cd, capErr := f.GetCorrectionData(0)
+	if capErr != nil {
+		t.Fatal(capErr)
+	}
+	if cd.Shape != [3]int{257, 257, 2} {
+		t.Fatalf("shape = %v", cd.Shape)
+	}
+	anyNaN := false
+	for _, v := range cd.Data {
+		if math.IsNaN(v) {
+			anyNaN = true
+			break
+		}
+	}
+	if !anyNaN {
+		t.Fatal("expected at least one NaN cell in a real correction grid")
+	}
+}
+
+func TestGetCorrectionDataMissingClearboxIsNotPresent(t *testing.T) {
+	// Every stock fixture's trains have a ClearBox, so build one without:
+	// take the reference config, strip train 0's ClearBox, re-write.
+	path := filepath.Join(fixturesDir(t), "reference_config.h5")
+	cfg, err := machineconfig.NewReader(path).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpticalTrains[0].OptionalComponents.Clearbox = nil
+	tmp := filepath.Join(t.TempDir(), "no_clearbox.h5")
+	if err := machineconfig.NewWriter().Write(cfg, tmp); err != nil {
+		t.Fatal(err)
+	}
+
+	f, capErr := capabilities.OpenMachineConfig(tmp)
+	if capErr != nil {
+		t.Fatal(capErr)
+	}
+	defer f.Close()
+
+	if _, e := f.GetCorrectionData(0); e == nil || e.Code != capabilities.ErrNotPresent {
+		t.Fatalf("expected NotPresent, got %#v", e)
+	}
+	if _, e := f.GetInverseCorrectionData(0); e == nil || e.Code != capabilities.ErrNotPresent {
+		t.Fatalf("expected NotPresent, got %#v", e)
+	}
+}
+
+func TestGetCorrectionDataWorksOnCreateBasedInstanceWithoutTouchingDisk(t *testing.T) {
+	// The specific case that rules out delegate-to-Reader-by-reopening: a
+	// Create()-d facade has no path at all, so this must convert the
+	// already-loaded in-memory model, not re-read from anywhere.
+	//
+	// Unlike the other four languages' mock builders (which default to
+	// including a ClearBox), Go's Create() builds a train with no
+	// OptionalComponents at all — and Go's facade has no SetClearbox to add
+	// one afterward. So the no-disk-I/O behavior this test actually proves
+	// is: NotPresent comes back immediately, not a crash or a disk read.
+	f, err := capabilities.CreateMachineConfig("1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	if _, capErr := f.GetCorrectionData(0); capErr == nil || capErr.Code != capabilities.ErrNotPresent {
+		t.Fatalf("expected NotPresent, got %#v", capErr)
+	}
+	if _, capErr := f.GetInverseCorrectionData(0); capErr == nil || capErr.Code != capabilities.ErrNotPresent {
+		t.Fatalf("expected NotPresent, got %#v", capErr)
+	}
 }

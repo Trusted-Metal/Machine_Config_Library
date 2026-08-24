@@ -10,7 +10,6 @@
 
 #include <cstring>
 #include <filesystem>
-#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -89,37 +88,6 @@ inline void writeExtra(Loc& loc, const ExtraAttrs& extra) {
             ws(loc, k, v.dump());
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Correction grid helper
-// ---------------------------------------------------------------------------
-
-// Grid3D → flat row-major double buffer.  None cells become NaN.
-// Absent Grid3D becomes a zero-filled default (257,257,2) array.
-inline std::vector<double> gridToFlat(const std::optional<Grid3D>& grid,
-                                       std::array<size_t, 3>& shape_out) {
-    constexpr size_t D0 = 257, D1 = 257, D2 = 2;
-    if (!grid || grid->empty()) {
-        shape_out = {D0, D1, D2};
-        return std::vector<double>(D0 * D1 * D2, 0.0);
-    }
-    const auto& g = *grid;
-    size_t d0 = g.size();
-    size_t d1 = d0 > 0 ? g[0].size() : 0;
-    size_t d2 = d1 > 0 ? g[0][0].size() : 0;
-    if (d0 == 0 || d1 == 0 || d2 == 0) {
-        shape_out = {D0, D1, D2};
-        return std::vector<double>(D0 * D1 * D2, 0.0);
-    }
-    shape_out = {d0, d1, d2};
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    std::vector<double> flat(d0 * d1 * d2, nan);
-    for (size_t i = 0; i < d0; ++i)
-        for (size_t j = 0; j < d1; ++j)
-            for (size_t k = 0; k < d2; ++k)
-                flat[i * d1 * d2 + j * d2 + k] = g[i][j][k].value_or(nan);
-    return flat;
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +376,7 @@ private:
     void writeCorrectionDataset(HighFive::Group& grp, const std::string& name,
                                   const std::optional<Grid3D>& grid) const {
         std::array<size_t, 3> shape{};
-        auto flat = gridToFlat(grid, shape);
+        auto flat = detail::gridToFlat(grid, shape);
         auto ds = grp.createDataSet<double>(
             name, HighFive::DataSpace({shape[0], shape[1], shape[2]}));
         H5Dwrite(ds.getId(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, flat.data());

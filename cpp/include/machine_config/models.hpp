@@ -15,8 +15,10 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -69,6 +71,58 @@ struct CorrectionData {
     std::vector<double> data;
     std::array<std::size_t, 3> shape; // {d0, d1, d2}, e.g. {257, 257, 2}
 };
+
+// ---------------------------------------------------------------------------
+// CorrectionData <-> Grid3D conversion helpers
+//
+// Live at the model layer rather than in a version-specific adapter: the
+// NaN<->nullopt convention is part of Grid3D's own shape, not an on-disk
+// detail of any particular File_Version, so every adapter can share it.
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+// Flat CorrectionData buffer -> nested Grid3D; NaN -> nullopt.
+inline Grid3D correctionDataToGrid3D(const CorrectionData& cd) {
+    auto d0 = cd.shape[0], d1 = cd.shape[1], d2 = cd.shape[2];
+    Grid3D grid(d0, std::vector<std::vector<GridCell>>(d1, std::vector<GridCell>(d2)));
+    for (std::size_t i = 0; i < d0; ++i)
+        for (std::size_t j = 0; j < d1; ++j)
+            for (std::size_t k = 0; k < d2; ++k) {
+                double v = cd.data[i * d1 * d2 + j * d2 + k];
+                grid[i][j][k] = std::isnan(v) ? GridCell{} : GridCell{v};
+            }
+    return grid;
+}
+
+// Grid3D -> flat row-major double buffer. nullopt cells become NaN.
+// Absent/empty Grid3D becomes a zero-filled default (257,257,2) array.
+inline std::vector<double> gridToFlat(const std::optional<Grid3D>& grid,
+                                       std::array<std::size_t, 3>& shape_out) {
+    constexpr std::size_t D0 = 257, D1 = 257, D2 = 2;
+    if (!grid || grid->empty()) {
+        shape_out = {D0, D1, D2};
+        return std::vector<double>(D0 * D1 * D2, 0.0);
+    }
+    const auto& g = *grid;
+    std::size_t d0 = g.size();
+    std::size_t d1 = d0 > 0 ? g[0].size() : 0;
+    std::size_t d2 = d1 > 0 ? g[0][0].size() : 0;
+    if (d0 == 0 || d1 == 0 || d2 == 0) {
+        shape_out = {D0, D1, D2};
+        return std::vector<double>(D0 * D1 * D2, 0.0);
+    }
+    shape_out = {d0, d1, d2};
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    std::vector<double> flat(d0 * d1 * d2, nan);
+    for (std::size_t i = 0; i < d0; ++i)
+        for (std::size_t j = 0; j < d1; ++j)
+            for (std::size_t k = 0; k < d2; ++k)
+                flat[i * d1 * d2 + j * d2 + k] = g[i][j][k].value_or(nan);
+    return flat;
+}
+
+} // namespace detail
 
 // ---------------------------------------------------------------------------
 // Structs — defined bottom-up (inner before outer)

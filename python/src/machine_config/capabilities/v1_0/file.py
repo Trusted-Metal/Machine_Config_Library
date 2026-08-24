@@ -8,6 +8,7 @@ from machine_config.capabilities.errors import CapabilityError, SessionClosedErr
 from machine_config.capabilities.generated import SetMode
 from machine_config.capabilities.merge import apply_set_mode, snapshot
 from machine_config.capabilities.result import Result, err, ok
+from machine_config.models import nested_to_array
 
 from .hdf5 import Hdf5AdapterV1_0, config_from_dict
 from .writer import Hdf5WriterV1_0
@@ -99,6 +100,44 @@ class MachineConfigFileV1_0:
     def optical_trains(self) -> "_TrainCollection":
         self._assert_open()
         return _TrainCollection(self)
+
+    def _clearbox_dict(self, index: int) -> Result[dict[str, Any], CapabilityError]:
+        self._assert_open()
+        n = len(self._data["optical_trains"])
+        if index < 0 or index >= n:
+            return err(
+                capability_error(
+                    "InvalidIndex",
+                    f"optical train index {index} out of range [0, {n})",
+                )
+            )
+        oc = self._data["optical_trains"][index].get("optional_components") or {}
+        clearbox = oc.get("clearbox")
+        if clearbox is None:
+            return err(capability_error("NotPresent", "clearbox is not present"))
+        return ok(clearbox)
+
+    def get_correction_data(self, index: int) -> Result[Any, CapabilityError]:
+        """Returns the ``(257, 257, 2)`` float64 correction grid for optical
+        train ``index`` as a real ``np.ndarray`` (NaN, not ``None``) — same
+        type and shape as :meth:`Hdf5AdapterV1_0.get_correction_data`.
+        Converts the already-loaded in-memory clearbox dict rather than
+        re-reading the file, so this works for both ``open()``- and
+        ``create()``-based instances alike.
+        """
+        clearbox = self._clearbox_dict(index)
+        if not clearbox.ok:
+            return clearbox
+        return ok(nested_to_array(clearbox.value.get("correction_data")))
+
+    def get_inverse_correction_data(self, index: int) -> Result[Any, CapabilityError]:
+        """Returns the ``(257, 257, 2)`` float64 *inverse* correction grid for
+        optical train ``index``. See :meth:`get_correction_data` for details.
+        """
+        clearbox = self._clearbox_dict(index)
+        if not clearbox.ok:
+            return clearbox
+        return ok(nested_to_array(clearbox.value.get("inverse_correction_data")))
 
     def opcua(self) -> Result["_NodeHandle", CapabilityError]:
         """Returns the OPCUA node, or ``Err(ValidationError)`` if OPCUA is

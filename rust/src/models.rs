@@ -15,6 +15,7 @@
 // the reader's `validate()` step (Phase 3.5), not in these plain data structs.
 
 use indexmap::IndexMap;
+use ndarray::Array3;
 use serde::{Deserialize, Serialize};
 
 /// Raw correction grid read directly from a ClearBox HDF5 dataset.
@@ -61,6 +62,61 @@ pub struct CorrectionData {
     pub data: Vec<f64>,
     /// Array dimensions as `[d0, d1, d2]`, e.g. `[257, 257, 2]`.
     pub shape: [usize; 3],
+}
+
+/// Converts a `(D0, D1, D2)` float64 grid to nested `Vec`s, mapping IEEE 754
+/// NaN cells to `None` (Rule: NaN in float64 dataset → JSON `null`).
+///
+/// Lives at the model layer rather than in a version-specific adapter: the
+/// NaN↔`None` convention is part of the stable model's `ClearBox` field
+/// shape (`Option<Vec<Vec<Vec<Option<f64>>>>>`), not an on-disk detail of any
+/// particular `File_Version`, so every adapter can share it.
+pub(crate) fn nan_array3_to_nested(arr: &Array3<f64>) -> Vec<Vec<Vec<Option<f64>>>> {
+    let shape = arr.shape();
+    let (d0, d1, d2) = (shape[0], shape[1], shape[2]);
+    (0..d0)
+        .map(|i| {
+            (0..d1)
+                .map(|j| {
+                    (0..d2)
+                        .map(|k| {
+                            let v = arr[[i, j, k]];
+                            if v.is_nan() { None } else { Some(v) }
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Converts `Option<Vec<Vec<Vec<Option<f64>>>>>` back to an `Array3<f64>`.
+/// `None` list cells become NaN; a `None` outer value produces a zero-filled
+/// `(257, 257, 2)` array — required when the model was parsed without binary
+/// data (see §3.12 writer rules). Mirrors [`nan_array3_to_nested`] above.
+pub(crate) fn nested_to_array3(data: &Option<Vec<Vec<Vec<Option<f64>>>>>) -> Array3<f64> {
+    const SHAPE: (usize, usize, usize) = (257, 257, 2);
+    let zero = || Array3::<f64>::zeros(SHAPE);
+    let outer = match data {
+        None => return zero(),
+        Some(v) if v.is_empty() => return zero(),
+        Some(v) => v,
+    };
+    let d0 = outer.len();
+    let d1 = outer[0].len();
+    let d2 = if d1 > 0 { outer[0][0].len() } else { 0 };
+    if d0 == 0 || d1 == 0 || d2 == 0 {
+        return zero();
+    }
+    let mut arr = Array3::<f64>::from_elem((d0, d1, d2), f64::NAN);
+    for (i, row) in outer.iter().enumerate() {
+        for (j, col) in row.iter().enumerate() {
+            for (k, &v) in col.iter().enumerate() {
+                arr[[i, j, k]] = v.unwrap_or(f64::NAN);
+            }
+        }
+    }
+    arr
 }
 
 /// Arbitrary, non-schema HDF5 attributes preserved verbatim.

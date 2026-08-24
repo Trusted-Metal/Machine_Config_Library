@@ -7,6 +7,7 @@ import (
 	"machine-config-go/capabilities/internal/api"
 	v1_0hdf5 "machine-config-go/capabilities/v1_0/hdf5"
 	"machine-config-go/capabilities/v1_0/layout"
+	"machine-config-go/internal/models"
 )
 
 const FileVersion = layout.FileVersion
@@ -191,6 +192,31 @@ func (f *File) GetClearbox(index int) (machineconfig.ClearBox, *api.Error) {
 		return machineconfig.ClearBox{}, api.Errf(api.ErrNotPresent, "clearbox is not present")
 	}
 	return api.Snapshot(*cb), nil
+}
+
+// GetCorrectionData returns the (257, 257, 2) float64 correction grid for
+// optical train index as a version-agnostic *machineconfig.CorrectionData —
+// same type as MachineConfigReader.GetCorrectionData. Converts the
+// already-loaded in-memory ClearBox model rather than re-reading the file,
+// so this works for both Open()- and Create()-based instances alike.
+func (f *File) GetCorrectionData(index int) (*machineconfig.CorrectionData, *api.Error) {
+	cb, err := f.GetClearbox(index)
+	if err != nil {
+		return nil, err
+	}
+	flat := models.FlatFromNestedGrid(cb.CorrectionData)
+	return &machineconfig.CorrectionData{Data: flat, Shape: [3]int{257, 257, 2}}, nil
+}
+
+// GetInverseCorrectionData returns the (257, 257, 2) float64 *inverse*
+// correction grid for optical train index. See GetCorrectionData for details.
+func (f *File) GetInverseCorrectionData(index int) (*machineconfig.CorrectionData, *api.Error) {
+	cb, err := f.GetClearbox(index)
+	if err != nil {
+		return nil, err
+	}
+	flat := models.FlatFromNestedGrid(cb.InverseCorrectionData)
+	return &machineconfig.CorrectionData{Data: flat, Shape: [3]int{257, 257, 2}}, nil
 }
 
 func (f *File) Save(path string) *api.Error {

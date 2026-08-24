@@ -29,6 +29,7 @@ from machine_config.models import (
     Scanner,
     ScannerCard,
     SynchronousSensor,
+    nested_to_array,
 )
 
 from . import layout
@@ -259,18 +260,6 @@ class Hdf5WriterV1_0:
         grp.attrs["Sample_Period"]      = self._f(sc.sample_period)
         grp.attrs["Sample_Period_unit"] = sc.sample_period_unit or "μs"
 
-    @staticmethod
-    def _correction_list_to_array(data: Optional[list], shape: tuple = (257, 257, 2)) -> np.ndarray:
-        """Convert nested Python list (None = NaN) back to float64 ndarray."""
-        if data is None:
-            return np.zeros(shape, dtype=np.float64)
-        obj = np.array(data, dtype=object)
-        result = np.empty(obj.shape, dtype=np.float64)
-        result.flat[:] = [
-            float("nan") if v is None else float(v) for v in obj.flat
-        ]
-        return result
-
     def _write_clearbox(self, grp: h5py.Group, cb: ClearBox) -> None:
         grp.attrs["Ip_Address"]           = cb.ip_address
         grp.attrs["Serial_Number"]        = self._s(cb.serial_number)
@@ -292,7 +281,7 @@ class Hdf5WriterV1_0:
         grp.attrs["Inverse_Grid_Domain_Shape"]     = self._s(cb.inverse_grid_domain_shape)
         grp.create_dataset(
             "Correction_Data",
-            data=self._correction_list_to_array(cb.correction_data),
+            data=nested_to_array(cb.correction_data),
         )
         cds = grp["Correction_Data"]
         cds.attrs["dimensions"] = "H,W,D"
@@ -300,7 +289,7 @@ class Hdf5WriterV1_0:
         cds.attrs["shape"]      = f"{cds.shape[0]}x{cds.shape[1]}x{cds.shape[2]}"
         grp.create_dataset(
             "Inverse_Correction_Data",
-            data=self._correction_list_to_array(cb.inverse_correction_data),
+            data=nested_to_array(cb.inverse_correction_data),
         )
         ids = grp["Inverse_Correction_Data"]
         ids.attrs["dimensions"] = "H,W,D"

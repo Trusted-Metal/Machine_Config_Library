@@ -209,6 +209,80 @@ fn combined_fixture_has_opcua_and_synchronous_sensors_through_facade() {
     );
 }
 
+/// `CorrectionData` derives `PartialEq`, but IEEE 754 `NaN != NaN`, so a
+/// direct `assert_eq!` on real grid data (which always contains NaN cells)
+/// fails even when the two buffers are bit-for-bit identical. Compare shape
+/// plus element-wise, treating "both NaN" as equal.
+fn assert_correction_data_eq(
+    a: &machine_config::models::CorrectionData,
+    b: &machine_config::models::CorrectionData,
+) {
+    assert_eq!(a.shape, b.shape);
+    assert_eq!(a.data.len(), b.data.len());
+    for (x, y) in a.data.iter().zip(b.data.iter()) {
+        if x.is_nan() || y.is_nan() {
+            assert!(x.is_nan() && y.is_nan(), "NaN mismatch: {x} vs {y}");
+        } else {
+            assert_eq!(x, y);
+        }
+    }
+}
+
+#[test]
+fn get_correction_data_matches_reader() {
+    let file = open_machine_config(REFERENCE).unwrap();
+    let reader = MachineConfigReader::open(REFERENCE).unwrap();
+    assert_correction_data_eq(
+        &file.get_correction_data(0).unwrap(),
+        &reader.get_correction_data(0).unwrap(),
+    );
+    assert_correction_data_eq(
+        &file.get_inverse_correction_data(0).unwrap(),
+        &reader.get_inverse_correction_data(0).unwrap(),
+    );
+}
+
+#[test]
+fn get_correction_data_shape_and_nan_present_through_facade() {
+    let file = open_machine_config(REFERENCE).unwrap();
+    let cd = file.get_correction_data(0).unwrap();
+    assert_eq!(cd.shape, [257, 257, 2]);
+    assert!(cd.data.iter().any(|v| v.is_nan()));
+}
+
+#[test]
+fn get_correction_data_missing_clearbox_is_not_present() {
+    // Every stock fixture's trains have a ClearBox, so build one without: take
+    // the reference config, strip train 0's ClearBox, re-write to a temp file.
+    let mut config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+    config.optical_trains[0].optional_components.clearbox = None;
+    let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+    MachineConfigWriter::new(&config).write(tmp.path()).unwrap();
+
+    let file = open_machine_config(tmp.path()).unwrap();
+    assert!(file.get_clearbox(0).unwrap().is_none());
+    assert!(matches!(
+        file.get_correction_data(0).unwrap_err(),
+        CapabilityError::NotPresent(_)
+    ));
+    assert!(matches!(
+        file.get_inverse_correction_data(0).unwrap_err(),
+        CapabilityError::NotPresent(_)
+    ));
+}
+
+#[test]
+fn get_correction_data_works_on_create_based_instance_without_touching_disk() {
+    // The specific case that rules out delegate-to-Reader-by-reopening: a
+    // create()-d facade has no path at all, so this must convert the
+    // already-loaded in-memory model, not re-read from anywhere.
+    let file = create_machine_config("1.0").unwrap();
+    let cd = file.get_correction_data(0).unwrap();
+    assert_eq!(cd.shape, [257, 257, 2]);
+    let icd = file.get_inverse_correction_data(0).unwrap();
+    assert_eq!(icd.shape, [257, 257, 2]);
+}
+
 #[test]
 fn create_set_meta_save_reopen() {
     let mut file = create_machine_config("1.0").unwrap();

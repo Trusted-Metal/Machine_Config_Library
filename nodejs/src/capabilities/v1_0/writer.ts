@@ -15,6 +15,7 @@ import type {
   EquationConstant,
   CalibrationPoint,
 } from "../../models.js";
+import { nestedToFlat } from "../../models.js";
 import * as layout from "./layout.js";
 
 // ---------------------------------------------------------------------------
@@ -130,40 +131,6 @@ function writeExtra(grp: h5wasm.Group, extra: Record<string, unknown>): void {
 // ---------------------------------------------------------------------------
 // Correction data helpers
 // ---------------------------------------------------------------------------
-
-const CORRECTION_SHAPE: [number, number, number] = [257, 257, 2];
-
-/**
- * Convert a nested 3-D array (null cells → NaN) to a flat Float64Array.
- * Returns a zero-filled array of default shape when data is absent —
- * identical behaviour to the Python and Rust writers.
- */
-function nestedToFlat(
-  data: Array<Array<Array<number | null>>> | null | undefined,
-): { flat: Float64Array; shape: [number, number, number] } {
-  if (!data || data.length === 0) {
-    const size = CORRECTION_SHAPE[0] * CORRECTION_SHAPE[1] * CORRECTION_SHAPE[2];
-    return { flat: new Float64Array(size), shape: CORRECTION_SHAPE };
-  }
-  const d0 = data.length;
-  const d1 = data[0]?.length ?? 0;
-  const d2 = data[0]?.[0]?.length ?? 0;
-  if (d1 === 0 || d2 === 0) {
-    const size = CORRECTION_SHAPE[0] * CORRECTION_SHAPE[1] * CORRECTION_SHAPE[2];
-    return { flat: new Float64Array(size), shape: CORRECTION_SHAPE };
-  }
-  const flat = new Float64Array(d0 * d1 * d2);
-  let offset = 0;
-  for (let i = 0; i < d0; i++) {
-    for (let j = 0; j < d1; j++) {
-      for (let k = 0; k < d2; k++) {
-        const v = data[i][j][k];
-        flat[offset++] = v == null ? NaN : v;
-      }
-    }
-  }
-  return { flat, shape: [d0, d1, d2] };
-}
 
 /** Write a named Float64 3-D dataset with standard ClearBox attributes. */
 function writeCorrectionDataset(

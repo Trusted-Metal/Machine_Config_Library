@@ -154,6 +154,17 @@ export interface SynchronousSensor {
   calibration_points: CalibrationPoint[];
 }
 
+/**
+ * A raw ClearBox correction grid — flat, row-major, NaN preserved (not
+ * JSON-safe). Lives at the model layer (not a version-specific adapter)
+ * since the shape is part of the stable model, not an on-disk detail — the
+ * same reasoning already applied to the null<->NaN conversion helpers below.
+ */
+export interface CorrectionData {
+  data: Float64Array;
+  shape: [number, number, number];
+}
+
 export interface ClearBox {
   ip_address: string;
   serial_number: string | null;
@@ -191,6 +202,75 @@ export interface ClearBox {
 
 export interface OptionalComponents {
   clearbox: ClearBox | null;
+}
+
+// ---------------------------------------------------------------------------
+// Correction grid conversion helpers
+//
+// Live at the model layer rather than in a version-specific adapter: the
+// NaN<->null convention is part of ClearBox's own field shape
+// (`Array<Array<Array<number | null>>>`), not an on-disk detail of any
+// particular File_Version, so every adapter can share it.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_CORRECTION_SHAPE: [number, number, number] = [257, 257, 2];
+
+/**
+ * Convert a flat Float64Array (from an HDF5 dataset) into a nested 3-D
+ * JavaScript array, mapping IEEE-754 NaN -> null to produce valid JSON.
+ */
+export function float64ToNested3D(
+  data: Float64Array,
+  shape: number[],
+): Array<Array<Array<number | null>>> {
+  const [d0, d1, d2] = shape;
+  const out: Array<Array<Array<number | null>>> = [];
+  let offset = 0;
+  for (let i = 0; i < d0; i++) {
+    const row: Array<Array<number | null>> = [];
+    for (let j = 0; j < d1; j++) {
+      const cell: Array<number | null> = [];
+      for (let k = 0; k < d2; k++) {
+        const v = data[offset++];
+        cell.push(isNaN(v) ? null : v);
+      }
+      row.push(cell);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/**
+ * Convert a nested 3-D array (null cells -> NaN) to a flat Float64Array.
+ * Returns a zero-filled array of default shape when data is absent —
+ * identical behaviour to the Python and Rust writers.
+ */
+export function nestedToFlat(
+  data: Array<Array<Array<number | null>>> | null | undefined,
+): { flat: Float64Array; shape: [number, number, number] } {
+  if (!data || data.length === 0) {
+    const size = DEFAULT_CORRECTION_SHAPE[0] * DEFAULT_CORRECTION_SHAPE[1] * DEFAULT_CORRECTION_SHAPE[2];
+    return { flat: new Float64Array(size), shape: DEFAULT_CORRECTION_SHAPE };
+  }
+  const d0 = data.length;
+  const d1 = data[0]?.length ?? 0;
+  const d2 = data[0]?.[0]?.length ?? 0;
+  if (d1 === 0 || d2 === 0) {
+    const size = DEFAULT_CORRECTION_SHAPE[0] * DEFAULT_CORRECTION_SHAPE[1] * DEFAULT_CORRECTION_SHAPE[2];
+    return { flat: new Float64Array(size), shape: DEFAULT_CORRECTION_SHAPE };
+  }
+  const flat = new Float64Array(d0 * d1 * d2);
+  let offset = 0;
+  for (let i = 0; i < d0; i++) {
+    for (let j = 0; j < d1; j++) {
+      for (let k = 0; k < d2; k++) {
+        const v = data[i][j][k];
+        flat[offset++] = v == null ? NaN : v;
+      }
+    }
+  }
+  return { flat, shape: [d0, d1, d2] };
 }
 
 export interface ScanFieldCorrectionFile {

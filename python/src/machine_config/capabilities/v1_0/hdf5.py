@@ -34,6 +34,7 @@ from machine_config.models import (
     Scanner,
     ScannerCard,
     SynchronousSensor,
+    nan_array_to_nested,
 )
 from machine_config.capabilities.file_version import MissingRequiredGroup
 from machine_config.schema import SCHEMA_VERSION
@@ -502,17 +503,10 @@ class Hdf5AdapterV1_0:
             sample_period_unit=self._read_str_locked(a, "Sample_Period_unit", "μs"),
         )
 
-    @staticmethod
-    def _nan_array_to_list(arr: np.ndarray) -> list:
-        """Convert float64 ndarray to nested Python list, mapping NaN → None."""
-        obj = arr.astype(object)
-        obj[np.isnan(arr)] = None
-        return obj.tolist()
-
     def _parse_clearbox(self, grp: h5py.Group) -> ClearBox:
         a = grp.attrs
-        corr_data = self._nan_array_to_list(grp["Correction_Data"][:])
-        inv_data  = self._nan_array_to_list(grp["Inverse_Correction_Data"][:])
+        corr_data = nan_array_to_nested(grp["Correction_Data"][:])
+        inv_data  = nan_array_to_nested(grp["Inverse_Correction_Data"][:])
         # Synchronous_Sensors: absent entirely (e.g. today's plain
         # reference_config.h5) and present-but-empty are the same state — an
         # empty dict, not a separate "absent" marker.
