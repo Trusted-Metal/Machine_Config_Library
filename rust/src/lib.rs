@@ -15,3 +15,13 @@ pub use error::MachineConfigError;
 pub use models::*;
 pub use reader::MachineConfigReader;
 pub use writer::MachineConfigWriter;
+
+// Stable model facade (open/create a MachineConfigFile session, get/set with
+// SetMode). Curated, not `pub use capabilities::*` — a wildcard would also
+// re-export `capabilities`'s child modules (`errors`, `generated`, `merge`,
+// `result`, `v1_0`) as new crate-root paths, and `capabilities::result::Result`
+// is a different, two-parameter type from this crate's own `error::Result`.
+pub use capabilities::{
+    create_machine_config, open_machine_config, supported_file_versions, CapabilityError,
+    MachineConfigFileV1_0, SetMode,
+};

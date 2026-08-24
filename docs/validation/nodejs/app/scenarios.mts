@@ -15,13 +15,18 @@ import { existsSync, globSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  MachineConfigFileV1_0,
   MachineConfigReader,
   MachineConfigWriter,
   MockConfigBuilder,
+  SetMode,
   UnsupportedFileVersion,
+  createMachineConfig,
   openMachineConfig,
+  supportedFileVersions,
 } from 'machine-config-library';
 import type {
+  CapabilityError,
   ClearBox,
   Collimator,
   LightSource,
@@ -389,6 +394,77 @@ export async function runS09(_fixturesDir: string, _realDir: string): Promise<[b
   assertType<typeof MachineConfigWriter>(MachineConfigWriter);
 
   return [true, 'all public types importable from machine-config-library top-level'];
+}
+
+// S-10: Public facade export surface
+// ID:          S-10
+// Title:       Stable capability facade importable from the package root, not
+//              a deep/internal import path
+// Category:    happy-path
+// Layer:       public API / packaging
+// Precondition: fixturesDir/reference_config.h5
+// Action:      Import openMachineConfig, createMachineConfig,
+//              supportedFileVersions, MachineConfigFileV1_0, SetMode, and the
+//              CapabilityError type from 'machine-config-library' (package
+//              root) — all six already imported that way at the top of this
+//              file. Open the reference fixture, call getScanner; create() a
+//              session, call setModel; confirm a missing-file open returns a
+//              real CapabilityError.
+// Expected:    All six names resolve from the package root. Both facade calls
+//              succeed. The missing-file open returns an Err(CapabilityError).
+// Rationale:   See VALIDATION_PLAN.md §8 S-10 and CORRECTION_DATA_FACADE_PLAN.md
+//              — Rust's crate root previously omitted its facade entirely
+//              despite its own "no sub-module path" re-export policy; nothing
+//              checked for it until an integrating consumer found the gap.
+//              Node.js already re-exports correctly (src/index.ts) — this
+//              scenario exists so that stays true, in every language.
+export async function runS10(fixturesDir: string, _realDir: string): Promise<[boolean, string]> {
+  if (!supportedFileVersions().includes('1.0')) {
+    return [false, "supportedFileVersions() does not list '1.0'"];
+  }
+
+  const fixture = join(fixturesDir, 'reference_config.h5');
+  const opened = await openMachineConfig(fixture);
+  if (!opened.ok) {
+    return [false, `openMachineConfig failed: ${opened.error.message}`];
+  }
+  if (!(opened.value instanceof MachineConfigFileV1_0)) {
+    return [false, `unexpected facade type: ${opened.value?.constructor?.name}`];
+  }
+  const file = opened.value;
+  const train = file.opticalTrain(0);
+  if (!train.ok) {
+    return [false, `opticalTrain(0) failed: ${train.error.message}`];
+  }
+  train.value.getScanner();
+  file.close();
+
+  const created = createMachineConfig('1.0');
+  if (!created.ok) {
+    return [false, `createMachineConfig failed: ${created.error.message}`];
+  }
+  const metaHandle = created.value.meta();
+  const setResult = metaHandle.setModel(metaHandle.getModel(), SetMode.Merge);
+  if (!setResult.ok) {
+    return [false, `setModel failed: ${setResult.error.message}`];
+  }
+  created.value.close();
+
+  const missing = await openMachineConfig('/nonexistent/path/does_not_exist.h5');
+  if (missing.ok) {
+    return [false, 'opening a missing file unexpectedly succeeded'];
+  }
+  const missingError: CapabilityError = missing.error;
+  if (!missingError.code) {
+    return [false, 'missing-file error did not carry a CapabilityError code'];
+  }
+
+  return [
+    true,
+    'facade (openMachineConfig, createMachineConfig, supportedFileVersions, ' +
+      'MachineConfigFileV1_0, SetMode, CapabilityError) reachable from the package ' +
+      'root; no deep/internal import path needed',
+  ];
 }
 
 // AV-01: Reader rejects unknown File_Version with typed error

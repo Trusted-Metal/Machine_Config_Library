@@ -24,6 +24,7 @@ fn main() -> ExitCode {
         ("S-07", scenarios::run_s07),
         ("S-08", scenarios::run_s08),
         ("S-09", scenarios::run_s09),
+        ("S-10", scenarios::run_s10),
         ("AV-01", scenarios::run_av01),
         ("AV-02", scenarios::run_av02),
         ("AV-03", scenarios::run_av03),

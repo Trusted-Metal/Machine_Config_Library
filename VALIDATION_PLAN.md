@@ -170,7 +170,7 @@ fails. Do not swallow exceptions and print PASS.
 1. Accept two command-line arguments: <fixtures_dir> <real_dir>
    fixtures_dir = absolute path to repo fixtures/ directory
    real_dir     = absolute path to repo "Reference Materials/" directory
-2. Define a list of scenario functions in run order (S-01..S-09, AV-01..AV-08)
+2. Define a list of scenario functions in run order (S-01..S-10, AV-01..AV-08)
 3. For each scenario:
    a. Call scenario function with (fixtures_dir, real_dir)
    b. Print "[PASS] <ID>: <title>" or "[FAIL] <ID>: <title>\n       <detail>"
@@ -778,6 +778,143 @@ Notes per language:
 
 ---
 
+### S-10: Public facade export surface
+
+**Status: implemented and passing in all five languages' committed validation apps**
+(`docs/validation/<lang>/app/`), run against the repo's source directly rather than a
+built wheel/tarball/module install — see "Execution note" below for why, and what
+that trade-off means for this scenario's own Precondition line.
+
+- Rust: `docs/validation/rust/app/src/scenarios.rs::run_s10` — 20/20 scenarios pass
+  (`docs/validation/rust/app`, built via `cargo build --release`).
+- Python: `docs/validation/python/app/scenarios.py::run_s10` — 23/23 pass (run
+  directly against the editable-installed repo source, no wheel build).
+- Node.js: `docs/validation/nodejs/app/scenarios.mts::runS10` — 23/23 pass (app's
+  `node_modules/machine-config-library` is a symlink to `nodejs/`, rebuilt via
+  `npm run build` before running — no tarball).
+- Go: `docs/validation/go/app/scenarios/scenarios.go::RunS10FacadeExportSurface` —
+  20/20 pass (the app counts it a pass since the facade is fully reachable and
+  usable via its documented `machine-config-go/capabilities` path). Per this
+  scenario's own guidance below, record the *root-level-parity* question as
+  **N/A (documented exception)**, not PASS or FAIL — the scenario function
+  passing confirms the facade works; it doesn't by itself mean Go matches the
+  other four languages' root-level reachability, which is intentionally not
+  the goal for Go.
+- C++: `docs/validation/cpp/app/src/scenarios/scenarios.cpp::s10::run` — 20/20 pass.
+
+**Execution note (rigor level chosen):** run as a lightweight in-repo check, not the
+full external-package-install process S-01–S-09 originally called for (building an
+actual wheel/tarball/crate-path-dep/module and testing from a project outside the
+repo). All five validation apps already depend on the library via a local path/file
+reference (Rust: `path = "../../../../rust"`; Go: `replace machine-config-go =>
+../../../../go`; Node: `"file:../../../../nodejs"` resolved as a symlink; C++:
+`add_subdirectory(...cpp...)`) rather than an installed artifact, so this was already
+effectively in-repo before S-10 existed — the "external package" framing in S-01–S-09's
+shared Precondition line was aspirational for the facade-specific check this scenario
+adds, not a rigor level actually enforced for it. A full packaged-artifact run remains
+possible later using the same apps; nothing here forecloses it.
+
+**C++ gap found and fixed while implementing this scenario:** C++ had no
+`supportedFileVersions()` at all — not a re-export gap like Rust's, the function
+simply didn't exist (checked `cpp/include/machine_config/capabilities/file.hpp`
+directly; only `openMachineConfig`/`createMachineConfig` were declared). Added
+`supportedFileVersions()` there (returns `{"1.0"}`, mirroring the other four
+languages) before S-10 could even be written for C++, plus a new unit test
+(`CapabilitySupportedFileVersionsListsV1_0` in `cpp/tests/test_capabilities.cpp`).
+Confirmed via the full `machine_config_tests` suite: 579 assertions in 105 test
+cases (up from 578/104), all passing.
+
+```
+ID:          S-10
+Title:       Verify the stable capability facade is importable from the library
+             surface, in parity across all five languages
+Category:    happy-path
+Layer:       public API / packaging
+Precondition: Library installed from artifact (wheel / tarball / module), not from
+             surface; this scenario covers the separate stable facade (session
+             open/create, get/set with SetMode, CapabilityError) added later, which
+             needs its own explicit check — see Rationale.
+Action:      In the standalone app, import the facade's open/create entry points,
+             its session type, its error type, and SetMode directly from the
+             library's public import path (see Notes per language for the exact
+             names). Open a fixture through the facade and call at least one
+             get*/set* method. Do NOT import from any version-specific submodule
+             path (e.g. a `capabilities::v1_0` / `capabilities/v1_0` / `v1_0::hdf5`
+             path) to do this — if the facade is only reachable that way, the
+             surface is incomplete.
+Expected:    All imports resolve without error, from the same top-level import path
+             already used for S-09's model types (one language's documented
+             exception — Go — aside; see Notes per language).
+             IDE type-checking reports no unknown type errors.
+             grep across the app for a version-specific submodule path
+             (`capabilities::v1_0::`, `capabilities/v1_0/`, `capabilities.v1_0.`, or
+             that language's equivalent) used to reach the facade itself returns
+             zero matches — the version-specific adapter internals must stay
+             unreachable/unnecessary from application code, exactly as S-09
+             requires for model types.
+Rationale:   This scenario exists because the gap it checks for actually happened:
+             Rust's crate root (`lib.rs`) re-exported every other public module
+             (builder, error, models, reader, writer) but omitted `capabilities`
+             entirely — contradicting `lib.rs`'s own stated policy that consumers
+             must never need a sub-module path for a public type. Nothing in S-09
+             (scoped to model types only) or anywhere else in this plan would have
+             caught it; it surfaced only when an application tried to integrate the
+             facade and found it unreachable from the crate root. S-10 exists so
+             this class of drift — one language's facade silently falling behind
+             the others' export surface — has an actual checklist item, the same
+             role S-09 already plays for model types.
+Notes per language:
+  Python  — `open_machine_config`, `create_machine_config`, `supported_file_versions`,
+            `CapabilityError`, `MachineConfigFileV1_0`, `SetMode`, plus
+            `MissingRequiredGroup` / `SessionClosedError` / `UnsupportedFileVersion`,
+            all importable from `machine_config` (top-level) — already correct,
+            re-exported in `machine_config/__init__.py`.
+  Node.js — `openMachineConfig`, `createMachineConfig`, `supportedFileVersions`,
+            `MachineConfigFileV1_0`, `SetMode`, and the `CapabilityError`/
+            `MachineConfigFile` types, all importable from the package root —
+            already correct, re-exported in `src/index.ts`.
+  Rust    — `open_machine_config`, `create_machine_config`, `supported_file_versions`,
+            `CapabilityError`, `MachineConfigFileV1_0`, `SetMode` re-exported from
+            the crate root (`machine_config::open_machine_config`, not
+            `machine_config::capabilities::open_machine_config`) — fixed; see
+            CORRECTION_DATA_FACADE_PLAN.md's discussion for the fix and why it's a
+            curated re-export list (`pub use capabilities::{...}`), not
+            `pub use capabilities::*` (a wildcard would also re-export
+            `capabilities`'s child modules — `errors`, `generated`, `merge`,
+            `result`, `v1_0` — as new crate-root paths, and `capabilities::Result`
+            is a different, two-parameter type from this crate's own,
+            already-in-use `error::Result`).
+  Go      — **documented exception, not a gap:** the facade
+            (`OpenMachineConfig`/`CreateMachineConfig`/`File`/`Error`/`SetMode`) is
+            reachable only via `machine-config-go/capabilities` — a second import,
+            not the module root. This is deliberately accepted, unlike Rust's case,
+            for two reasons: (1) `capabilities` is a normal, publicly exported Go
+            package — not an `internal/` path — so nothing about this requires
+            reaching into forbidden internals; Go's own compiler already enforces
+            that boundary, which is the thing S-09/S-10 exist to catch in languages
+            that lack it. (2) Go's model-type re-exports at the root
+            (`go/models.go`) are free, zero-maintenance type aliases
+            (`type MachineConfig = internal/models.MachineConfig`); Go has no
+            equivalent zero-cost mechanism for re-exporting *functions* — doing the
+            same for the facade would mean hand-written forwarding wrappers at the
+            root (`func OpenMachineConfig(path string) (*capabilities.File,
+            *capabilities.Error) { return capabilities.OpenMachineConfig(path) }`,
+            one per facade function) that must be kept in lockstep with
+            `capabilities`'s real signatures by hand — a second, ongoing place for
+            exactly the kind of silent drift this scenario exists to prevent, not a
+            fix for it. Record this scenario as **N/A (documented exception)** for
+            Go, not FAIL — but if a future contributor ever adds root-level
+            forwarding wrappers for convenience, re-litigate this note rather than
+            let both the wrapper and `capabilities` drift independently.
+  C++     — `openMachineConfig`, `createMachineConfig`, `MachineConfigFileV1_0`,
+            `CapabilityError`, `SetMode` all reachable via
+            `#include <machine_config/machine_config.hpp>` — already correct;
+            `machine_config.hpp`'s own header comment documents the facade as part
+            of "the default surface" alongside models/reader/writer/builder.
+```
+
+---
+
 ## 9. Per-Language Execution Plan
 
 Work through each language completely (all scenarios, app, results documented)
@@ -900,7 +1037,7 @@ b: MockConfigBuilder = MockConfigBuilder()
 **Fixtures path:** pass absolute paths to `fixtures/` and `Reference Materials/`
 from the repo as command-line arguments — the app does not hardcode paths.
 
-**Scenarios to execute:** S-01 through S-09, AV-01 through AV-11
+**Scenarios to execute:** S-01 through S-10, AV-01 through AV-11
 
 **AV-09–AV-11 status (Python):** ✅ Complete — implemented in `python/tests/test_adapter_migration.py`
 as `MockV1_1Layout`, `MockV1_1Reader`, `MockV1_1Writer` (8 tests, all passing).
@@ -980,7 +1117,7 @@ Run `tsc --noEmit` to verify zero type errors. Record full output in `results.md
 **Note on builder:** Node.js has `MockConfigBuilder` in `nodejs/src/builder.ts`.
 S-06 is fully supported.
 
-**Scenarios to execute:** S-01 through S-09, AV-01 through AV-11
+**Scenarios to execute:** S-01 through S-10, AV-01 through AV-11
 
 **AV-09–AV-11 (Node.js):** Implement `MockV1_1Layout`, `MockV1_1Reader`, `MockV1_1Writer`
 in `nodejs/tests/` following the same 10 HDF5 changes in `docs/migrations/mock_v1_0_to_v1_1.md`.
@@ -1077,7 +1214,7 @@ S-06 is fully supported.
 - Missing group → `MachineConfigError::Io` or `MachineConfigError::Parse`
 - Record the exact Rust error variant in `results.md`
 
-**Scenarios to execute:** S-01 through S-09, AV-01 through AV-11
+**Scenarios to execute:** S-01 through S-10, AV-01 through AV-11
 
 **AV-09–AV-11 (Rust):** Implement the mock v1.1 adapter as plain modules under
 `rust/tests/` — e.g. `rust/tests/mock_v1_1.rs` (layout constants + `MockV1_1Reader`/
@@ -1316,7 +1453,7 @@ into.**
   `PeekFileVersion` reads it back verbatim after `TrimSpace`; should pass without new
   code, same as Rust's AV-08.
 
-**Scenarios to execute:** S-01 through S-09, AV-01 through AV-08 via the standalone
+**Scenarios to execute:** S-01 through S-10, AV-01 through AV-08 via the standalone
 app; AV-09 through AV-11 in `go/`'s own test tree (see below) — **not** the app, for
 the same structural reason as Rust.
 
@@ -1503,7 +1640,7 @@ it compiles cleanly. If any type requires an additional include, that is a publi
 API gap. Record in `results.md` under S-09. This check is run twice: once from
 source, and once from the static tarball (§8 Step 4).
 
-**Scenarios to execute:** S-01 through S-09, AV-01 through AV-11
+**Scenarios to execute:** S-01 through S-10, AV-01 through AV-11
 
 **AV-09–AV-11 (C++):** Implement the mock v1.1 adapter as a test-only header
 (`tests/mock_v1_1.hpp`) plus a `test_adapter_migration.cpp` added to `tests/CMakeLists.txt`'s

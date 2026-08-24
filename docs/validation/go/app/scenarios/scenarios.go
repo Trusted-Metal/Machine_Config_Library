@@ -473,6 +473,84 @@ func RunS09TypeExports(_, _ string) (bool, string) {
 	return true, "all public types resolve and are usable from the module root"
 }
 
+// S-10: Public facade export surface
+//
+// ID:        S-10
+// Title:     Stable capability facade importable from its documented path
+// Action:    Reference OpenMachineConfig, CreateMachineConfig,
+//
+//	SupportedFileVersions, File, Error, SetMode/Merge via
+//	"machine-config-go/capabilities" — deliberately NOT the module
+//	root ("machine-config-go", imported above as mc), and NOT any
+//	internal path (machine-config-go/capabilities/v1_0/...). Open the
+//	reference fixture, call GetScanner; Create() a session, call
+//	SetMeta; confirm a missing-file open returns a real *Error.
+//
+// Expected:  All names resolve from "machine-config-go/capabilities". Both
+//
+//	facade calls succeed. The missing-file open returns a non-nil *Error.
+//
+// Rationale: See VALIDATION_PLAN.md §8 S-10. Go is the one language where
+//
+//	this is a documented exception rather than a bug: `capabilities` is
+//	a normal, publicly exported Go package (not `internal/`), so this
+//	is not "reaching into an internal path" the way Rust's crate-root
+//	omission was — that omission is what this scenario exists to catch
+//	in the four languages where a top-level re-export is the norm. Go's
+//	model types alias for free (mc.MachineConfig = internal/models...);
+//	there is no equivalent zero-cost mechanism for re-exporting
+//	functions, so promoting the facade to the module root would mean
+//	hand-written forwarding wrappers — a second place for exactly the
+//	kind of drift this scenario exists to prevent, not a fix for it.
+//	Recorded as PASS here because the facade IS fully reachable and
+//	usable via its own documented, non-internal package path; see
+//	results.md for the explicit "N/A for root-level parity" note.
+func RunS10FacadeExportSurface(fixturesDir, _ string) (bool, string) {
+	versions := capabilities.SupportedFileVersions()
+	found := false
+	for _, v := range versions {
+		if v == "1.0" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false, "SupportedFileVersions() does not list \"1.0\""
+	}
+
+	path := filepath.Join(fixturesDir, "reference_config.h5")
+	file, err := capabilities.OpenMachineConfig(path)
+	if err != nil {
+		return false, fmt.Sprintf("OpenMachineConfig failed: %v", err)
+	}
+	if _, err := file.GetScanner(0); err != nil {
+		return false, fmt.Sprintf("GetScanner(0) failed: %v", err)
+	}
+	file.Close()
+
+	created, err := capabilities.CreateMachineConfig("1.0")
+	if err != nil {
+		return false, fmt.Sprintf("CreateMachineConfig failed: %v", err)
+	}
+	meta, err := created.GetMeta()
+	if err != nil {
+		return false, fmt.Sprintf("GetMeta failed: %v", err)
+	}
+	if err := created.SetMeta(meta, capabilities.Merge); err != nil {
+		return false, fmt.Sprintf("SetMeta failed: %v", err)
+	}
+	created.Close()
+
+	_, missingErr := capabilities.OpenMachineConfig("/nonexistent/path/does_not_exist.h5")
+	if missingErr == nil || missingErr.Code == "" {
+		return false, "opening a missing file did not return a real *capabilities.Error"
+	}
+
+	return true, "facade (OpenMachineConfig, CreateMachineConfig, SupportedFileVersions, " +
+		"File, Error, SetMode/Merge) reachable via machine-config-go/capabilities " +
+		"(documented exception to root-level parity — see VALIDATION_PLAN.md §8 S-10)"
+}
+
 // AV-01: Reader rejects unknown File_Version with typed error
 func RunAv01UnknownVersion(fixturesDir, _ string) (bool, string) {
 	fixture := avFixture(fixturesDir, "v2_0_unknown.h5")

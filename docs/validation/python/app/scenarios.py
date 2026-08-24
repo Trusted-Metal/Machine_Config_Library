@@ -463,6 +463,81 @@ def run_s09(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     return True, "all public types importable from machine_config top-level"
 
 
+# S-10: Public facade export surface
+# ID:          S-10
+# Title:       Stable capability facade importable from the top-level
+#              `machine_config` package, not just `machine_config.capabilities`
+# Category:    happy-path
+# Layer:       public API / packaging
+# Precondition: fixtures_dir/reference_config.h5
+# Action:      Import open_machine_config, create_machine_config,
+#              supported_file_versions, CapabilityError, MachineConfigFileV1_0,
+#              SetMode from `machine_config` (top-level) — deliberately NOT
+#              `machine_config.capabilities`, which is what this file's own
+#              module-level imports use (see the top-of-file import block) and
+#              which still works, but is not what this scenario is checking.
+#              Open the reference fixture, call get_scanner; create() a
+#              session, call set_model; confirm a missing-file open returns a
+#              real CapabilityError.
+# Expected:    All six names resolve from machine_config's top level. Both
+#              facade calls succeed. The missing-file open returns a
+#              CapabilityError-typed error.
+# Rationale:   See VALIDATION_PLAN.md §8 S-10 and CORRECTION_DATA_FACADE_PLAN.md
+#              — Rust's crate root previously omitted its facade entirely
+#              despite its own "no sub-module path" re-export policy; nothing
+#              checked for it until an integrating consumer found the gap.
+#              Python already re-exports correctly (machine_config/__init__.py)
+#              — this scenario exists so that stays true, in every language.
+def run_s10(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
+    # Deliberately import from the top-level `machine_config` package, not
+    # `machine_config.capabilities` (used at module scope above for other
+    # scenarios) or any version-specific submodule.
+    from machine_config import (
+        CapabilityError,
+        MachineConfigFileV1_0,
+        SetMode,
+        create_machine_config,
+        open_machine_config,
+        supported_file_versions,
+    )
+
+    if "1.0" not in supported_file_versions():
+        return False, "supported_file_versions() does not list '1.0'"
+
+    fixture = str(Path(fixtures_dir) / "reference_config.h5")
+    opened = open_machine_config(fixture)
+    if not opened.ok:
+        return False, f"open_machine_config failed: {opened.error}"
+    if not isinstance(opened.value, MachineConfigFileV1_0):
+        return False, f"unexpected facade type: {type(opened.value)!r}"
+    file = opened.value
+    train = file.optical_train(0)
+    if not train.ok:
+        return False, f"optical_train(0) failed: {train.error}"
+    train.value.get_scanner()
+    file.close()
+
+    created = create_machine_config("1.0")
+    if not created.ok:
+        return False, f"create_machine_config failed: {created.error}"
+    meta_handle = created.value.meta()
+    set_result = meta_handle.set_model(meta_handle.get_model(), SetMode.MERGE)
+    if not set_result.ok:
+        return False, f"set_model failed: {set_result.error}"
+    created.value.close()
+
+    missing = open_machine_config("/nonexistent/path/does_not_exist.h5")
+    if missing.ok or not isinstance(missing.error, CapabilityError):
+        return False, "opening a missing file did not return a CapabilityError"
+
+    return True, (
+        "facade (open_machine_config, create_machine_config, "
+        "supported_file_versions, CapabilityError, MachineConfigFileV1_0, "
+        "SetMode) reachable from machine_config top-level; no "
+        "machine_config.capabilities submodule import needed"
+    )
+
+
 # AV-01: Unknown file version string
 # ID:          AV-01
 # Title:       Reader rejects unknown File_Version with typed error

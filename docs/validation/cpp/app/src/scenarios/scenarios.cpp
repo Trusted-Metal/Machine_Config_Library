@@ -486,6 +486,86 @@ scenarios::Result run(const std::filesystem::path&, const std::filesystem::path&
 
 } // namespace s09
 
+// S-10: Public facade export surface
+//
+// ID:          S-10
+// Title:       Stable capability facade importable from the umbrella header
+//              alone, not a narrower internal include
+// Category:    happy-path
+// Layer:       public API / packaging
+// Precondition: fixtures_dir/reference_config.h5
+// Action:      Reference openMachineConfig, createMachineConfig,
+//              supportedFileVersions, MachineConfigFileV1_0, SetMode,
+//              CapabilityError via `using namespace machine_config` /
+//              `machine_config::capabilities` — this file already includes
+//              only `machine_config/machine_config.hpp` (see top of file),
+//              not `machine_config/capabilities.hpp` directly nor any
+//              `capabilities/v1_0/...` path. Dispatch-open the reference
+//              fixture, call opticalTrainCount(); create() a session, call
+//              setMeta; confirm a missing-file open returns a real
+//              CapabilityError.
+// Expected:    All names resolve. Both facade calls succeed. The missing-file
+//              open returns Err with a non-empty error code.
+// Rationale:   See VALIDATION_PLAN.md §8 S-10 and CORRECTION_DATA_FACADE_PLAN.md
+//              — Rust's crate root previously omitted its facade entirely
+//              despite its own "no sub-module path" re-export policy; nothing
+//              checked for it until an integrating consumer found the gap.
+//              Also caught while writing this scenario: C++ had no
+//              supportedFileVersions() at all (not a re-export gap — the
+//              function didn't exist) — added to
+//              machine_config/capabilities/file.hpp to match the other four
+//              languages before this scenario could even be written.
+namespace s10 {
+
+using namespace machine_config;
+using namespace machine_config::capabilities;
+
+scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path&) {
+    auto versions = supportedFileVersions();
+    if (std::find(versions.begin(), versions.end(), std::string("1.0")) == versions.end()) {
+        return {false, "supportedFileVersions() does not list \"1.0\""};
+    }
+
+    auto path = fixturesDir / "reference_config.h5";
+    auto opened = openMachineConfig(path);
+    if (!opened.ok()) {
+        return {false, "openMachineConfig failed: " + opened.errorMessage()};
+    }
+    auto file = opened.value();
+    if (file->opticalTrainCount() == 0) {
+        file->close();
+        return {false, "opticalTrainCount() returned 0"};
+    }
+    file->close();
+
+    auto created = createMachineConfig("1.0");
+    if (!created.ok()) {
+        return {false, "createMachineConfig failed: " + created.errorMessage()};
+    }
+    auto cfile = created.value();
+    auto setResult = cfile->setMeta(cfile->getMeta(), SetMode::Merge);
+    if (!setResult.ok()) {
+        cfile->close();
+        return {false, "setMeta failed: " + setResult.errorMessage()};
+    }
+    cfile->close();
+
+    auto missing = openMachineConfig(std::filesystem::path{"/nonexistent/path/does_not_exist.h5"});
+    if (missing.ok()) {
+        return {false, "opening a missing file unexpectedly succeeded"};
+    }
+    if (missing.errorCode().empty()) {
+        return {false, "missing-file open did not carry a CapabilityError code"};
+    }
+
+    return {true,
+            "facade (openMachineConfig, createMachineConfig, supportedFileVersions, "
+            "MachineConfigFileV1_0, SetMode, CapabilityError) reachable from "
+            "<machine_config/machine_config.hpp> alone; no capabilities/v1_0 include needed"};
+}
+
+} // namespace s10
+
 // AV-01: Reader rejects unknown File_Version
 //
 // No typed exception hierarchy exists for the plain reader/writer (see

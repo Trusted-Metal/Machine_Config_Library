@@ -32,6 +32,7 @@ func main() {
 		{"S-07", scenarios.RunS07Opcua},
 		{"S-08", scenarios.RunS08DrasticChange},
 		{"S-09", scenarios.RunS09TypeExports},
+		{"S-10", scenarios.RunS10FacadeExportSurface},
 		{"AV-01", scenarios.RunAv01UnknownVersion},
 		{"AV-02", scenarios.RunAv02MissingVersion},
 		{"AV-03", scenarios.RunAv03FutureVersion},

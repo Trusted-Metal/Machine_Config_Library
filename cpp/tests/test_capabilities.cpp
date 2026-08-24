@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <set>
@@ -24,6 +25,7 @@ using machine_config::capabilities::MachineConfigFileV1_0;
 using machine_config::capabilities::SetMode;
 using machine_config::capabilities::createMachineConfig;
 using machine_config::capabilities::openMachineConfig;
+using machine_config::capabilities::supportedFileVersions;
 
 static const std::string REF       = std::string(FIXTURES_DIR) + "/reference_config.h5";
 static const std::string OPCUA_REF = std::string(FIXTURES_DIR) + "/reference_config_opcua.h5";
@@ -375,4 +377,9 @@ TEST_CASE("CapabilityOpenMachineConfigDispatch") {
     REQUIRE(opened.ok());
     REQUIRE(opened.value()->fileVersion() == "1.0");
     opened.value()->close();
+}
+
+TEST_CASE("CapabilitySupportedFileVersionsListsV1_0") {
+    auto versions = supportedFileVersions();
+    REQUIRE(std::find(versions.begin(), versions.end(), std::string("1.0")) != versions.end());
 }

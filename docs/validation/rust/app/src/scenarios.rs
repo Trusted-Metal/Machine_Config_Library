@@ -648,6 +648,81 @@ pub fn run_s09(_fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
     )
 }
 
+// S-10: Public facade export surface
+//
+// ID:          S-10
+// Title:       Stable capability facade importable from the crate root, not
+//              just `machine_config::capabilities`
+// Category:    happy-path
+// Layer:       public API / packaging
+// Precondition: fixtures_dir/reference_config.h5
+// Action:      Import `open_machine_config`, `create_machine_config`,
+//              `supported_file_versions`, `CapabilityError`,
+//              `MachineConfigFileV1_0`, `SetMode` from `machine_config`
+//              (crate root) — deliberately NOT `machine_config::capabilities`,
+//              which is what every other scenario in this file uses (see the
+//              top-of-file `use` block) and which still works, but is not what
+//              this scenario is checking. Open the reference fixture, call
+//              get_scanner; create() a session, call set_meta; confirm a
+//              missing-file open returns a real CapabilityError.
+// Expected:    All six names resolve from the crate root. Both facade calls
+//              succeed. The missing-file open returns Err(CapabilityError).
+// Rationale:   See VALIDATION_PLAN.md §8 S-10 and CORRECTION_DATA_FACADE_PLAN.md
+//              — this crate's root previously omitted the facade entirely
+//              despite lib.rs's own "no sub-module path" re-export policy; an
+//              integrating consumer found the gap, not this validation suite,
+//              because no scenario checked for it. This one does.
+pub fn run_s10(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
+    use machine_config::{
+        create_machine_config, open_machine_config as open_from_root, supported_file_versions,
+        CapabilityError as RootCapabilityError, MachineConfigFileV1_0, SetMode,
+    };
+
+    if !supported_file_versions().contains(&"1.0") {
+        return (false, "supported_file_versions() does not list \"1.0\"".to_string());
+    }
+
+    let path = fixtures_dir.join("reference_config.h5");
+    let file: MachineConfigFileV1_0 = match open_from_root(&path) {
+        Ok(f) => f,
+        Err(e) => return (false, format!("open_machine_config failed: {e:?}")),
+    };
+    if let Err(e) = file.get_scanner(0) {
+        return (false, format!("get_scanner(0) failed: {e:?}"));
+    }
+
+    let mut created: MachineConfigFileV1_0 = match create_machine_config("1.0") {
+        Ok(f) => f,
+        Err(e) => return (false, format!("create_machine_config failed: {e:?}")),
+    };
+    let meta = match created.get_meta() {
+        Ok(m) => m,
+        Err(e) => return (false, format!("get_meta failed: {e:?}")),
+    };
+    if let Err(e) = created.set_meta(meta, SetMode::Merge) {
+        return (false, format!("set_meta failed: {e:?}"));
+    }
+
+    let _missing: RootCapabilityError = match open_from_root("/nonexistent/path/does_not_exist.h5")
+    {
+        Ok(_) => {
+            return (
+                false,
+                "opening a nonexistent file unexpectedly succeeded".to_string(),
+            )
+        }
+        Err(e) => e,
+    };
+
+    (
+        true,
+        "facade (open_machine_config, create_machine_config, supported_file_versions, \
+         CapabilityError, MachineConfigFileV1_0, SetMode) reachable from the crate root; \
+         no machine_config::capabilities submodule path needed"
+            .to_string(),
+    )
+}
+
 // AV-01: Reader rejects unknown File_Version with typed error
 pub fn run_av01(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
     let fixture = av_fixture(fixtures_dir, "v2_0_unknown.h5");

@@ -1,6 +1,6 @@
 import sys
 from scenarios import (
-    run_s01, run_s02, run_s03, run_s04, run_s05, run_s06, run_s07, run_s08, run_s09,
+    run_s01, run_s02, run_s03, run_s04, run_s05, run_s06, run_s07, run_s08, run_s09, run_s10,
     run_av01, run_av02, run_av03, run_av04, run_av05, run_av06, run_av07, run_av08,
     run_av09, run_av10, run_av11, run_av12, run_av13,
 )
@@ -15,6 +15,7 @@ SCENARIOS = [
     ("S-07",  run_s07),
     ("S-08",  run_s08),
     ("S-09",  run_s09),
+    ("S-10",  run_s10),
     ("AV-01", run_av01),
     ("AV-02", run_av02),
     ("AV-03", run_av03),

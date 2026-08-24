@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace machine_config::capabilities {
 
@@ -42,6 +43,17 @@ inline Result<std::shared_ptr<MachineConfigFileV1_0>> createMachineConfig(
         "UnsupportedVersion", "create() unsupported for File_Version \"" + fv + "\"");
   }
   return MachineConfigFileV1_0::create(fv);
+}
+
+// Registered File_Version strings this dispatcher understands — mirrors
+// Python's supported_file_versions(), Node's supportedFileVersions(),
+// Rust's supported_file_versions(), and Go's SupportedFileVersions(). Pure
+// introspection: callers never need this before open()/create(), which
+// already dispatch/validate File_Version internally (see openMachineConfig
+// above); this exists for callers who want to ask "what do you support?"
+// ahead of time (e.g. to validate a batch of files or show it in a UI/log).
+inline std::vector<std::string> supportedFileVersions() {
+  return {"1.0"};
 }
 
 }  // namespace machine_config::capabilities
