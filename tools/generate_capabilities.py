@@ -173,24 +173,88 @@ def render_py(api: dict, models: dict) -> str:
 
 def render_rs(api: dict, models: dict) -> str:
     _ = api, models
+    # MachineConfigFile mirrors MachineConfigFileV1_0's full public surface
+    # (capabilities/v1_0/file.rs) exactly — including where it differs from
+    # C++'s IMachineConfigFile (get_clearbox returns Option<ClearBox> inside
+    # Ok, not a separate has_optional_components + Err(NotPresent); set_train
+    # exists here but not in C++). Never a narrower interface, and never a
+    # copy of another language's shape — see DISPATCH_REGISTRY_PLAN.md.
     return (
         HDR_RS
-        + "//! Generated SetMode and facade trait outlines.\n\n"
+        + "//! Generated SetMode and facade trait.\n\n"
+        + "use crate::capabilities::errors::CapabilityError;\n"
+        + "use crate::capabilities::result::Result;\n"
+        + "use crate::models::{\n"
+        + "    ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfigMeta,\n"
+        + "    OpcuaConfig, OpticalTrain, Scanner, ScannerCard,\n"
+        + "};\n"
+        + "use std::path::Path;\n\n"
         + "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\n"
         + "pub enum SetMode {\n"
         + "    #[default]\n"
         + "    Merge,\n"
         + "    Replace,\n"
+        + "}\n\n"
+        + "/// Version-agnostic stable facade — mirrors MachineConfigFileV1_0's full\n"
+        + "/// public surface so the version-agnostic dispatch path\n"
+        + "/// (capabilities::open_machine_config/create_machine_config) never loses\n"
+        + "/// capability relative to using the concrete type directly.\n"
+        + "pub trait MachineConfigFile {\n"
+        + "    fn file_version(&self) -> &str;\n"
+        + "    fn optical_train_count(&self) -> Result<usize, CapabilityError>;\n"
+        + "\n"
+        + "    fn get_meta(&self) -> Result<MachineConfigMeta, CapabilityError>;\n"
+        + "    fn set_meta(&mut self, model: MachineConfigMeta, mode: SetMode) -> Result<(), CapabilityError>;\n"
+        + "\n"
+        + "    fn get_machine(&self) -> Result<Machine, CapabilityError>;\n"
+        + "    fn set_machine(&mut self, model: Machine, mode: SetMode) -> Result<(), CapabilityError>;\n"
+        + "\n"
+        + "    fn get_train(&self, index: usize) -> Result<OpticalTrain, CapabilityError>;\n"
+        + "    fn set_train(&mut self, index: usize, model: OpticalTrain, mode: SetMode) -> Result<(), CapabilityError>;\n"
+        + "\n"
+        + "    fn get_scanner(&self, index: usize) -> Result<Scanner, CapabilityError>;\n"
+        + "    fn set_scanner(&mut self, index: usize, model: Scanner, mode: SetMode) -> Result<(), CapabilityError>;\n"
+        + "\n"
+        + "    fn get_light_source(&self, index: usize) -> Result<LightSource, CapabilityError>;\n"
+        + "    fn set_light_source(&mut self, index: usize, model: LightSource, mode: SetMode) -> Result<(), CapabilityError>;\n"
+        + "\n"
+        + "    fn get_collimator(&self, index: usize) -> Result<Collimator, CapabilityError>;\n"
+        + "    fn set_collimator(&mut self, index: usize, model: Collimator, mode: SetMode) -> Result<(), CapabilityError>;\n"
+        + "\n"
+        + "    fn get_scanner_card(&self, index: usize) -> Result<ScannerCard, CapabilityError>;\n"
+        + "    fn set_scanner_card(&mut self, index: usize, model: ScannerCard, mode: SetMode) -> Result<(), CapabilityError>;\n"
+        + "\n"
+        + "    fn get_clearbox(&self, index: usize) -> Result<Option<ClearBox>, CapabilityError>;\n"
+        + "    fn set_clearbox(&mut self, index: usize, model: ClearBox, mode: SetMode) -> Result<(), CapabilityError>;\n"
+        + "\n"
+        + "    fn get_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError>;\n"
+        + "    fn get_inverse_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError>;\n"
+        + "\n"
+        + "    fn get_opcua(&self) -> Result<OpcuaConfig, CapabilityError>;\n"
+        + "    fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError>;\n"
+        + "\n"
+        + "    fn save(&mut self, path: Option<&Path>) -> Result<(), CapabilityError>;\n"
+        + "    fn close(&mut self);\n"
         + "}\n"
     )
 
 
 def render_hpp(api: dict, models: dict) -> str:
     _ = api, models
+    # IMachineConfigFile mirrors MachineConfigFileV1_0's full public surface
+    # (capabilities/v1_0/file.hpp) — flat/index-based, matching this
+    # language's own concrete class, not Python/TS's handle-based shape
+    # (those are a different, unrelated facade design; unifying shape across
+    # languages is out of scope here — see DISPATCH_REGISTRY_PLAN.md).
+    # Kept complete deliberately: a narrower interface would silently lose
+    # capability for every version-agnostic caller (openMachineConfig/
+    # createMachineConfig), which is exactly the gap this fixes.
     return (
         HDR_HPP
         + "#pragma once\n"
         + '#include "machine_config/capabilities/result.hpp"\n'
+        + '#include "machine_config/models.hpp"\n'
+        + "#include <cstddef>\n"
         + "#include <string>\n\n"
         + "namespace machine_config::capabilities {\n\n"
         + "enum class SetMode { Merge, Replace };\n\n"
@@ -199,6 +263,37 @@ def render_hpp(api: dict, models: dict) -> str:
         + "  virtual ~IMachineConfigFile() = default;\n"
         + "  virtual std::string fileVersion() const = 0;\n"
         + "  virtual std::size_t opticalTrainCount() const = 0;\n"
+        + "\n"
+        + "  virtual MachineConfigMeta getMeta() const = 0;\n"
+        + "  virtual Result<void> setMeta(const MachineConfigMeta& model, SetMode mode = SetMode::Merge) = 0;\n"
+        + "\n"
+        + "  virtual Machine getMachine() const = 0;\n"
+        + "  virtual Result<void> setMachine(const Machine& model, SetMode mode = SetMode::Merge) = 0;\n"
+        + "\n"
+        + "  virtual Result<OpticalTrain> getTrain(std::size_t index) const = 0;\n"
+        + "\n"
+        + "  virtual Result<Scanner> getScanner(std::size_t index) const = 0;\n"
+        + "  virtual Result<void> setScanner(std::size_t index, const Scanner& model, SetMode mode = SetMode::Merge) = 0;\n"
+        + "\n"
+        + "  virtual Result<LightSource> getLightSource(std::size_t index) const = 0;\n"
+        + "  virtual Result<void> setLightSource(std::size_t index, const LightSource& model, SetMode mode = SetMode::Merge) = 0;\n"
+        + "\n"
+        + "  virtual Result<Collimator> getCollimator(std::size_t index) const = 0;\n"
+        + "  virtual Result<void> setCollimator(std::size_t index, const Collimator& model, SetMode mode = SetMode::Merge) = 0;\n"
+        + "\n"
+        + "  virtual Result<ScannerCard> getScannerCard(std::size_t index) const = 0;\n"
+        + "  virtual Result<void> setScannerCard(std::size_t index, const ScannerCard& model, SetMode mode = SetMode::Merge) = 0;\n"
+        + "\n"
+        + "  virtual bool hasOptionalComponents(std::size_t index) const = 0;\n"
+        + "  virtual Result<ClearBox> getClearbox(std::size_t index) const = 0;\n"
+        + "  virtual Result<void> setClearbox(std::size_t index, const ClearBox& model, SetMode mode = SetMode::Merge) = 0;\n"
+        + "\n"
+        + "  virtual Result<CorrectionData> getCorrectionData(std::size_t index) const = 0;\n"
+        + "  virtual Result<CorrectionData> getInverseCorrectionData(std::size_t index) const = 0;\n"
+        + "\n"
+        + "  virtual Result<OpcuaConfig> getOpcua() const = 0;\n"
+        + "  virtual Result<void> setOpcua(const OpcuaConfig& model, SetMode mode = SetMode::Merge) = 0;\n"
+        + "\n"
         + "  virtual Result<void> save(const std::string* path = nullptr) = 0;\n"
         + "  virtual void close() = 0;\n"
         + "};\n\n"

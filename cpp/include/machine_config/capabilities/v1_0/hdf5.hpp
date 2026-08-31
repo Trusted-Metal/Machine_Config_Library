@@ -2,6 +2,7 @@
 // File_Version 1.0 HDF5 reader — on-disk layout, attribute names, and casting.
 // Public MachineConfigReader peeks File_Version then dispatches here.
 
+#include "machine_config/adapters.hpp"
 #include "machine_config/models.hpp"
 #include "machine_config/capabilities/v1_0/compound_types.hpp"
 #include "machine_config/capabilities/v1_0/layout.hpp"
@@ -198,17 +199,17 @@ inline ExtraAttrs collectExtra(const Loc& loc,
 
 namespace capabilities::v1_0 {
 
-class Hdf5AdapterV1_0 {
+class Hdf5AdapterV1_0 : public ReaderAdapter {
 public:
     explicit Hdf5AdapterV1_0(std::filesystem::path path)
         : path_(std::move(path)) {}
 
-    MachineConfig parse() const {
+    MachineConfig parse() const override {
         HighFive::File f(path_.string(), HighFive::File::ReadOnly);
         return parseInner(f);
     }
 
-    MachineConfig parseWithBinary() const {
+    MachineConfig parseWithBinary() const override {
         HighFive::File f(path_.string(), HighFive::File::ReadOnly);
         auto cfg = parseInner(f);
         for (size_t i = 0; i < cfg.optical_trains.size(); ++i) {
@@ -237,14 +238,14 @@ DS_SCAN_FIELD_CORRECTION_FILE);
     }
 
     // Serialise to canonical JSON.  Correction grids excluded unless include_binary=true.
-    std::string toJson(int indent = 2, bool /*include_binary*/ = false) const {
+    std::string toJson(int indent = 2, bool /*include_binary*/ = false) const override {
         nlohmann::json j = parse();
         return j.dump(indent);
     }
 
     // Returns all HDF5 attributes at hdf5_path as a JSON object.
     // Returns an empty object (never throws) when the path does not exist.
-    nlohmann::json getRawGroup(const std::string& hdf5_path) const {
+    nlohmann::json getRawGroup(const std::string& hdf5_path) const override {
         HighFive::File f(path_.string(), HighFive::File::ReadOnly);
         try {
             return collectExtra(f.getGroup(hdf5_path), {});
@@ -254,7 +255,7 @@ DS_SCAN_FIELD_CORRECTION_FILE);
     }
 
     // §4.11 — flat (d0×d1×d2) float64 correction grid for a 0-based train index.
-    CorrectionData getCorrectionData(size_t train_index) const {
+    CorrectionData getCorrectionData(size_t train_index) const override {
         HighFive::File f(path_.string(), HighFive::File::ReadOnly);
         auto tid = trainIdAt(f, train_index);
         return readCorrectionGrid(f,
@@ -262,7 +263,7 @@ clearboxPathById(tid) + "/" +
 DS_CORRECTION_DATA);
     }
 
-    CorrectionData getInverseCorrectionData(size_t train_index) const {
+    CorrectionData getInverseCorrectionData(size_t train_index) const override {
         HighFive::File f(path_.string(), HighFive::File::ReadOnly);
         auto tid = trainIdAt(f, train_index);
         return readCorrectionGrid(f,
@@ -271,7 +272,7 @@ DS_INVERSE_CORRECTION_DATA);
     }
 
     // §4.11 — raw .fc3 bytes embedded as a uint8 dataset.
-    std::vector<uint8_t> getScanFieldCorrectionBytes(size_t train_index) const {
+    std::vector<uint8_t> getScanFieldCorrectionBytes(size_t train_index) const override {
         HighFive::File f(path_.string(), HighFive::File::ReadOnly);
         auto tid = trainIdAt(f, train_index);
         auto ds  = f.getDataSet(trainPathById(tid) + "/" +

@@ -2,6 +2,7 @@
 // File_Version 1.0 HDF5 writer — on-disk layout, attribute names, and casting.
 // Public MachineConfigWriter dispatches here after reading File_Version from the model.
 
+#include "machine_config/adapters.hpp"
 #include "machine_config/models.hpp"
 #include "machine_config/capabilities/v1_0/compound_types.hpp"
 #include "machine_config/capabilities/v1_0/layout.hpp"
@@ -96,11 +97,11 @@ inline void writeExtra(Loc& loc, const ExtraAttrs& extra) {
 
 namespace capabilities::v1_0 {
 
-class Hdf5WriterV1_0 {
+class Hdf5WriterV1_0 : public WriterAdapter {
 public:
     explicit Hdf5WriterV1_0(const MachineConfig& cfg) : cfg_(cfg) {}
 
-    void write(std::filesystem::path path) const {
+    void write(std::filesystem::path path) const override {
         HighFive::File f(path.string(),
             HighFive::File::ReadWrite | HighFive::File::Create | HighFive::File::Truncate);
         writeRootAttrs(f);

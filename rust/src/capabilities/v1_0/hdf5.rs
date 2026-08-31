@@ -60,6 +60,7 @@ pub(crate) struct RawCalibrationPoint {
 use super::layout;
 use crate::error::{MachineConfigError, Result};
 use crate::models::*;
+use crate::reader::ReaderAdapter;
 
 const SCHEMA_VERSION: &str = "v1";
 
@@ -871,6 +872,40 @@ impl Hdf5AdapterV1_0 {
             triggers_enabled,
             trigger_stop_ceiling_layers,
         }))
+    }
+}
+
+// v1.0's implementation of the ReaderAdapter contract — this impl is
+// necessarily version-specific (it's what crate::reader::MachineConfigReader
+// dispatches TO for File_Version "1.0", per DISPATCH_REGISTRY_PLAN.md's
+// registry in reader.rs). MachineConfigReader itself stays version-agnostic:
+// it only ever touches `Box<dyn ReaderAdapter>`, never `Hdf5AdapterV1_0` by
+// name. A future v1.1 gets its own separate `impl ReaderAdapter for
+// Hdf5AdapterV1_1`, registered alongside this one. Every method here
+// delegates to the identically-named, identically-signatured inherent method
+// above — Rust always prefers an inherent method over a trait method of the
+// same name on the same type, so this can't recurse.
+impl ReaderAdapter for Hdf5AdapterV1_0 {
+    fn parse(&self) -> Result<MachineConfig> {
+        self.parse()
+    }
+    fn parse_with_binary(&self) -> Result<MachineConfig> {
+        self.parse_with_binary()
+    }
+    fn get_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
+        self.get_correction_data(train_index)
+    }
+    fn get_inverse_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
+        self.get_inverse_correction_data(train_index)
+    }
+    fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>> {
+        self.get_scan_field_correction_bytes(train_index)
+    }
+    fn get_raw_group(&self, hdf5_path: &str) -> Result<ExtraAttrs> {
+        self.get_raw_group(hdf5_path)
+    }
+    fn to_json(&self, pretty: bool, include_binary: bool) -> Result<String> {
+        self.to_json(pretty, include_binary)
     }
 }
 

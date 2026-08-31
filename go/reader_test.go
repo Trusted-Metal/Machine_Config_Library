@@ -307,6 +307,53 @@ func TestUnknownFileVersionDoesNotUseV1Layout(t *testing.T) {
 	}
 }
 
+// DISPATCH_REGISTRY_PLAN.md — proves ResolveReader is genuinely
+// registry-driven, not a relocated hardcoded check.
+type fakeReaderAdapter struct{}
+
+func (fakeReaderAdapter) Parse(opts machineconfig.ParseOptions) (*machineconfig.MachineConfig, error) {
+	return &machineconfig.MachineConfig{
+		Meta: machineconfig.MachineConfigMeta{MachineName: "fake-sentinel"},
+	}, nil
+}
+
+func (fakeReaderAdapter) GetCorrectionData(trainIndex int) (*machineconfig.CorrectionData, error) {
+	return nil, nil
+}
+
+func (fakeReaderAdapter) GetInverseCorrectionData(trainIndex int) (*machineconfig.CorrectionData, error) {
+	return nil, nil
+}
+
+func TestReaderRegistryRejectsUnregisteredVersion(t *testing.T) {
+	registry := machineconfig.ReaderRegistry{}
+	_, err := machineconfig.ResolveReader("9.9-nope", "unused-path.h5", registry)
+	var u *machineconfig.UnsupportedFileVersionError
+	if !errors.As(err, &u) {
+		t.Fatalf("expected UnsupportedFileVersionError, got %#v", err)
+	}
+	if u.Version != "9.9-nope" {
+		t.Fatalf("version = %q", u.Version)
+	}
+}
+
+func TestReaderRegistryDispatchesViaInjectedAdapter(t *testing.T) {
+	registry := machineconfig.ReaderRegistry{
+		"9.9-test": func(path string) machineconfig.ReaderAdapter { return fakeReaderAdapter{} },
+	}
+	adapter, err := machineconfig.ResolveReader("9.9-test", "unused-path.h5", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := adapter.Parse(machineconfig.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Meta.MachineName != "fake-sentinel" {
+		t.Fatalf("expected fake sentinel, got %q — dispatch did not route to the fake", cfg.Meta.MachineName)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // meta.extra
 // ---------------------------------------------------------------------------

@@ -620,3 +620,41 @@ func isUnsupportedVersionError(err error, target **machineconfig.UnsupportedFile
 	}
 	return false
 }
+
+// DISPATCH_REGISTRY_PLAN.md — proves ResolveWriter is genuinely
+// registry-driven, not a relocated hardcoded check.
+type fakeWriterAdapter struct{ called *bool }
+
+func (f fakeWriterAdapter) Write(cfg *machineconfig.MachineConfig, path string) error {
+	*f.called = true
+	return nil
+}
+
+func TestWriterRegistryRejectsUnregisteredVersion(t *testing.T) {
+	registry := machineconfig.WriterRegistry{}
+	_, err := machineconfig.ResolveWriter("9.9-nope", registry)
+	var u *machineconfig.UnsupportedFileVersionError
+	if !isUnsupportedVersionError(err, &u) {
+		t.Fatalf("expected *UnsupportedFileVersionError, got %T: %v", err, err)
+	}
+	if u.Version != "9.9-nope" {
+		t.Errorf("Version = %q, want %q", u.Version, "9.9-nope")
+	}
+}
+
+func TestWriterRegistryDispatchesViaInjectedAdapter(t *testing.T) {
+	called := false
+	registry := machineconfig.WriterRegistry{
+		"9.9-test": fakeWriterAdapter{called: &called},
+	}
+	adapter, err := machineconfig.ResolveWriter("9.9-test", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Write(&machineconfig.MachineConfig{}, "unused.h5"); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("expected the fake adapter's Write to be called — dispatch did not route to the fake")
+	}
+}

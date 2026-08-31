@@ -2,11 +2,55 @@
 //!
 //! On-disk group paths and HDF5 attribute names live in the matching adapter.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use crate::capabilities::v1_0::writer::Hdf5WriterV1_0;
 use crate::error::{MachineConfigError, Result};
 use crate::models::MachineConfig;
+
+/// Version-agnostic writer adapter — mirrors `Hdf5WriterV1_0`'s public
+/// surface. Non-generic (`path: &Path`, not `impl AsRef<Path>`) so the trait
+/// is object-safe; `MachineConfigWriter::write` stays generic for callers and
+/// converts once via `path.as_ref()` before reaching the trait object.
+pub trait WriterAdapter {
+    fn write(&self, path: &Path) -> Result<()>;
+}
+
+/// Constructs the `WriterAdapter` for one version from a borrowed
+/// `MachineConfig`, tying the adapter's lifetime to the config's borrow —
+/// mirrors `Hdf5WriterV1_0<'a>`'s own lifetime-parameterized shape.
+type ConstructFn = for<'a> fn(&'a MachineConfig) -> Box<dyn WriterAdapter + 'a>;
+/// Version -> constructor for that version's `WriterAdapter`. A real registry
+/// (DISPATCH_REGISTRY_PLAN.md): adding a version means adding an entry here,
+/// never editing `MachineConfigWriter` itself.
+pub type WriterRegistry = HashMap<&'static str, ConstructFn>;
+
+fn new_v1_0_writer(config: &MachineConfig) -> Box<dyn WriterAdapter + '_> {
+    Box::new(Hdf5WriterV1_0::new(config))
+}
+
+static PRODUCTION_WRITER_REGISTRY: LazyLock<WriterRegistry> = LazyLock::new(|| {
+    let mut m: WriterRegistry = HashMap::new();
+    m.insert("1.0", new_v1_0_writer as ConstructFn);
+    m
+});
+
+/// Registry-parameterized so tests can inject a fake entry without touching
+/// global state — see DISPATCH_REGISTRY_PLAN.md's shared testing pattern.
+/// Construction itself never fails (mirrors `Hdf5WriterV1_0::new`, infallible)
+/// — the `Result` here covers only the unregistered-version case.
+pub fn resolve_writer<'a>(
+    version: &str,
+    config: &'a MachineConfig,
+    registry: &WriterRegistry,
+) -> Result<Box<dyn WriterAdapter + 'a>> {
+    match registry.get(version) {
+        Some(f) => Ok(f(config)),
+        None => Err(MachineConfigError::UnsupportedVersion(version.to_string())),
+    }
+}
 
 /// Serialises a [`MachineConfig`] to a machine-config HDF5 file.
 ///
@@ -24,10 +68,8 @@ impl<'a> MachineConfigWriter<'a> {
     pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let fv = self.config.meta.file_version.trim();
         let fv = if fv.is_empty() { "1.0" } else { fv };
-        match fv {
-            "1.0" => Hdf5WriterV1_0::new(self.config).write(path),
-            other => Err(MachineConfigError::UnsupportedVersion(other.to_string())),
-        }
+        let backend = resolve_writer(fv, self.config, &PRODUCTION_WRITER_REGISTRY)?;
+        backend.write(path.as_ref())
     }
 }
 
@@ -260,5 +302,39 @@ mod tests {
             err,
             MachineConfigError::UnsupportedVersion(ref v) if v == "2.0"
         ));
+    }
+
+    // DISPATCH_REGISTRY_PLAN.md — proves resolve_writer() is genuinely
+    // registry-driven, not a relocated hardcoded check. The fake panics if
+    // ever actually asked to write — reaching the assertion without touching
+    // disk already proves dispatch routed to the fake, not the real "1.0"
+    // adapter.
+    struct FakeWriterAdapter;
+    impl WriterAdapter for FakeWriterAdapter {
+        fn write(&self, _path: &Path) -> Result<()> {
+            unreachable!("not exercised by the registry-dispatch test")
+        }
+    }
+
+    #[test]
+    fn writer_registry_rejects_unregistered_version() {
+        let registry = WriterRegistry::new();
+        let cfg = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let result = resolve_writer("9.9-nope", &cfg, &registry);
+        assert!(matches!(
+            result,
+            Err(MachineConfigError::UnsupportedVersion(ref v)) if v == "9.9-nope"
+        ));
+    }
+
+    #[test]
+    fn writer_registry_dispatches_via_injected_test_adapter() {
+        let mut registry: WriterRegistry = HashMap::new();
+        registry.insert("9.9-test", (|_cfg: &MachineConfig| {
+            Box::new(FakeWriterAdapter) as Box<dyn WriterAdapter>
+        }) as ConstructFn);
+        let cfg = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let adapter = resolve_writer("9.9-test", &cfg, &registry).unwrap();
+        drop(adapter);
     }
 }

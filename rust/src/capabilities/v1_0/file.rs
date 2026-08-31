@@ -377,6 +377,125 @@ impl MachineConfigFileV1_0 {
     }
 }
 
+// v1.0's implementation of the MachineConfigFile contract — this impl is
+// necessarily version-specific (it's what capabilities::open_machine_config/
+// create_machine_config dispatch TO for File_Version "1.0", per
+// DISPATCH_REGISTRY_PLAN.md's registry in capabilities/mod.rs). Those two
+// functions stay version-agnostic: they only ever touch
+// `Box<dyn MachineConfigFile>`, never `MachineConfigFileV1_0` by name. A
+// future v1.1 gets its own separate `impl MachineConfigFile for
+// MachineConfigFileV1_1`, registered alongside this one. Every method here
+// delegates to the identically-named, identically-signatured inherent method
+// above — Rust always prefers an inherent method over a trait method of the
+// same name on the same type, so these delegating calls resolve to the
+// inherent methods, not back into this trait impl. No method body's logic
+// lives here; this block only exists so `MachineConfigFileV1_0` can be boxed
+// as `dyn MachineConfigFile`.
+impl crate::capabilities::generated::MachineConfigFile for MachineConfigFileV1_0 {
+    fn file_version(&self) -> &str {
+        self.file_version()
+    }
+    fn optical_train_count(&self) -> Result<usize, CapabilityError> {
+        self.optical_train_count()
+    }
+    fn get_meta(&self) -> Result<MachineConfigMeta, CapabilityError> {
+        self.get_meta()
+    }
+    fn set_meta(&mut self, model: MachineConfigMeta, mode: SetMode) -> Result<(), CapabilityError> {
+        self.set_meta(model, mode)
+    }
+    fn get_machine(&self) -> Result<Machine, CapabilityError> {
+        self.get_machine()
+    }
+    fn set_machine(&mut self, model: Machine, mode: SetMode) -> Result<(), CapabilityError> {
+        self.set_machine(model, mode)
+    }
+    fn get_train(&self, index: usize) -> Result<OpticalTrain, CapabilityError> {
+        self.get_train(index)
+    }
+    fn set_train(
+        &mut self,
+        index: usize,
+        model: OpticalTrain,
+        mode: SetMode,
+    ) -> Result<(), CapabilityError> {
+        self.set_train(index, model, mode)
+    }
+    fn get_scanner(&self, index: usize) -> Result<Scanner, CapabilityError> {
+        self.get_scanner(index)
+    }
+    fn set_scanner(
+        &mut self,
+        index: usize,
+        model: Scanner,
+        mode: SetMode,
+    ) -> Result<(), CapabilityError> {
+        self.set_scanner(index, model, mode)
+    }
+    fn get_light_source(&self, index: usize) -> Result<LightSource, CapabilityError> {
+        self.get_light_source(index)
+    }
+    fn set_light_source(
+        &mut self,
+        index: usize,
+        model: LightSource,
+        mode: SetMode,
+    ) -> Result<(), CapabilityError> {
+        self.set_light_source(index, model, mode)
+    }
+    fn get_collimator(&self, index: usize) -> Result<Collimator, CapabilityError> {
+        self.get_collimator(index)
+    }
+    fn set_collimator(
+        &mut self,
+        index: usize,
+        model: Collimator,
+        mode: SetMode,
+    ) -> Result<(), CapabilityError> {
+        self.set_collimator(index, model, mode)
+    }
+    fn get_scanner_card(&self, index: usize) -> Result<ScannerCard, CapabilityError> {
+        self.get_scanner_card(index)
+    }
+    fn set_scanner_card(
+        &mut self,
+        index: usize,
+        model: ScannerCard,
+        mode: SetMode,
+    ) -> Result<(), CapabilityError> {
+        self.set_scanner_card(index, model, mode)
+    }
+    fn get_clearbox(&self, index: usize) -> Result<Option<ClearBox>, CapabilityError> {
+        self.get_clearbox(index)
+    }
+    fn set_clearbox(
+        &mut self,
+        index: usize,
+        model: ClearBox,
+        mode: SetMode,
+    ) -> Result<(), CapabilityError> {
+        self.set_clearbox(index, model, mode)
+    }
+    fn get_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError> {
+        self.get_correction_data(index)
+    }
+    fn get_inverse_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError> {
+        self.get_inverse_correction_data(index)
+    }
+    fn get_opcua(&self) -> Result<OpcuaConfig, CapabilityError> {
+        self.get_opcua()
+    }
+    fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError> {
+        self.set_opcua(model, mode)
+    }
+    fn save(&mut self, path: Option<&Path>) -> Result<(), CapabilityError> {
+        self.save(path)
+    }
+    fn close(&mut self) {
+        self.close()
+    }
+}
+
 /// Converts a `ClearBox` grid field to a flat [`CorrectionData`] buffer via
 /// the model-layer `Array3` helper — the same conversion the HDF5 adapter's
 /// `get_correction_data`/`get_inverse_correction_data` use, just starting

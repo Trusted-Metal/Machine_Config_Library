@@ -63,27 +63,27 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
     return config_.optical_trains.size();
   }
 
-  MachineConfigMeta getMeta() const {
+  MachineConfigMeta getMeta() const override {
     assertOpen();
     return config_.meta;
   }
-  Result<void> setMeta(const MachineConfigMeta& model, SetMode mode = SetMode::Merge) {
+  Result<void> setMeta(const MachineConfigMeta& model, SetMode mode = SetMode::Merge) override {
     assertOpen();
     config_.meta = applySetModeT(config_.meta, model, mode);
     return Result<void>::Ok();
   }
 
-  Machine getMachine() const {
+  Machine getMachine() const override {
     assertOpen();
     return config_.machine;
   }
-  Result<void> setMachine(const Machine& model, SetMode mode = SetMode::Merge) {
+  Result<void> setMachine(const Machine& model, SetMode mode = SetMode::Merge) override {
     assertOpen();
     config_.machine = applySetModeT(config_.machine, model, mode);
     return Result<void>::Ok();
   }
 
-  Result<OpticalTrain> getTrain(std::size_t index) const {
+  Result<OpticalTrain> getTrain(std::size_t index) const override {
     assertOpen();
     if (index >= config_.optical_trains.size()) {
       return Result<OpticalTrain>::Err(
@@ -93,13 +93,13 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
     return Result<OpticalTrain>::Ok(config_.optical_trains[index]);
   }
 
-  Result<Scanner> getScanner(std::size_t index) const {
+  Result<Scanner> getScanner(std::size_t index) const override {
     auto t = getTrain(index);
     if (!t.ok()) return Result<Scanner>::Err(t.errorCode(), t.errorMessage());
     return Result<Scanner>::Ok(t.value().scanner);
   }
 
-  Result<void> setScanner(std::size_t index, const Scanner& model, SetMode mode = SetMode::Merge) {
+  Result<void> setScanner(std::size_t index, const Scanner& model, SetMode mode = SetMode::Merge) override {
     assertOpen();
     if (index >= config_.optical_trains.size()) {
       return Result<void>::Err("InvalidIndex", "optical train index out of range");
@@ -109,14 +109,14 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
     return Result<void>::Ok();
   }
 
-  Result<LightSource> getLightSource(std::size_t index) const {
+  Result<LightSource> getLightSource(std::size_t index) const override {
     auto t = getTrain(index);
     if (!t.ok()) return Result<LightSource>::Err(t.errorCode(), t.errorMessage());
     return Result<LightSource>::Ok(t.value().light_source);
   }
 
   Result<void> setLightSource(std::size_t index, const LightSource& model,
-                              SetMode mode = SetMode::Merge) {
+                              SetMode mode = SetMode::Merge) override {
     assertOpen();
     if (index >= config_.optical_trains.size()) {
       return Result<void>::Err("InvalidIndex", "optical train index out of range");
@@ -126,14 +126,14 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
     return Result<void>::Ok();
   }
 
-  Result<Collimator> getCollimator(std::size_t index) const {
+  Result<Collimator> getCollimator(std::size_t index) const override {
     auto t = getTrain(index);
     if (!t.ok()) return Result<Collimator>::Err(t.errorCode(), t.errorMessage());
     return Result<Collimator>::Ok(t.value().collimator);
   }
 
   Result<void> setCollimator(std::size_t index, const Collimator& model,
-                             SetMode mode = SetMode::Merge) {
+                             SetMode mode = SetMode::Merge) override {
     assertOpen();
     if (index >= config_.optical_trains.size()) {
       return Result<void>::Err("InvalidIndex", "optical train index out of range");
@@ -143,14 +143,14 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
     return Result<void>::Ok();
   }
 
-  Result<ScannerCard> getScannerCard(std::size_t index) const {
+  Result<ScannerCard> getScannerCard(std::size_t index) const override {
     auto t = getTrain(index);
     if (!t.ok()) return Result<ScannerCard>::Err(t.errorCode(), t.errorMessage());
     return Result<ScannerCard>::Ok(t.value().scanner_card);
   }
 
   Result<void> setScannerCard(std::size_t index, const ScannerCard& model,
-                              SetMode mode = SetMode::Merge) {
+                              SetMode mode = SetMode::Merge) override {
     assertOpen();
     if (index >= config_.optical_trains.size()) {
       return Result<void>::Err("InvalidIndex", "optical train index out of range");
@@ -160,13 +160,13 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
     return Result<void>::Ok();
   }
 
-  bool hasOptionalComponents(std::size_t index) const {
+  bool hasOptionalComponents(std::size_t index) const override {
     assertOpen();
     if (index >= config_.optical_trains.size()) return false;
     return config_.optical_trains[index].optional_components.clearbox.has_value();
   }
 
-  Result<ClearBox> getClearbox(std::size_t index) const {
+  Result<ClearBox> getClearbox(std::size_t index) const override {
     auto t = getTrain(index);
     if (!t.ok()) return Result<ClearBox>::Err(t.errorCode(), t.errorMessage());
     if (!t.value().optional_components.clearbox.has_value()) {
@@ -176,7 +176,7 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
   }
 
   Result<void> setClearbox(std::size_t index, const ClearBox& model,
-                           SetMode mode = SetMode::Merge) {
+                           SetMode mode = SetMode::Merge) override {
     assertOpen();
     if (index >= config_.optical_trains.size()) {
       return Result<void>::Err("InvalidIndex", "optical train index out of range");
@@ -194,7 +194,7 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
   // MachineConfigReader::getCorrectionData. Converts the already-loaded
   // in-memory ClearBox model rather than re-reading the file, so this works
   // for both open()- and create()-based instances alike.
-  Result<CorrectionData> getCorrectionData(std::size_t index) const {
+  Result<CorrectionData> getCorrectionData(std::size_t index) const override {
     auto cb = getClearbox(index);
     if (!cb.ok()) return Result<CorrectionData>::Err(cb.errorCode(), cb.errorMessage());
     CorrectionData cd;
@@ -204,7 +204,7 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
 
   // Returns the (257, 257, 2) float64 *inverse* correction grid for optical
   // train `index`. See getCorrectionData() for details.
-  Result<CorrectionData> getInverseCorrectionData(std::size_t index) const {
+  Result<CorrectionData> getInverseCorrectionData(std::size_t index) const override {
     auto cb = getClearbox(index);
     if (!cb.ok()) return Result<CorrectionData>::Err(cb.errorCode(), cb.errorMessage());
     CorrectionData cd;
@@ -218,7 +218,7 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
   // see OPCUA_FIELD_PROMOTION_PLAN.md's "Why facade-only enforcement". The
   // low-level reader/writer stay fully permissive; this is the one place
   // "required" is enforced.
-  Result<OpcuaConfig> getOpcua() const {
+  Result<OpcuaConfig> getOpcua() const override {
     assertOpen();
     if (!config_.opcua.has_value()) {
       return Result<OpcuaConfig>::Err("NotPresent", "OPCUA group is not present");
@@ -248,7 +248,7 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
     return Result<OpcuaConfig>::Ok(opcua);
   }
 
-  Result<void> setOpcua(const OpcuaConfig& model, SetMode mode = SetMode::Merge) {
+  Result<void> setOpcua(const OpcuaConfig& model, SetMode mode = SetMode::Merge) override {
     assertOpen();
     if (!config_.opcua.has_value()) {
       return Result<void>::Err("NotPresent", "OPCUA group is not present");

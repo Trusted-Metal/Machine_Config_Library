@@ -11,7 +11,7 @@ from machine_config.capabilities import (
     supported_file_versions,
     SetMode,
 )
-from machine_config.capabilities.result import Ok
+from machine_config.capabilities.result import Ok, ok
 from machine_config.reader import MachineConfigReader
 from machine_config.writer import MachineConfigWriter
 
@@ -25,6 +25,24 @@ FIXTURE_OPCUA_MISSING_REQUIRED = (
 
 def test_supported_versions():
     assert "1.0" in supported_file_versions()
+
+
+def test_create_machine_config_rejects_unregistered_version():
+    result = create_machine_config("2.0")
+    assert not result.ok
+    assert result.error.code == "UnsupportedVersion"
+
+
+def test_create_machine_config_dispatches_via_registered_version(monkeypatch):
+    # Proves _CREATE is genuinely consulted (DISPATCH_REGISTRY_PLAN.md), not
+    # just a hardcoded "1.0" check that happens to still work.
+    import machine_config.capabilities as _capabilities_mod
+
+    sentinel = object()
+    monkeypatch.setitem(_capabilities_mod._CREATE, "9.9-test", lambda version: ok(sentinel))
+    result = create_machine_config("9.9-test")
+    assert isinstance(result, Ok)
+    assert result.value is sentinel
 
 
 def test_open_get_scanner_matches_reader():

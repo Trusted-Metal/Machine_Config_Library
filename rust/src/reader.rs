@@ -2,7 +2,9 @@
 //!
 //! On-disk group paths and HDF5 attribute names live in the matching adapter.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use crate::capabilities::v1_0::hdf5::Hdf5AdapterV1_0;
 use crate::error::{MachineConfigError, Result};
@@ -10,11 +12,53 @@ use crate::models::{CorrectionData, ExtraAttrs, MachineConfig};
 
 pub use crate::capabilities::v1_0::hdf5::peek_file_version;
 
+/// Version-agnostic reader adapter — mirrors `Hdf5AdapterV1_0`'s full public
+/// surface, so the version-agnostic `MachineConfigReader` path never loses
+/// capability relative to using an adapter directly.
+pub trait ReaderAdapter {
+    fn parse(&self) -> Result<MachineConfig>;
+    fn parse_with_binary(&self) -> Result<MachineConfig>;
+    fn get_correction_data(&self, train_index: usize) -> Result<CorrectionData>;
+    fn get_inverse_correction_data(&self, train_index: usize) -> Result<CorrectionData>;
+    fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>>;
+    fn get_raw_group(&self, hdf5_path: &str) -> Result<ExtraAttrs>;
+    fn to_json(&self, pretty: bool, include_binary: bool) -> Result<String>;
+}
+
+type OpenFn = fn(&Path) -> Result<Box<dyn ReaderAdapter>>;
+/// Version -> constructor for that version's `ReaderAdapter`. A real registry
+/// (DISPATCH_REGISTRY_PLAN.md): adding a version means adding an entry here,
+/// never editing `MachineConfigReader` itself.
+pub type ReaderRegistry = HashMap<&'static str, OpenFn>;
+
+fn open_v1_0(path: &Path) -> Result<Box<dyn ReaderAdapter>> {
+    Hdf5AdapterV1_0::open(path).map(|a| Box::new(a) as Box<dyn ReaderAdapter>)
+}
+
+static PRODUCTION_READER_REGISTRY: LazyLock<ReaderRegistry> = LazyLock::new(|| {
+    let mut m: ReaderRegistry = HashMap::new();
+    m.insert("1.0", open_v1_0 as OpenFn);
+    m
+});
+
+/// Registry-parameterized so tests can inject a fake entry without touching
+/// global state — see DISPATCH_REGISTRY_PLAN.md's shared testing pattern.
+pub fn resolve_reader(
+    version: &str,
+    path: &Path,
+    registry: &ReaderRegistry,
+) -> Result<Box<dyn ReaderAdapter>> {
+    match registry.get(version) {
+        Some(f) => f(path),
+        None => Err(MachineConfigError::UnsupportedVersion(version.to_string())),
+    }
+}
+
 /// Reads a machine-config HDF5 file into a [`MachineConfig`].
 ///
 /// Peeks root `File_Version` and dispatches to that version's adapter.
 pub struct MachineConfigReader {
-    backend: Hdf5AdapterV1_0,
+    backend: Box<dyn ReaderAdapter>,
 }
 
 impl MachineConfigReader {
@@ -22,12 +66,8 @@ impl MachineConfigReader {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let version = peek_file_version(path)?;
-        match version.as_str() {
-            "1.0" => Ok(Self {
-                backend: Hdf5AdapterV1_0::open(path)?,
-            }),
-            other => Err(MachineConfigError::UnsupportedVersion(other.to_string())),
-        }
+        let backend = resolve_reader(&version, path, &PRODUCTION_READER_REGISTRY)?;
+        Ok(Self { backend })
     }
 
     pub fn parse(&self) -> Result<MachineConfig> {
@@ -73,6 +113,58 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/../fixtures/reference_config_synchronous_sensors.h5"
     );
+
+    // DISPATCH_REGISTRY_PLAN.md — proves resolve_reader() is genuinely
+    // registry-driven, not a relocated hardcoded check. Fake never touched
+    // beyond construction; the assertion is purely about which constructor
+    // the registry routed to.
+    struct FakeReaderAdapter;
+    impl ReaderAdapter for FakeReaderAdapter {
+        fn parse(&self) -> Result<MachineConfig> {
+            unreachable!("not exercised by the registry-dispatch test")
+        }
+        fn parse_with_binary(&self) -> Result<MachineConfig> {
+            unreachable!("not exercised by the registry-dispatch test")
+        }
+        fn get_correction_data(&self, _train_index: usize) -> Result<CorrectionData> {
+            unreachable!("not exercised by the registry-dispatch test")
+        }
+        fn get_inverse_correction_data(&self, _train_index: usize) -> Result<CorrectionData> {
+            unreachable!("not exercised by the registry-dispatch test")
+        }
+        fn get_scan_field_correction_bytes(&self, _train_index: usize) -> Result<Vec<u8>> {
+            unreachable!("not exercised by the registry-dispatch test")
+        }
+        fn get_raw_group(&self, _hdf5_path: &str) -> Result<ExtraAttrs> {
+            unreachable!("not exercised by the registry-dispatch test")
+        }
+        fn to_json(&self, _pretty: bool, _include_binary: bool) -> Result<String> {
+            unreachable!("not exercised by the registry-dispatch test")
+        }
+    }
+
+    #[test]
+    fn reader_registry_rejects_unregistered_version() {
+        let registry = ReaderRegistry::new();
+        let result = resolve_reader("9.9-nope", Path::new(REFERENCE), &registry);
+        assert!(matches!(
+            result,
+            Err(MachineConfigError::UnsupportedVersion(ref v)) if v == "9.9-nope"
+        ));
+    }
+
+    #[test]
+    fn reader_registry_dispatches_via_injected_test_adapter() {
+        let mut registry: ReaderRegistry = HashMap::new();
+        registry.insert("9.9-test", |_path: &Path| {
+            Ok(Box::new(FakeReaderAdapter) as Box<dyn ReaderAdapter>)
+        });
+        let adapter = resolve_reader("9.9-test", Path::new(REFERENCE), &registry).unwrap();
+        // The fake's methods all panic if called — reaching this point at
+        // all (without touching REFERENCE, a real "1.0" fixture) already
+        // proves dispatch routed to the fake, not the real "1.0" adapter.
+        drop(adapter);
+    }
 
     #[test]
     fn open_rejects_nonexistent_path() {

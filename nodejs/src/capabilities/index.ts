@@ -24,6 +24,16 @@ const OPEN: Record<
   '1.0': (path) => MachineConfigFileV1_0.open(path),
 };
 
+// Exported (matching reader.ts's `_READERS` / writer.ts's `_WRITERS` convention)
+// solely so tests can register a fake creator for the duration of one test.
+// Not for application use; the real consumer entry point is `createMachineConfig`.
+export const CREATE: Record<
+  string,
+  (version: string) => Result<MachineConfigFile, CapabilityError>
+> = {
+  '1.0': (version) => MachineConfigFileV1_0.create(version),
+};
+
 export async function openMachineConfig(
   path: string,
 ): Promise<Result<MachineConfigFile, CapabilityError>> {
@@ -48,7 +58,8 @@ export function createMachineConfig(
   version: string,
 ): Result<MachineConfigFile, CapabilityError> {
   const fv = version.trim() || '1.0';
-  if (fv !== '1.0') {
+  const creator = CREATE[fv];
+  if (!creator) {
     return err(
       capabilityError(
         'UnsupportedVersion',
@@ -56,7 +67,7 @@ export function createMachineConfig(
       ),
     );
   }
-  return MachineConfigFileV1_0.create(fv);
+  return creator(fv);
 }
 
 export function supportedFileVersions(): string[] {

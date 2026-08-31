@@ -46,6 +46,10 @@ _OPEN = {
     "1.0": MachineConfigFileV1_0.open,
 }
 
+_CREATE = {
+    "1.0": MachineConfigFileV1_0.create,
+}
+
 
 def open_machine_config(path: str | Path) -> Result[MachineConfigFileV1_0, CapabilityError]:
     try:
@@ -65,14 +69,15 @@ def open_machine_config(path: str | Path) -> Result[MachineConfigFileV1_0, Capab
 
 def create_machine_config(version: str = "1.0") -> Result[MachineConfigFileV1_0, CapabilityError]:
     fv = version.strip() or "1.0"
-    if fv == "1.0":
-        return MachineConfigFileV1_0.create(fv)
-    return err(
-        capability_error(
-            "UnsupportedVersion",
-            f'create() unsupported for File_Version "{fv}"',
+    creator = _CREATE.get(fv)
+    if creator is None:
+        return err(
+            capability_error(
+                "UnsupportedVersion",
+                f'create() unsupported for File_Version "{fv}"',
+            )
         )
-    )
+    return creator(fv)
 
 
 def supported_file_versions() -> list[str]:

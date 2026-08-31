@@ -590,3 +590,87 @@ func TestGetCorrectionDataWorksOnCreateBasedInstanceWithoutTouchingDisk(t *testi
 		t.Fatalf("expected NotPresent, got %#v", capErr)
 	}
 }
+
+// DISPATCH_REGISTRY_PLAN.md — proves ResolveOpen/ResolveCreate are genuinely
+// registry-driven, not a relocated hardcoded check. fileVersion() returns a
+// sentinel string; every other method is a trivial stub, since the tests
+// below only ever check identity via that sentinel.
+type fakeFile struct{}
+
+func (fakeFile) FileVersion() string { return "9.9-test-sentinel" }
+func (fakeFile) OpticalTrainCount() (int, *capabilities.Error) { return 0, nil }
+func (fakeFile) GetMeta() (machineconfig.MachineConfigMeta, *capabilities.Error) {
+	return machineconfig.MachineConfigMeta{}, nil
+}
+func (fakeFile) SetMeta(machineconfig.MachineConfigMeta, capabilities.SetMode) *capabilities.Error {
+	return nil
+}
+func (fakeFile) GetScanner(int) (machineconfig.Scanner, *capabilities.Error) {
+	return machineconfig.Scanner{}, nil
+}
+func (fakeFile) SetScanner(int, machineconfig.Scanner, capabilities.SetMode) *capabilities.Error {
+	return nil
+}
+func (fakeFile) GetOpcua() (machineconfig.OpcuaConfig, *capabilities.Error) {
+	return machineconfig.OpcuaConfig{}, nil
+}
+func (fakeFile) GetClearbox(int) (machineconfig.ClearBox, *capabilities.Error) {
+	return machineconfig.ClearBox{}, nil
+}
+func (fakeFile) GetCorrectionData(int) (*machineconfig.CorrectionData, *capabilities.Error) {
+	return nil, nil
+}
+func (fakeFile) GetInverseCorrectionData(int) (*machineconfig.CorrectionData, *capabilities.Error) {
+	return nil, nil
+}
+func (fakeFile) Save(string) *capabilities.Error { return nil }
+func (fakeFile) Close()                          {}
+
+func TestOpenRegistryRejectsUnregisteredVersion(t *testing.T) {
+	registry := capabilities.OpenRegistry{}
+	_, err := capabilities.ResolveOpen("9.9-nope", "unused-path.h5", registry)
+	if err == nil || err.Code != capabilities.ErrUnsupportedVersion {
+		t.Fatalf("expected UnsupportedVersion, got %#v", err)
+	}
+}
+
+func TestOpenRegistryDispatchesViaInjectedFile(t *testing.T) {
+	registry := capabilities.OpenRegistry{
+		"9.9-test": func(path string) (capabilities.File, *capabilities.Error) { return fakeFile{}, nil },
+	}
+	f, err := capabilities.ResolveOpen("9.9-test", "unused-path.h5", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.FileVersion() != "9.9-test-sentinel" {
+		t.Fatalf("expected sentinel, got %q — dispatch did not route to the fake", f.FileVersion())
+	}
+}
+
+func TestCreateRegistryRejectsUnregisteredVersion(t *testing.T) {
+	registry := capabilities.CreateRegistry{}
+	_, err := capabilities.ResolveCreate("9.9-nope", registry)
+	if err == nil || err.Code != capabilities.ErrUnsupportedVersion {
+		t.Fatalf("expected UnsupportedVersion, got %#v", err)
+	}
+}
+
+func TestCreateRegistryDispatchesViaInjectedFile(t *testing.T) {
+	registry := capabilities.CreateRegistry{
+		"9.9-test": func(version string) (capabilities.File, *capabilities.Error) { return fakeFile{}, nil },
+	}
+	f, err := capabilities.ResolveCreate("9.9-test", registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.FileVersion() != "9.9-test-sentinel" {
+		t.Fatalf("expected sentinel, got %q — dispatch did not route to the fake", f.FileVersion())
+	}
+}
+
+func TestSupportedFileVersionsReflectsRegistry(t *testing.T) {
+	versions := capabilities.SupportedFileVersions()
+	if len(versions) != 1 || versions[0] != "1.0" {
+		t.Fatalf("expected exactly [\"1.0\"], got %v", versions)
+	}
+}

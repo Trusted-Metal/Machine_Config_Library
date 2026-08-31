@@ -8,7 +8,10 @@ import {
   createMachineConfig,
   supportedFileVersions,
   isOk,
+  ok,
   SetMode,
+  CREATE,
+  type MachineConfigFile,
 } from '../src/capabilities/index.js';
 import { MachineConfigReader } from '../src/reader.js';
 import { MachineConfigWriter } from '../src/writer.js';
@@ -35,6 +38,26 @@ const FIXTURE_OPCUA_MISSING_REQUIRED = join(
 describe('capability facade (File_Version 1.0)', () => {
   it('lists supported versions', () => {
     expect(supportedFileVersions()).toContain('1.0');
+  });
+
+  it('createMachineConfig rejects an unregistered version', () => {
+    const result = createMachineConfig('2.0');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('UnsupportedVersion');
+  });
+
+  it('createMachineConfig dispatches via a registered version', () => {
+    // Proves CREATE is genuinely consulted (DISPATCH_REGISTRY_PLAN.md), not
+    // just a hardcoded "1.0" check that happens to still work.
+    const sentinel = { marker: 'sentinel' } as unknown as MachineConfigFile;
+    CREATE['9.9-test'] = () => ok(sentinel);
+    try {
+      const result = createMachineConfig('9.9-test');
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(sentinel);
+    } finally {
+      delete CREATE['9.9-test'];
+    }
   });
 
   it('open → getScanner fields match reader JSON', async () => {

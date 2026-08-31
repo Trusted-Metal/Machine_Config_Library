@@ -2,9 +2,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <highfive/H5File.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <memory>
 #include <set>
 #include <string>
 
@@ -38,6 +41,97 @@ static std::filesystem::path tmpPath(const std::string& tag) {
     return std::filesystem::temp_directory_path() /
            ("mc_cap_test_" + tag + ".h5");
 }
+
+// Writes only the root File_Version attribute — enough for peekFileVersion()
+// to route through the dispatcher, nothing else needed since these tests
+// never actually parse the file (DISPATCH_REGISTRY_PLAN.md's fake registry
+// entries never touch the path they're given).
+static std::filesystem::path writeFileVersionOnly(const std::string& version, const std::string& tag) {
+    auto path = tmpPath(tag);
+    HighFive::File f(path.string(),
+        HighFive::File::ReadWrite | HighFive::File::Create | HighFive::File::Truncate);
+    f.createAttribute<std::string>("File_Version", HighFive::DataSpace::Scalar()).write(version);
+    f.flush();
+    return path;
+}
+
+// ---------------------------------------------------------------------------
+// Fakes for DISPATCH_REGISTRY_PLAN.md's registry-injection tests. None of
+// these bodies are ever exercised — the tests only prove that a version
+// string routes to the fake's *type* via a locally-built registry, never the
+// real "1.0" adapter. Real values would be dead weight here.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+class FakeReaderAdapter : public machine_config::ReaderAdapter {
+public:
+    machine_config::MachineConfig parse() const override { return {}; }
+    machine_config::MachineConfig parseWithBinary() const override { return {}; }
+    std::string toJson(int, bool) const override { return "{}"; }
+    nlohmann::json getRawGroup(const std::string&) const override { return nlohmann::json::object(); }
+    machine_config::CorrectionData getCorrectionData(size_t) const override { return {}; }
+    machine_config::CorrectionData getInverseCorrectionData(size_t) const override { return {}; }
+    std::vector<uint8_t> getScanFieldCorrectionBytes(size_t) const override { return {}; }
+};
+
+class FakeWriterAdapter : public machine_config::WriterAdapter {
+public:
+    void write(std::filesystem::path) const override {}
+};
+
+class FakeMachineConfigFile : public machine_config::capabilities::IMachineConfigFile {
+public:
+    using Result = machine_config::capabilities::Result<void>;
+    template <typename T>
+    using ResultT = machine_config::capabilities::Result<T>;
+    using SetMode = machine_config::capabilities::SetMode;
+
+    std::string fileVersion() const override { return "9.9-test"; }
+    std::size_t opticalTrainCount() const override { return 0; }
+    machine_config::MachineConfigMeta getMeta() const override { return {}; }
+    Result setMeta(const machine_config::MachineConfigMeta&, SetMode) override { return Result::Ok(); }
+    machine_config::Machine getMachine() const override { return {}; }
+    Result setMachine(const machine_config::Machine&, SetMode) override { return Result::Ok(); }
+    ResultT<machine_config::OpticalTrain> getTrain(std::size_t) const override {
+        return ResultT<machine_config::OpticalTrain>::Err("NotPresent", "fake");
+    }
+    ResultT<machine_config::Scanner> getScanner(std::size_t) const override {
+        return ResultT<machine_config::Scanner>::Err("NotPresent", "fake");
+    }
+    Result setScanner(std::size_t, const machine_config::Scanner&, SetMode) override { return Result::Ok(); }
+    ResultT<machine_config::LightSource> getLightSource(std::size_t) const override {
+        return ResultT<machine_config::LightSource>::Err("NotPresent", "fake");
+    }
+    Result setLightSource(std::size_t, const machine_config::LightSource&, SetMode) override { return Result::Ok(); }
+    ResultT<machine_config::Collimator> getCollimator(std::size_t) const override {
+        return ResultT<machine_config::Collimator>::Err("NotPresent", "fake");
+    }
+    Result setCollimator(std::size_t, const machine_config::Collimator&, SetMode) override { return Result::Ok(); }
+    ResultT<machine_config::ScannerCard> getScannerCard(std::size_t) const override {
+        return ResultT<machine_config::ScannerCard>::Err("NotPresent", "fake");
+    }
+    Result setScannerCard(std::size_t, const machine_config::ScannerCard&, SetMode) override { return Result::Ok(); }
+    bool hasOptionalComponents(std::size_t) const override { return false; }
+    ResultT<machine_config::ClearBox> getClearbox(std::size_t) const override {
+        return ResultT<machine_config::ClearBox>::Err("NotPresent", "fake");
+    }
+    Result setClearbox(std::size_t, const machine_config::ClearBox&, SetMode) override { return Result::Ok(); }
+    ResultT<machine_config::CorrectionData> getCorrectionData(std::size_t) const override {
+        return ResultT<machine_config::CorrectionData>::Err("NotPresent", "fake");
+    }
+    ResultT<machine_config::CorrectionData> getInverseCorrectionData(std::size_t) const override {
+        return ResultT<machine_config::CorrectionData>::Err("NotPresent", "fake");
+    }
+    ResultT<machine_config::OpcuaConfig> getOpcua() const override {
+        return ResultT<machine_config::OpcuaConfig>::Err("NotPresent", "fake");
+    }
+    Result setOpcua(const machine_config::OpcuaConfig&, SetMode) override { return Result::Ok(); }
+    Result save(const std::string* = nullptr) override { return Result::Ok(); }
+    void close() override {}
+};
+
+}  // namespace
 
 // CorrectionData has no operator==; IEEE 754 NaN != NaN would make a naive
 // element-wise == fail even on bit-for-bit identical real correction grids
@@ -382,4 +476,85 @@ TEST_CASE("CapabilityOpenMachineConfigDispatch") {
 TEST_CASE("CapabilitySupportedFileVersionsListsV1_0") {
     auto versions = supportedFileVersions();
     REQUIRE(std::find(versions.begin(), versions.end(), std::string("1.0")) != versions.end());
+}
+
+// ---------------------------------------------------------------------------
+// DISPATCH_REGISTRY_PLAN.md — registry-injection tests. Each proves the
+// mechanism is genuinely data-driven (unregistered version -> real error,
+// registered version -> the exact constructor registered for it) without
+// mutating any shared/global state — a locally-built registry is passed
+// straight into the registry-parameterized resolver.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ReaderRegistryRejectsUnregisteredVersion") {
+    REQUIRE_THROWS_AS(
+        machine_config::resolveReader("9.9-nope", REF, machine_config::productionReaderRegistry()),
+        std::runtime_error);
+}
+
+TEST_CASE("ReaderRegistryDispatchesViaInjectedTestAdapter") {
+    auto registry = machine_config::productionReaderRegistry();
+    registry["9.9-test"] = [](const std::filesystem::path&) -> std::unique_ptr<machine_config::ReaderAdapter> {
+        return std::make_unique<FakeReaderAdapter>();
+    };
+    auto adapter = machine_config::resolveReader("9.9-test", REF, registry);
+    REQUIRE(dynamic_cast<FakeReaderAdapter*>(adapter.get()) != nullptr);
+}
+
+TEST_CASE("WriterRegistryRejectsUnregisteredVersion") {
+    machine_config::MachineConfig cfg;
+    REQUIRE_THROWS_AS(
+        machine_config::resolveWriter("9.9-nope", cfg, machine_config::productionWriterRegistry()),
+        std::runtime_error);
+}
+
+TEST_CASE("WriterRegistryDispatchesViaInjectedTestAdapter") {
+    auto registry = machine_config::productionWriterRegistry();
+    registry["9.9-test"] = [](const machine_config::MachineConfig&) -> std::unique_ptr<machine_config::WriterAdapter> {
+        return std::make_unique<FakeWriterAdapter>();
+    };
+    machine_config::MachineConfig cfg;
+    auto adapter = machine_config::resolveWriter("9.9-test", cfg, registry);
+    REQUIRE(dynamic_cast<FakeWriterAdapter*>(adapter.get()) != nullptr);
+}
+
+TEST_CASE("CapabilityOpenRejectsUnregisteredVersion") {
+    auto out = writeFileVersionOnly("9.9-nope", "open_unreg");
+    auto result = openMachineConfig(out);
+    REQUIRE_FALSE(result.ok());
+    REQUIRE(result.errorCode() == "UnsupportedVersion");
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityOpenDispatchesViaInjectedRegistryEntry") {
+    using machine_config::capabilities::IMachineConfigFile;
+    using machine_config::capabilities::Result;
+    auto registry = machine_config::capabilities::productionOpenRegistry();
+    registry["9.9-test"] = [](const std::filesystem::path&) -> Result<std::shared_ptr<IMachineConfigFile>> {
+        return Result<std::shared_ptr<IMachineConfigFile>>::Ok(std::make_shared<FakeMachineConfigFile>());
+    };
+
+    auto out = writeFileVersionOnly("9.9-test", "open_inject");
+    auto result = machine_config::capabilities::openMachineConfigWithRegistry(out, registry);
+    REQUIRE(result.ok());
+    REQUIRE(dynamic_cast<FakeMachineConfigFile*>(result.value().get()) != nullptr);
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityCreateRejectsUnregisteredVersion") {
+    auto result = createMachineConfig("9.9-nope");
+    REQUIRE_FALSE(result.ok());
+    REQUIRE(result.errorCode() == "UnsupportedVersion");
+}
+
+TEST_CASE("CapabilityCreateDispatchesViaInjectedRegistryEntry") {
+    using machine_config::capabilities::IMachineConfigFile;
+    using machine_config::capabilities::Result;
+    auto registry = machine_config::capabilities::productionCreateRegistry();
+    registry["9.9-test"] = [](const std::string&) -> Result<std::shared_ptr<IMachineConfigFile>> {
+        return Result<std::shared_ptr<IMachineConfigFile>>::Ok(std::make_shared<FakeMachineConfigFile>());
+    };
+    auto result = machine_config::capabilities::createMachineConfigWithRegistry("9.9-test", registry);
+    REQUIRE(result.ok());
+    REQUIRE(dynamic_cast<FakeMachineConfigFile*>(result.value().get()) != nullptr);
 }

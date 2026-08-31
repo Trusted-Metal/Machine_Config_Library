@@ -35,3 +35,5 @@ python/build/
 # Editor
 .vscode/
 *.egg-info/
+
+file_testing/

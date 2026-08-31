@@ -12,6 +12,7 @@ use super::hdf5::{RawCalibrationPoint, RawEquationConstant};
 use super::layout;
 use crate::error::Result;
 use crate::models::*;
+use crate::writer::WriterAdapter;
 
 // ---------------------------------------------------------------------------
 // Write helpers — exact inverses of the reader helpers (§3.11)
@@ -553,6 +554,22 @@ impl<'a> Hdf5WriterV1_0<'a> {
             }
         }
         Ok(())
+    }
+}
+
+// v1.0's implementation of the WriterAdapter contract — this impl is
+// necessarily version-specific (it's what crate::writer::MachineConfigWriter
+// dispatches TO for File_Version "1.0", per DISPATCH_REGISTRY_PLAN.md's
+// registry in writer.rs). MachineConfigWriter itself stays version-agnostic:
+// it only ever touches `Box<dyn WriterAdapter>`, never `Hdf5WriterV1_0` by
+// name. A future v1.1 gets its own separate `impl WriterAdapter for
+// Hdf5WriterV1_1`, registered alongside this one. Delegates to the inherent
+// `write<P: AsRef<Path>>` above — Rust always prefers an inherent method over
+// a trait method of the same name on the same type (here `path: &Path`
+// satisfies `P: AsRef<Path>` via the reflexive impl), so this can't recurse.
+impl<'a> WriterAdapter for Hdf5WriterV1_0<'a> {
+    fn write(&self, path: &Path) -> Result<()> {
+        self.write(path)
     }
 }
 
