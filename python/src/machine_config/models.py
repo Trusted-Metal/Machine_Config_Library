@@ -76,6 +76,27 @@ class CalibrationPoint:
 
 
 @dataclass
+class PowerCharacterization:
+    """v1.1 addition (Changes 3/4): a structured algorithm + equation +
+    constants + characterization points describing a power conversion.
+    Shared, identical dataclass for both ``ClearBox.power_characterization``
+    (ClearBox's Volts->Watts fit; migrated data has real
+    ``derivation_equation_constants`` but zero ``characterization_points``)
+    and ``LightSource.power_characterization`` (Light_Source's Volts->Watts
+    fit; migrated data is the inverse — zero ``derivation_equation_constants``,
+    real ``characterization_points``) — same *kind* of thing at two different
+    HDF5 paths, not the same instance. See ``docs/migrations/v1_0_to_v1_1.md``
+    Changes 3/4 for the full derivation rules.
+    """
+    algorithm_type: Optional[str]
+    algorithm_equation: Optional[str]
+    input_type: Optional[str]
+    units_derived_quantity: Optional[str]
+    derivation_equation_constants: list[EquationConstant]
+    characterization_points: list[CalibrationPoint]
+
+
+@dataclass
 class SynchronousSensor:
     """A synchronous sensor attached to a ClearBox. HDF5 source: one
     sub-group under .../ClearBox/Synchronous_Sensors/<key>/ — see
@@ -132,6 +153,11 @@ class ClearBox:
     # Synchronous_Sensors group on disk is represented identically to an
     # empty dict here — there is no separate "absent" state to track.
     synchronous_sensors: dict[str, SynchronousSensor]
+    # v1.1 addition (Change 1); None for v1.0 files, no on-disk source there.
+    firmware_version: Optional[str] = None
+    # v1.1 addition (Change 3); supersedes volts_to_watts_algorithm/_params,
+    # which stay populated for v1.0 files.
+    power_characterization: Optional[PowerCharacterization] = None
 
 
 @dataclass
@@ -259,6 +285,9 @@ class LightSource:
     power_bit_resolution_unit: Optional[str]
     watts_to_volts_algorithm: Optional[str]
     watts_to_volts_params: Optional[str]
+    # v1.1 addition (Change 4); supersedes watts_to_volts_algorithm/_params,
+    # which stay populated for v1.0 files.
+    power_characterization: Optional[PowerCharacterization] = None
 
 
 @dataclass

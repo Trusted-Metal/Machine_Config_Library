@@ -31,6 +31,7 @@ type (
 	SynchronousSensor       = models.SynchronousSensor
 	EquationConstant        = models.EquationConstant
 	CalibrationPoint        = models.CalibrationPoint
+	PowerCharacterization   = models.PowerCharacterization
 	ScanFieldCorrectionFile = models.ScanFieldCorrectionFile
 	OpcuaConfig             = models.OpcuaConfig
 	OpcuaClientConfig       = models.OpcuaClientConfig

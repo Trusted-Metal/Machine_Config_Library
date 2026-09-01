@@ -21,6 +21,7 @@ from machine_config.capabilities.generated import SetMode
 from machine_config.capabilities.merge import apply_set_mode, snapshot
 from machine_config.capabilities.result import Result, err, ok
 from machine_config.capabilities.v1_0 import MachineConfigFileV1_0
+from machine_config.capabilities.v1_1 import MachineConfigFileV1_1
 
 __all__ = [
     "CapabilityError",
@@ -33,6 +34,7 @@ __all__ = [
     "err",
     "SetMode",
     "MachineConfigFileV1_0",
+    "MachineConfigFileV1_1",
     "open_machine_config",
     "create_machine_config",
     "supported_file_versions",
@@ -44,10 +46,12 @@ __all__ = [
 
 _OPEN = {
     "1.0": MachineConfigFileV1_0.open,
+    "1.1": MachineConfigFileV1_1.open,
 }
 
 _CREATE = {
     "1.0": MachineConfigFileV1_0.create,
+    "1.1": MachineConfigFileV1_1.create,
 }
 
 

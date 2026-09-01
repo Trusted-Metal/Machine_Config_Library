@@ -11,7 +11,7 @@ language, not "re-derive how this particular language's ad-hoc dispatch works." 
 byte-identical before and after.
 
 **Explicitly not part of this work:** any of v1.1's actual schema/content changes (see
-`file_testing/v1_0_to_v1_1.md` and `V1_1_IMPLEMENTATION_PLAN.md`). This plan only changes
+`docs/migrations/v1_0_to_v1_1.md` and `V1_1_IMPLEMENTATION_PLAN.md`). This plan only changes
 *how* a version is looked up, never what it resolves to.
 
 ---

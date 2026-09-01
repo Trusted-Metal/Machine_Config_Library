@@ -216,7 +216,37 @@
               "power_bit_resolution":     { "type": ["number", "null"] },
               "power_bit_resolution_unit":{ "type": ["string", "null"] },
               "watts_to_volts_algorithm": { "type": ["string", "null"] },
-              "watts_to_volts_params":    { "type": ["string", "null"] }
+              "watts_to_volts_params":    { "type": ["string", "null"] },
+              "power_characterization": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                  "algorithm_type":         { "type": ["string", "null"] },
+                  "algorithm_equation":     { "type": ["string", "null"] },
+                  "input_type":             { "type": ["string", "null"] },
+                  "units_derived_quantity": { "type": ["string", "null"] },
+                  "derivation_equation_constants": {
+                    "type": ["array", "null"],
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name":  { "type": "string" },
+                        "value": { "type": "number" }
+                      }
+                    }
+                  },
+                  "characterization_points": {
+                    "type": ["array", "null"],
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "input_value":  { "type": "number" },
+                        "output_value": { "type": "number" }
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "collimator": {
@@ -286,6 +316,37 @@
                   "volts_to_watts_params":         { "type": ["string", "null"] },
                   "correction_grid_domain_shape":  { "type": ["string", "null"] },
                   "inverse_grid_domain_shape":     { "type": ["string", "null"] },
+                  "firmware_version":              { "type": ["string", "null"] },
+                  "power_characterization": {
+                    "type": ["object", "null"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "algorithm_type":         { "type": ["string", "null"] },
+                      "algorithm_equation":     { "type": ["string", "null"] },
+                      "input_type":             { "type": ["string", "null"] },
+                      "units_derived_quantity": { "type": ["string", "null"] },
+                      "derivation_equation_constants": {
+                        "type": ["array", "null"],
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name":  { "type": "string" },
+                            "value": { "type": "number" }
+                          }
+                        }
+                      },
+                      "characterization_points": {
+                        "type": ["array", "null"],
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "input_value":  { "type": "number" },
+                            "output_value": { "type": "number" }
+                          }
+                        }
+                      }
+                    }
+                  },
                   "synchronous_sensors": {
                     "type": "object",
                     "description": "Name-keyed collection of synchronous sensors attached to this ClearBox. The key is a free-form label chosen by the file's author (e.g. \"Oxygen Sensor\") and carries no schema meaning of its own.",

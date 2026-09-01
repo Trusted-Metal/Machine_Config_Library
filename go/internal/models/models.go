@@ -266,6 +266,11 @@ type LightSource struct {
 	PowerBitResolutionUnit *string  `json:"power_bit_resolution_unit"`
 	WattsToVoltsAlgorithm  *string  `json:"watts_to_volts_algorithm"`
 	WattsToVoltsParams     *string  `json:"watts_to_volts_params"`
+	// PowerCharacterization: v1.1 addition (Change 4); supersedes
+	// WattsToVoltsAlgorithm/Params, which stay populated for v1.0 files.
+	// omitempty for the same byte-identical-output reasoning as
+	// ClearBox.SynchronousSensors.
+	PowerCharacterization *PowerCharacterization `json:"power_characterization,omitempty"`
 }
 
 // Collimator holds collimator hardware metadata.
@@ -322,6 +327,13 @@ type ClearBox struct {
 	// not OpcuaConfig.Triggers (which is always present, even as {}) —
 	// deliberately different from that precedent.
 	SynchronousSensors map[string]SynchronousSensor `json:"synchronous_sensors,omitempty"`
+	// FirmwareVersion: v1.1 addition (Change 1); nil for v1.0 files, no
+	// on-disk source there. omitempty for the same byte-identical-output
+	// reasoning as SynchronousSensors above.
+	FirmwareVersion *string `json:"firmware_version,omitempty"`
+	// PowerCharacterization: v1.1 addition (Change 3); supersedes
+	// VoltsToWattsAlgorithm/Params, which stay populated for v1.0 files.
+	PowerCharacterization *PowerCharacterization `json:"power_characterization,omitempty"`
 }
 
 // EquationConstant is one named constant used to derive an equation (e.g.
@@ -342,6 +354,25 @@ type EquationConstant struct {
 type CalibrationPoint struct {
 	InputValue  float64 `json:"input_value"`
 	OutputValue float64 `json:"output_value"`
+}
+
+// PowerCharacterization is a v1.1 addition (Changes 3/4): a structured
+// algorithm + equation + constants + characterization points describing a
+// power conversion. Shared, identical struct for both
+// ClearBox.PowerCharacterization (ClearBox's Volts->Watts fit; migrated data
+// has real DerivationEquationConstants but zero CharacterizationPoints) and
+// LightSource.PowerCharacterization (Light_Source's Volts->Watts fit;
+// migrated data is the inverse — zero DerivationEquationConstants, real
+// CharacterizationPoints) — same kind of thing at two different HDF5 paths,
+// not the same instance. See docs/migrations/v1_0_to_v1_1.md Changes 3/4 for
+// the full derivation rules.
+type PowerCharacterization struct {
+	AlgorithmType               *string            `json:"algorithm_type"`
+	AlgorithmEquation           *string            `json:"algorithm_equation"`
+	InputType                   *string            `json:"input_type"`
+	UnitsDerivedQuantity        *string            `json:"units_derived_quantity"`
+	DerivationEquationConstants []EquationConstant `json:"derivation_equation_constants"`
+	CharacterizationPoints      []CalibrationPoint `json:"characterization_points"`
 }
 
 // SynchronousSensor holds one Synchronous Sensor record. The map key (on

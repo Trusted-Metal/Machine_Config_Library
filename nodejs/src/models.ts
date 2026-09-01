@@ -82,6 +82,11 @@ export interface LightSource {
   power_bit_resolution_unit: string | null;
   watts_to_volts_algorithm: string | null;
   watts_to_volts_params: string | null;
+  /** v1.1 addition (Change 4); supersedes watts_to_volts_algorithm/_params,
+   * which stay populated for v1.0 files. Omitted entirely (not `null`) when
+   * absent — same reasoning as `ClearBox.synchronous_sensors`: keeps v1.0
+   * output byte-identical to before this field existed. */
+  power_characterization?: PowerCharacterization | null;
 }
 
 export interface Collimator {
@@ -123,6 +128,26 @@ export interface EquationConstant {
 export interface CalibrationPoint {
   input_value: number;
   output_value: number;
+}
+
+/**
+ * v1.1 addition (Changes 3/4): a structured algorithm + equation + constants
+ * + characterization points describing a power conversion. Shared, identical
+ * interface for both `ClearBox.power_characterization` (ClearBox's
+ * Volts->Watts fit; migrated data has real `derivation_equation_constants`
+ * but zero `characterization_points`) and `LightSource.power_characterization`
+ * (Light_Source's Volts->Watts fit; migrated data is the inverse — zero
+ * `derivation_equation_constants`, real `characterization_points`) — same
+ * *kind* of thing at two different HDF5 paths, not the same instance. See
+ * `docs/migrations/v1_0_to_v1_1.md` Changes 3/4 for the full derivation rules.
+ */
+export interface PowerCharacterization {
+  algorithm_type: string | null;
+  algorithm_equation: string | null;
+  input_type: string | null;
+  units_derived_quantity: string | null;
+  derivation_equation_constants: EquationConstant[];
+  characterization_points: CalibrationPoint[];
 }
 
 /**
@@ -198,6 +223,14 @@ export interface ClearBox {
    * present, even as `{}`) — deliberately different from that precedent.
    */
   synchronous_sensors?: Record<string, SynchronousSensor>;
+  /** v1.1 addition (Change 1); omitted entirely (not `null`) when absent —
+   * always true for v1.0 files, no on-disk source there. Same reasoning as
+   * `synchronous_sensors` above: keeps v1.0 output byte-identical. */
+  firmware_version?: string | null;
+  /** v1.1 addition (Change 3); supersedes volts_to_watts_algorithm/_params,
+   * which stay populated for v1.0 files. Omitted when absent, same reasoning
+   * as `firmware_version` above. */
+  power_characterization?: PowerCharacterization | null;
 }
 
 export interface OptionalComponents {

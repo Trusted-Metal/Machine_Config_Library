@@ -4,7 +4,8 @@
 > The changes are synthetic and exist solely to verify the adapter migration architecture.
 > They do not represent a planned schema change.
 >
-> When a real v1.1 ships, create `v1_0_to_v1_1.md` in this folder following the same format.
+> The real v1.1 has since shipped — see [`v1_0_to_v1_1.md`](v1_0_to_v1_1.md) in this
+> folder, following the same format.
 
 ---
 

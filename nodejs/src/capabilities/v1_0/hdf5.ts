@@ -338,6 +338,7 @@ function parseLightSource(grp: h5wasm.Group): LightSource {
     power_bit_resolution_unit: attrStr(a, "Power_Bit_Resolution_unit"),
     watts_to_volts_algorithm: attrStr(a, "Watts_To_Volts_Algorithm"),
     watts_to_volts_params: attrStr(a, "Watts_To_Volts_Params"),
+    // power_characterization intentionally omitted — no v1.0 on-disk source.
   };
 }
 
@@ -463,6 +464,8 @@ function parseClearBox(grp: h5wasm.Group, includeBinary: boolean): ClearBox {
     correction_grid_domain_shape: attrStr(a, "Correction_Grid_Domain_Shape"),
     inverse_grid_domain_shape: attrStr(a, "Inverse_Grid_Domain_Shape"),
     synchronous_sensors: parseSynchronousSensors(grp),
+    // firmware_version / power_characterization intentionally omitted — no
+    // v1.0 on-disk source.
   };
 
   if (includeBinary) {

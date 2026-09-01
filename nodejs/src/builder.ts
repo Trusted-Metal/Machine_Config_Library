@@ -131,6 +131,9 @@ function mockClearBox(index: number): ClearBox {
     volts_to_watts_params: '50.0,100.0',
     correction_grid_domain_shape: null,
     inverse_grid_domain_shape: null,
+    // v1.1 fields (firmware_version, power_characterization) intentionally
+    // omitted — not populated by the mock builder, same reasoning as
+    // synchronous_sensors; only real v1.1 fixtures exercise these.
   };
 }
 
@@ -205,6 +208,8 @@ function mockTrain(
     power_bit_resolution_unit: 'bits',
     watts_to_volts_algorithm: 'LINEAR',
     watts_to_volts_params: '[1,100,10,1000]',
+    // power_characterization intentionally omitted — not populated by the
+    // mock builder, only real v1.1 fixtures exercise this field.
   };
 
   const collimator: Collimator = {

@@ -32,6 +32,11 @@ from machine_config.models import (
     nested_to_array,
 )
 
+from machine_config.power_characterization import (
+    backward_flat_fields_coefficients,
+    backward_flat_fields_points,
+)
+
 from . import layout
 from .hdf5 import (
     EQUATION_CONSTANT_NAME_MAX_BYTES,
@@ -242,8 +247,15 @@ class Hdf5WriterV1_0:
         # Power_Bit_Resolution is stored as String type in real HDF5 files
         grp.attrs["Power_Bit_Resolution"]      = self._s(ls.power_bit_resolution)
         grp.attrs["Power_Bit_Resolution_unit"] = ls.power_bit_resolution_unit or "bits"
-        grp.attrs["Watts_To_Volts_Algorithm"] = self._s(ls.watts_to_volts_algorithm)
-        grp.attrs["Watts_To_Volts_Params"]    = self._s(ls.watts_to_volts_params)
+        # Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native flat fields
+        # if present; only derive from power_characterization as a fallback
+        # when there's nothing native to write (e.g. a v1.1-sourced model).
+        # Never the other way around — a present native value always wins.
+        algorithm, params = ls.watts_to_volts_algorithm, ls.watts_to_volts_params
+        if algorithm is None and params is None and ls.power_characterization is not None:
+            algorithm, params = backward_flat_fields_points(ls.power_characterization)
+        grp.attrs["Watts_To_Volts_Algorithm"] = self._s(algorithm)
+        grp.attrs["Watts_To_Volts_Params"]    = self._s(params)
 
     def _write_collimator(self, grp: h5py.Group, c: Collimator) -> None:
         grp.attrs["Manufacturer"]  = c.manufacturer
@@ -275,8 +287,15 @@ class Hdf5WriterV1_0:
         grp.attrs["Video_Output"]         = self._s(cb.video_output)
         grp.attrs["Show_Console"]         = self._b(cb.show_console)
         grp.attrs["Software_Trigger_Delay"]    = self._i(cb.software_trigger_delay)
-        grp.attrs["Volts_To_Watts_Algorithm"]  = self._s(cb.volts_to_watts_algorithm)
-        grp.attrs["Volts_To_Watts_Params"]     = self._s(cb.volts_to_watts_params)
+        # Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native flat fields
+        # if present; only derive from power_characterization as a fallback
+        # when there's nothing native to write (e.g. a v1.1-sourced model).
+        # Never the other way around — a present native value always wins.
+        algorithm, params = cb.volts_to_watts_algorithm, cb.volts_to_watts_params
+        if algorithm is None and params is None and cb.power_characterization is not None:
+            algorithm, params = backward_flat_fields_coefficients(cb.power_characterization)
+        grp.attrs["Volts_To_Watts_Algorithm"]  = self._s(algorithm)
+        grp.attrs["Volts_To_Watts_Params"]     = self._s(params)
         grp.attrs["Correction_Grid_Domain_Shape"]  = self._s(cb.correction_grid_domain_shape)
         grp.attrs["Inverse_Grid_Domain_Shape"]     = self._s(cb.inverse_grid_domain_shape)
         grp.create_dataset(

@@ -196,6 +196,39 @@ One language can do less than the others, without necessarily producing wrong ou
       bundled schema copy and no validation feature at all. Pre-existing, unrelated to
       versioning, but a real equal-capability gap.
 
+- [ ] **Node's float formatting for `power_characterization` params doesn't match the
+      other 4 languages' Python-mimicking convention.** Python's `str(c.value)`/
+      `str(p.input_value)` (`power_characterization.py:212,232-233`) naturally prints a
+      decimal point for whole numbers (`"1.0"`) because that's just how Python renders
+      floats. Rust, C++, and Go don't get that for free, so each deliberately wrote a
+      small helper to reproduce it — `format_f64_like_python`
+      (`rust/src/power_characterization.rs:150`), `pcFormatDoubleForCsv`
+      (`cpp/include/machine_config/power_characterization.hpp`), `formatPCFloat`
+      (`go/internal/models/power_characterization.go`). Node's `powerCharacterization.ts`
+      calls plain `String(value)` (`nodejs/src/powerCharacterization.ts:214,233`)
+      instead, which drops the decimal point on whole numbers (`"1"`, not `"1.0"`).
+      Confirmed pre-existing, not introduced by Phase 2 clean-up — it matches Node's
+      existing float-formatting convention used elsewhere in the codebase, not something
+      new to this module; deliberately preserved rather than silently changed when
+      `powerCharacterization.ts` was written (`V1_1_IMPLEMENTATION_PLAN.md`'s Node
+      Phase 2 write-up).
+  - **Impact:** produces a different, though still schema-valid, on-disk string for the
+    same in-memory value — no crash, no schema-validation failure (the schema types the
+    field as a plain string, no format constraint). The real risk is silent: any future
+    byte-level cross-language golden-file comparison of `Watts_To_Volts_Params`/
+    `Volts_To_Watts_Params`-derived CSVs (the same pattern `matches_python_golden_file`-
+    style tests already use elsewhere) would show a spurious mismatch for whole-number
+    values written by Node vs. any other language.
+  - **Scope note:** a real fix is *not* a one-file patch to `powerCharacterization.ts` —
+    Node's plain `String(value)` is used for every other float field across the
+    codebase too, so decimal-forcing only the new v1.1 module would introduce a fresh
+    *internal* inconsistency (new fields get `"1.0"`, existing v1.0 fields keep `"1"`)
+    that's arguably worse than today's uniform-but-cross-language-inconsistent state.
+    Closing this out for real means porting the helper repo-wide across Node's writers,
+    touching existing v1.0 float-serialization call sites and their golden-file/
+    round-trip tests — bigger and riskier than the discovery context, deliberately not
+    undertaken as part of Phase 2 clean-up.
+
 ---
 
 ## Tier 3 — Documentation/tracking debt

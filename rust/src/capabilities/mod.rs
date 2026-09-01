@@ -8,12 +8,14 @@ pub mod generated;
 pub mod merge;
 pub mod result;
 pub mod v1_0;
+pub mod v1_1;
 
 pub use errors::CapabilityError;
 pub use generated::{MachineConfigFile, SetMode};
 pub use merge::apply_set_mode;
 pub use result::Result;
 pub use v1_0::MachineConfigFileV1_0;
+pub use v1_1::MachineConfigFileV1_1;
 
 use crate::capabilities::v1_0::hdf5::peek_file_version;
 use std::collections::HashMap;
@@ -31,9 +33,14 @@ fn open_v1_0(path: &Path) -> Result<Box<dyn MachineConfigFile>, CapabilityError>
     MachineConfigFileV1_0::open(path).map(|f| Box::new(f) as Box<dyn MachineConfigFile>)
 }
 
+fn open_v1_1(path: &Path) -> Result<Box<dyn MachineConfigFile>, CapabilityError> {
+    MachineConfigFileV1_1::open(path).map(|f| Box::new(f) as Box<dyn MachineConfigFile>)
+}
+
 static PRODUCTION_OPEN_REGISTRY: LazyLock<OpenRegistry> = LazyLock::new(|| {
     let mut m: OpenRegistry = HashMap::new();
     m.insert("1.0", open_v1_0 as OpenFn);
+    m.insert("1.1", open_v1_1 as OpenFn);
     m
 });
 
@@ -68,9 +75,14 @@ fn create_v1_0(version: &str) -> Result<Box<dyn MachineConfigFile>, CapabilityEr
     MachineConfigFileV1_0::create(version).map(|f| Box::new(f) as Box<dyn MachineConfigFile>)
 }
 
+fn create_v1_1(version: &str) -> Result<Box<dyn MachineConfigFile>, CapabilityError> {
+    MachineConfigFileV1_1::create(version).map(|f| Box::new(f) as Box<dyn MachineConfigFile>)
+}
+
 static PRODUCTION_CREATE_REGISTRY: LazyLock<CreateRegistry> = LazyLock::new(|| {
     let mut m: CreateRegistry = HashMap::new();
     m.insert("1.0", create_v1_0 as CreateFn);
+    m.insert("1.1", create_v1_1 as CreateFn);
     m
 });
 
@@ -256,6 +268,10 @@ mod tests {
 
     #[test]
     fn supported_file_versions_reflects_production_registry() {
-        assert_eq!(supported_file_versions(), vec!["1.0"]);
+        // HashMap iteration order is not guaranteed, so sort both sides
+        // before comparing rather than asserting an exact-order Vec.
+        let mut versions = supported_file_versions();
+        versions.sort();
+        assert_eq!(versions, vec!["1.0", "1.1"]);
     }
 }

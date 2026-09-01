@@ -61,9 +61,11 @@ REPO = Path(__file__).resolve().parent.parent
 SCHEMA_FILE = REPO / "schema" / "machine_config_v1.schema.json"
 
 FIXTURES: dict[str, Path] = {
-    "reference":       REPO / "fixtures" / "reference_config.h5",
-    "reference_opcua": REPO / "fixtures" / "reference_config_opcua.h5",
-    "synthetic":       REPO / "fixtures" / "synthetic_2laser.h5",
+    "reference":         REPO / "fixtures" / "reference_config.h5",
+    "reference_opcua":   REPO / "fixtures" / "reference_config_opcua.h5",
+    "synthetic":         REPO / "fixtures" / "synthetic_2laser.h5",
+    "v1_1":              REPO / "fixtures" / "reference_config_v1_1.h5",
+    "v1_1_migrated":     REPO / "fixtures" / "reference_config_v1_1_migrated.h5",
 }
 
 _EXT = ".exe" if platform.system() == "Windows" else ""

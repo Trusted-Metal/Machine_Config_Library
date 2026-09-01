@@ -3,7 +3,9 @@ package capabilities_test
 import (
 	"math"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -670,7 +672,9 @@ func TestCreateRegistryDispatchesViaInjectedFile(t *testing.T) {
 
 func TestSupportedFileVersionsReflectsRegistry(t *testing.T) {
 	versions := capabilities.SupportedFileVersions()
-	if len(versions) != 1 || versions[0] != "1.0" {
-		t.Fatalf("expected exactly [\"1.0\"], got %v", versions)
+	sort.Strings(versions)
+	want := []string{"1.0", "1.1"}
+	if !reflect.DeepEqual(versions, want) {
+		t.Fatalf("expected %v, got %v", want, versions)
 	}
 }

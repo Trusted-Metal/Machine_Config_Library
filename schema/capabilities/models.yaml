@@ -1,6 +1,13 @@
 # Stable facade models — field names are frozen for File_Version-agnostic apps.
 # Each node may carry `extra` for additional attributes.
 # Aligns with canonical JSON / nodejs/src/models.ts.
+#
+# Scope note: only flat scalar fields are listed per node — there's no
+# array/nested-object type here. Compound/collection fields on the real
+# StableModel (SynchronousSensor and its EquationConstant/CalibrationPoint
+# rows; v1.1's PowerCharacterization, which nests the same two) are
+# intentionally left out for the same reason SynchronousSensor already was —
+# not yet representable in this file's shape.
 
 models:
   Meta:
@@ -138,6 +145,7 @@ models:
       - { id: volts_to_watts_params, type: string, nullable: true }
       - { id: correction_grid_domain_shape, type: string, nullable: true }
       - { id: inverse_grid_domain_shape, type: string, nullable: true }
+      - { id: firmware_version, type: string, nullable: true } # v1.1 (Change 1); no v1.0 source
 
   ScanFieldCorrectionFile:
     extra: true

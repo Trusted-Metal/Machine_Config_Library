@@ -13,6 +13,7 @@ export {
   createMachineConfig,
   supportedFileVersions,
   MachineConfigFileV1_0,
+  MachineConfigFileV1_1,
   SetMode,
   ok,
   err,

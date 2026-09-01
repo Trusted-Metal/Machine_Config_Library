@@ -660,6 +660,8 @@ impl Hdf5AdapterV1_0 {
             )?,
             watts_to_volts_algorithm: read_str(grp, "Watts_To_Volts_Algorithm")?,
             watts_to_volts_params: read_str(grp, "Watts_To_Volts_Params")?,
+            // v1.1 field; no v1.0 on-disk source.
+            power_characterization: None,
         })
     }
 
@@ -730,6 +732,9 @@ impl Hdf5AdapterV1_0 {
             correction_grid_domain_shape: read_str(grp, "Correction_Grid_Domain_Shape")?,
             inverse_grid_domain_shape: read_str(grp, "Inverse_Grid_Domain_Shape")?,
             synchronous_sensors,
+            // v1.1 fields; no v1.0 on-disk source.
+            firmware_version: None,
+            power_characterization: None,
         })
     }
 

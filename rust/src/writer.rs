@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::capabilities::v1_0::writer::Hdf5WriterV1_0;
+use crate::capabilities::v1_1::writer::Hdf5WriterV1_1;
 use crate::error::{MachineConfigError, Result};
 use crate::models::MachineConfig;
 
@@ -31,9 +32,14 @@ fn new_v1_0_writer(config: &MachineConfig) -> Box<dyn WriterAdapter + '_> {
     Box::new(Hdf5WriterV1_0::new(config))
 }
 
+fn new_v1_1_writer(config: &MachineConfig) -> Box<dyn WriterAdapter + '_> {
+    Box::new(Hdf5WriterV1_1::new(config))
+}
+
 static PRODUCTION_WRITER_REGISTRY: LazyLock<WriterRegistry> = LazyLock::new(|| {
     let mut m: WriterRegistry = HashMap::new();
     m.insert("1.0", new_v1_0_writer as ConstructFn);
+    m.insert("1.1", new_v1_1_writer as ConstructFn);
     m
 });
 
@@ -54,22 +60,60 @@ pub fn resolve_writer<'a>(
 
 /// Serialises a [`MachineConfig`] to a machine-config HDF5 file.
 ///
-/// Peeks `File_Version` on the model and routes to that version's adapter.
+/// Peeks `File_Version` on the model and routes to that version's adapter,
+/// unless [`Self::with_target_version`] was used to override it.
 pub struct MachineConfigWriter<'a> {
     config: &'a MachineConfig,
+    target_version: Option<String>,
 }
 
 impl<'a> MachineConfigWriter<'a> {
     pub fn new(config: &'a MachineConfig) -> Self {
-        Self { config }
+        Self { config, target_version: None }
+    }
+
+    /// Like [`Self::new`], but writes as `target_version` regardless of
+    /// `config.meta.file_version` — lets a caller upgrade/downgrade without
+    /// mutating the model just to express intent (e.g. reading a v1.0 file
+    /// and writing it as v1.1 no longer requires setting
+    /// `config.meta.file_version = "1.1"` first). Never mutates `config`
+    /// itself; only the on-disk `File_Version` changes.
+    pub fn with_target_version(config: &'a MachineConfig, target_version: impl Into<String>) -> Self {
+        Self { config, target_version: Some(target_version.into()) }
+    }
+
+    fn resolved_file_version(&self) -> &str {
+        match self.target_version.as_deref() {
+            Some(v) => v,
+            None => {
+                let fv = self.config.meta.file_version.trim();
+                if fv.is_empty() { "1.0" } else { fv }
+            }
+        }
     }
 
     /// Writes the config to `path`, creating or overwriting the file.
     pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let fv = self.config.meta.file_version.trim();
-        let fv = if fv.is_empty() { "1.0" } else { fv };
-        let backend = resolve_writer(fv, self.config, &PRODUCTION_WRITER_REGISTRY)?;
-        backend.write(path.as_ref())
+        let fv = self.resolved_file_version();
+        let current = {
+            let c = self.config.meta.file_version.trim();
+            if c.is_empty() { "1.0" } else { c }
+        };
+        // Every adapter stamps config.meta.file_version verbatim as the
+        // on-disk File_Version attribute — if target_version overrides the
+        // adapter choice, the config handed to the adapter must reflect that
+        // too, or the file would claim the wrong version on disk. A clone,
+        // not a mutation of the caller's config, and only made when actually
+        // needed (the common case — no override — never pays for it).
+        if fv == current {
+            let backend = resolve_writer(fv, self.config, &PRODUCTION_WRITER_REGISTRY)?;
+            backend.write(path.as_ref())
+        } else {
+            let mut corrected = self.config.clone();
+            corrected.meta.file_version = fv.to_string();
+            let backend = resolve_writer(fv, &corrected, &PRODUCTION_WRITER_REGISTRY)?;
+            backend.write(path.as_ref())
+        }
     }
 }
 

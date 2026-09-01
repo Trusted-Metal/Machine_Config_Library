@@ -5,6 +5,7 @@
 #include "machine_config/adapters.hpp"
 #include "machine_config/models.hpp"
 #include "machine_config/capabilities/v1_0/hdf5.hpp"
+#include "machine_config/capabilities/v1_1/hdf5.hpp"
 
 #include <highfive/H5File.hpp>
 
@@ -42,6 +43,9 @@ inline const ReaderRegistry& productionReaderRegistry() {
     static const ReaderRegistry registry = {
         {"1.0", [](const std::filesystem::path& path) -> std::unique_ptr<ReaderAdapter> {
              return std::make_unique<capabilities::v1_0::Hdf5AdapterV1_0>(path);
+         }},
+        {"1.1", [](const std::filesystem::path& path) -> std::unique_ptr<ReaderAdapter> {
+             return std::make_unique<capabilities::v1_1::Hdf5AdapterV1_1>(path);
          }},
     };
     return registry;

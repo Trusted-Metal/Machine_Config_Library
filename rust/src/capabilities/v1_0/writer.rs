@@ -12,6 +12,9 @@ use super::hdf5::{RawCalibrationPoint, RawEquationConstant};
 use super::layout;
 use crate::error::Result;
 use crate::models::*;
+use crate::power_characterization::{
+    backward_flat_fields_coefficients, backward_flat_fields_points,
+};
 use crate::writer::WriterAdapter;
 
 // ---------------------------------------------------------------------------
@@ -325,8 +328,18 @@ impl<'a> Hdf5WriterV1_0<'a> {
         let pbr_str = ls.power_bit_resolution.map(|v| v.to_string()).unwrap_or_default();
         ws(grp, "Power_Bit_Resolution", &pbr_str)?;
         ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit.as_deref().unwrap_or("bits"))?;
-        ws(grp, "Watts_To_Volts_Algorithm", ls.watts_to_volts_algorithm.as_deref().unwrap_or(""))?;
-        ws(grp, "Watts_To_Volts_Params", ls.watts_to_volts_params.as_deref().unwrap_or(""))?;
+        // Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native flat fields
+        // if present; only derive from power_characterization as a fallback
+        // when there's nothing native to write (e.g. a v1.1-sourced model).
+        // Never the other way around — a present native value always wins.
+        let (algorithm, params) =
+            if ls.watts_to_volts_algorithm.is_none() && ls.watts_to_volts_params.is_none() {
+                backward_flat_fields_points(ls.power_characterization.as_ref())
+            } else {
+                (ls.watts_to_volts_algorithm.clone(), ls.watts_to_volts_params.clone())
+            };
+        ws(grp, "Watts_To_Volts_Algorithm", algorithm.as_deref().unwrap_or(""))?;
+        ws(grp, "Watts_To_Volts_Params", params.as_deref().unwrap_or(""))?;
         Ok(())
     }
 
@@ -364,8 +377,18 @@ impl<'a> Hdf5WriterV1_0<'a> {
         ws(grp, "Video_Output", cb.video_output.as_deref().unwrap_or(""))?;
         wb(grp, "Show_Console", cb.show_console)?;
         wi(grp, "Software_Trigger_Delay", cb.software_trigger_delay)?;
-        ws(grp, "Volts_To_Watts_Algorithm", cb.volts_to_watts_algorithm.as_deref().unwrap_or(""))?;
-        ws(grp, "Volts_To_Watts_Params", cb.volts_to_watts_params.as_deref().unwrap_or(""))?;
+        // Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native flat fields
+        // if present; only derive from power_characterization as a fallback
+        // when there's nothing native to write (e.g. a v1.1-sourced model).
+        // Never the other way around — a present native value always wins.
+        let (algorithm, params) =
+            if cb.volts_to_watts_algorithm.is_none() && cb.volts_to_watts_params.is_none() {
+                backward_flat_fields_coefficients(cb.power_characterization.as_ref())
+            } else {
+                (cb.volts_to_watts_algorithm.clone(), cb.volts_to_watts_params.clone())
+            };
+        ws(grp, "Volts_To_Watts_Algorithm", algorithm.as_deref().unwrap_or(""))?;
+        ws(grp, "Volts_To_Watts_Params", params.as_deref().unwrap_or(""))?;
         ws(grp, "Correction_Grid_Domain_Shape", cb.correction_grid_domain_shape.as_deref().unwrap_or(""))?;
         ws(grp, "Inverse_Grid_Domain_Shape", cb.inverse_grid_domain_shape.as_deref().unwrap_or(""))?;
 

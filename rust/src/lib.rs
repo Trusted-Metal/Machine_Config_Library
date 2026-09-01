@@ -5,6 +5,7 @@ pub mod builder;
 pub mod capabilities;
 pub mod error;
 pub mod models;
+pub mod power_characterization;
 pub mod reader;
 pub mod writer;
 
@@ -23,5 +24,5 @@ pub use writer::MachineConfigWriter;
 // is a different, two-parameter type from this crate's own `error::Result`.
 pub use capabilities::{
     create_machine_config, open_machine_config, supported_file_versions, CapabilityError,
-    MachineConfigFile, MachineConfigFileV1_0, SetMode,
+    MachineConfigFile, MachineConfigFileV1_0, MachineConfigFileV1_1, SetMode,
 };

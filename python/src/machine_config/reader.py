@@ -13,6 +13,7 @@ from machine_config.capabilities.file_version import (
     peek_file_version,
 )
 from machine_config.capabilities.v1_0.hdf5 import Hdf5AdapterV1_0, config_from_dict
+from machine_config.capabilities.v1_1.hdf5 import Hdf5AdapterV1_1
 from machine_config.models import MachineConfig
 
 
@@ -26,6 +27,7 @@ __all__ = ["MachineConfigReader", "config_from_dict"]
 
 _ADAPTERS = {
     "1.0": Hdf5AdapterV1_0,
+    "1.1": Hdf5AdapterV1_1,
 }
 
 

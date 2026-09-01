@@ -5,6 +5,7 @@
 #include "machine_config/capabilities/generated.hpp"
 #include "machine_config/capabilities/result.hpp"
 #include "machine_config/capabilities/v1_0/file.hpp"
+#include "machine_config/capabilities/v1_1/file.hpp"
 #include "machine_config/reader.hpp"
 
 #include <filesystem>
@@ -30,6 +31,16 @@ inline const OpenRegistry& productionOpenRegistry() {
       {"1.0",
        [](const std::filesystem::path& path) -> Result<std::shared_ptr<IMachineConfigFile>> {
          auto r = MachineConfigFileV1_0::open(path);
+         if (!r.ok()) {
+           return Result<std::shared_ptr<IMachineConfigFile>>::Err(
+               r.errorCode(), r.errorMessage(), r.errorDetails());
+         }
+         return Result<std::shared_ptr<IMachineConfigFile>>::Ok(
+             std::static_pointer_cast<IMachineConfigFile>(r.value()));
+       }},
+      {"1.1",
+       [](const std::filesystem::path& path) -> Result<std::shared_ptr<IMachineConfigFile>> {
+         auto r = MachineConfigFileV1_1::open(path);
          if (!r.ok()) {
            return Result<std::shared_ptr<IMachineConfigFile>>::Err(
                r.errorCode(), r.errorMessage(), r.errorDetails());
@@ -76,6 +87,16 @@ inline const CreateRegistry& productionCreateRegistry() {
       {"1.0",
        [](const std::string& version) -> Result<std::shared_ptr<IMachineConfigFile>> {
          auto r = MachineConfigFileV1_0::create(version);
+         if (!r.ok()) {
+           return Result<std::shared_ptr<IMachineConfigFile>>::Err(
+               r.errorCode(), r.errorMessage(), r.errorDetails());
+         }
+         return Result<std::shared_ptr<IMachineConfigFile>>::Ok(
+             std::static_pointer_cast<IMachineConfigFile>(r.value()));
+       }},
+      {"1.1",
+       [](const std::string& version) -> Result<std::shared_ptr<IMachineConfigFile>> {
+         auto r = MachineConfigFileV1_1::create(version);
          if (!r.ok()) {
            return Result<std::shared_ptr<IMachineConfigFile>>::Err(
                r.errorCode(), r.errorMessage(), r.errorDetails());

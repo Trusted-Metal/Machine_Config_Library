@@ -2,6 +2,7 @@ package capabilities
 
 import (
 	v1_0 "machine-config-go/capabilities/v1_0"
+	v1_1 "machine-config-go/capabilities/v1_1"
 	machineconfig "machine-config-go"
 )
 
@@ -48,6 +49,13 @@ var productionOpenRegistry = OpenRegistry{
 		}
 		return f, nil
 	},
+	"1.1": func(path string) (File, *Error) {
+		f, err := v1_1.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	},
 }
 
 // ResolveOpen is registry-parameterized so tests can inject a fake entry
@@ -77,6 +85,13 @@ type CreateRegistry map[string]func(version string) (File, *Error)
 var productionCreateRegistry = CreateRegistry{
 	"1.0": func(version string) (File, *Error) {
 		f, err := v1_0.Create(version)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	},
+	"1.1": func(version string) (File, *Error) {
+		f, err := v1_1.Create(version)
 		if err != nil {
 			return nil, err
 		}

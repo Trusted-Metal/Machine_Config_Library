@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::capabilities::v1_0::hdf5::Hdf5AdapterV1_0;
+use crate::capabilities::v1_1::hdf5::Hdf5AdapterV1_1;
 use crate::error::{MachineConfigError, Result};
 use crate::models::{CorrectionData, ExtraAttrs, MachineConfig};
 
@@ -35,9 +36,14 @@ fn open_v1_0(path: &Path) -> Result<Box<dyn ReaderAdapter>> {
     Hdf5AdapterV1_0::open(path).map(|a| Box::new(a) as Box<dyn ReaderAdapter>)
 }
 
+fn open_v1_1(path: &Path) -> Result<Box<dyn ReaderAdapter>> {
+    Hdf5AdapterV1_1::open(path).map(|a| Box::new(a) as Box<dyn ReaderAdapter>)
+}
+
 static PRODUCTION_READER_REGISTRY: LazyLock<ReaderRegistry> = LazyLock::new(|| {
     let mut m: ReaderRegistry = HashMap::new();
     m.insert("1.0", open_v1_0 as OpenFn);
+    m.insert("1.1", open_v1_1 as OpenFn);
     m
 });
 

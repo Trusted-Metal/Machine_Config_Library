@@ -164,6 +164,24 @@ struct CalibrationPoint {
     double output_value{0.0};
 };
 
+// v1.1 addition (Changes 3/4): a structured algorithm + equation + constants
+// + characterization points describing a power conversion. Shared, identical
+// struct for both ClearBox::power_characterization (ClearBox's Volts->Watts
+// fit; migrated data has real derivation_equation_constants but zero
+// characterization_points) and LightSource::power_characterization
+// (Light_Source's Volts->Watts fit; migrated data is the inverse — zero
+// derivation_equation_constants, real characterization_points) — same kind
+// of thing at two different HDF5 paths, not the same instance. See
+// docs/migrations/v1_0_to_v1_1.md Changes 3/4 for the full derivation rules.
+struct PowerCharacterization {
+    std::optional<std::string> algorithm_type;
+    std::optional<std::string> algorithm_equation;
+    std::optional<std::string> input_type;
+    std::optional<std::string> units_derived_quantity;
+    std::vector<EquationConstant> derivation_equation_constants;
+    std::vector<CalibrationPoint> characterization_points;
+};
+
 // One Synchronous Sensor record. The map key (on ClearBox::synchronous_sensors)
 // is a free-form label chosen by the file's author — not required to equal
 // any attribute value inside the sensor's own group (same convention as
@@ -224,6 +242,13 @@ struct ClearBox {
     // deliberately different from that precedent (see the Node.js bug this
     // exact mismatch caused, corrected before this language's Phase 1).
     std::map<std::string, SynchronousSensor> synchronous_sensors;
+    // v1.1 addition (Change 1); nullopt for v1.0 files, no on-disk source
+    // there. Omitted from JSON when nullopt, same reasoning as
+    // synchronous_sensors above.
+    std::optional<std::string> firmware_version;
+    // v1.1 addition (Change 3); supersedes volts_to_watts_algorithm/_params,
+    // which stay populated for v1.0 files.
+    std::optional<PowerCharacterization> power_characterization;
 };
 
 // Optional add-on hardware present on an optical train.
@@ -320,6 +345,10 @@ struct LightSource {
     std::optional<std::string> power_bit_resolution_unit;
     std::optional<std::string> watts_to_volts_algorithm;
     std::optional<std::string> watts_to_volts_params;
+    // v1.1 addition (Change 4); supersedes watts_to_volts_algorithm/_params,
+    // which stay populated for v1.0 files. Omitted from JSON when nullopt,
+    // same reasoning as ClearBox::synchronous_sensors.
+    std::optional<PowerCharacterization> power_characterization;
 };
 
 struct OpticalTrain {
@@ -561,6 +590,30 @@ inline void from_json(const nlohmann::json& j, CalibrationPoint& c) {
     j.at("output_value").get_to(c.output_value);
 }
 
+inline void to_json(nlohmann::json& j, const PowerCharacterization& p) {
+    j = {
+        {"algorithm_type",                detail::opt_to_j(p.algorithm_type)},
+        {"algorithm_equation",            detail::opt_to_j(p.algorithm_equation)},
+        {"input_type",                    detail::opt_to_j(p.input_type)},
+        {"units_derived_quantity",        detail::opt_to_j(p.units_derived_quantity)},
+        {"derivation_equation_constants", p.derivation_equation_constants},
+        {"characterization_points",       p.characterization_points},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, PowerCharacterization& p) {
+    p.algorithm_type         = detail::j_to_opt<std::string>(j, "algorithm_type");
+    p.algorithm_equation     = detail::j_to_opt<std::string>(j, "algorithm_equation");
+    p.input_type             = detail::j_to_opt<std::string>(j, "input_type");
+    p.units_derived_quantity = detail::j_to_opt<std::string>(j, "units_derived_quantity");
+    p.derivation_equation_constants.clear();
+    if (j.contains("derivation_equation_constants"))
+        j.at("derivation_equation_constants").get_to(p.derivation_equation_constants);
+    p.characterization_points.clear();
+    if (j.contains("characterization_points"))
+        j.at("characterization_points").get_to(p.characterization_points);
+}
+
 inline void to_json(nlohmann::json& j, const SynchronousSensor& s) {
     j = {
         {"enabled",                       detail::opt_to_j(s.enabled)},
@@ -641,6 +694,12 @@ inline void to_json(nlohmann::json& j, const ClearBox& c) {
     // "{}" — see the field's doc comment on ClearBox above.
     if (!c.synchronous_sensors.empty())
         j["synchronous_sensors"] = c.synchronous_sensors;
+    // v1.1 additions — omitted entirely when absent, same byte-identical-
+    // v1.0-output reasoning as synchronous_sensors above.
+    if (c.firmware_version.has_value())
+        j["firmware_version"] = *c.firmware_version;
+    if (c.power_characterization.has_value())
+        j["power_characterization"] = *c.power_characterization;
 }
 
 inline void from_json(const nlohmann::json& j, ClearBox& c) {
@@ -669,6 +728,11 @@ inline void from_json(const nlohmann::json& j, ClearBox& c) {
     c.synchronous_sensors.clear();
     if (j.contains("synchronous_sensors"))
         j.at("synchronous_sensors").get_to(c.synchronous_sensors);
+    c.firmware_version = detail::j_to_opt<std::string>(j, "firmware_version");
+    if (j.contains("power_characterization") && !j.at("power_characterization").is_null())
+        c.power_characterization = j.at("power_characterization").get<PowerCharacterization>();
+    else
+        c.power_characterization = std::nullopt;
 }
 
 // --- OptionalComponents ---
@@ -851,6 +915,10 @@ inline void to_json(nlohmann::json& j, const LightSource& l) {
         {"wavelength",                detail::opt_to_j(l.wavelength)},
         {"wavelength_unit",           detail::opt_to_j(l.wavelength_unit)},
     };
+    // v1.1 addition — omitted entirely when absent, same reasoning as
+    // ClearBox::power_characterization.
+    if (l.power_characterization.has_value())
+        j["power_characterization"] = *l.power_characterization;
 }
 
 inline void from_json(const nlohmann::json& j, LightSource& l) {
@@ -871,6 +939,10 @@ inline void from_json(const nlohmann::json& j, LightSource& l) {
     l.power_bit_resolution_unit= detail::j_to_opt<std::string>(j, "power_bit_resolution_unit");
     l.watts_to_volts_algorithm= detail::j_to_opt<std::string>(j, "watts_to_volts_algorithm");
     l.watts_to_volts_params   = detail::j_to_opt<std::string>(j, "watts_to_volts_params");
+    if (j.contains("power_characterization") && !j.at("power_characterization").is_null())
+        l.power_characterization = j.at("power_characterization").get<PowerCharacterization>();
+    else
+        l.power_characterization = std::nullopt;
 }
 
 // --- OpticalTrain ---

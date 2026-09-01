@@ -11,6 +11,7 @@ import {
   type ReadOptions,
   type ToJsonOptions,
 } from "./capabilities/v1_0/hdf5.js";
+import { Hdf5AdapterV1_1 } from "./capabilities/v1_1/hdf5.js";
 
 export type { CorrectionData, ReadOptions, ToJsonOptions };
 
@@ -31,6 +32,7 @@ type ReaderBackend = {
  */
 export const _READERS: Record<string, new (path: string) => ReaderBackend> = {
   "1.0": Hdf5AdapterV1_0,
+  "1.1": Hdf5AdapterV1_1,
 };
 
 export class MachineConfigReader {

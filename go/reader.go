@@ -2,6 +2,7 @@ package machineconfig
 
 import (
 	v1_0hdf5 "machine-config-go/capabilities/v1_0/hdf5"
+	v1_1hdf5 "machine-config-go/capabilities/v1_1/hdf5"
 )
 
 // ReaderAdapter is the version-agnostic reader surface — mirrors the three
@@ -30,6 +31,22 @@ func (a v1_0ReaderAdapter) GetInverseCorrectionData(trainIndex int) (*Correction
 	return v1_0hdf5.GetInverseCorrectionData(a.path, trainIndex)
 }
 
+type v1_1ReaderAdapter struct {
+	path string
+}
+
+func (a v1_1ReaderAdapter) Parse(opts ParseOptions) (*MachineConfig, error) {
+	return v1_1hdf5.Parse(a.path, opts.IncludeBinary)
+}
+
+func (a v1_1ReaderAdapter) GetCorrectionData(trainIndex int) (*CorrectionData, error) {
+	return v1_1hdf5.GetCorrectionData(a.path, trainIndex)
+}
+
+func (a v1_1ReaderAdapter) GetInverseCorrectionData(trainIndex int) (*CorrectionData, error) {
+	return v1_1hdf5.GetInverseCorrectionData(a.path, trainIndex)
+}
+
 // ReaderRegistry maps a File_Version string to the constructor for that
 // version's ReaderAdapter. A real registry (DISPATCH_REGISTRY_PLAN.md):
 // adding a version means adding an entry here, never editing
@@ -40,6 +57,7 @@ type ReaderRegistry map[string]func(path string) ReaderAdapter
 
 var productionReaderRegistry = ReaderRegistry{
 	"1.0": func(path string) ReaderAdapter { return v1_0ReaderAdapter{path: path} },
+	"1.1": func(path string) ReaderAdapter { return v1_1ReaderAdapter{path: path} },
 }
 
 // ResolveReader is registry-parameterized so tests can inject a fake entry

@@ -183,6 +183,13 @@ pub struct ClearBox {
     /// existed until a file actually uses it.
     #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
     pub synchronous_sensors: IndexMap<String, SynchronousSensor>,
+    /// v1.1 addition (Change 1); `None` for v1.0 files, no on-disk source there.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub firmware_version: Option<String>,
+    /// v1.1 addition (Change 3); supersedes `volts_to_watts_algorithm`/
+    /// `volts_to_watts_params`, which stay populated for v1.0 files.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub power_characterization: Option<PowerCharacterization>,
 }
 
 /// One named equation constant for a `SynchronousSensor`'s `algorithm_equation`
@@ -210,6 +217,25 @@ pub struct EquationConstant {
 pub struct CalibrationPoint {
     pub input_value: f64,
     pub output_value: f64,
+}
+
+/// v1.1 addition (Changes 3/4): a structured algorithm + equation + constants
+/// + characterization points describing a power conversion. Shared, identical
+/// struct for both `ClearBox.power_characterization` (ClearBox's
+/// Volts→Watts fit; migrated data has real `derivation_equation_constants`
+/// but zero `characterization_points`) and `LightSource.power_characterization`
+/// (Light_Source's Volts→Watts fit; migrated data is the inverse — zero
+/// `derivation_equation_constants`, real `characterization_points`) — same
+/// *kind* of thing at two different HDF5 paths, not the same instance. See
+/// `docs/migrations/v1_0_to_v1_1.md` Changes 3/4 for the full derivation rules.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerCharacterization {
+    pub algorithm_type: Option<String>,
+    pub algorithm_equation: Option<String>,
+    pub input_type: Option<String>,
+    pub units_derived_quantity: Option<String>,
+    pub derivation_equation_constants: Vec<EquationConstant>,
+    pub characterization_points: Vec<CalibrationPoint>,
 }
 
 /// A synchronous sensor attached to a `ClearBox`. HDF5 source: one sub-group
@@ -343,6 +369,10 @@ pub struct LightSource {
     pub power_bit_resolution_unit: Option<String>,
     pub watts_to_volts_algorithm: Option<String>,
     pub watts_to_volts_params: Option<String>,
+    /// v1.1 addition (Change 4); supersedes `watts_to_volts_algorithm`/
+    /// `watts_to_volts_params`, which stay populated for v1.0 files.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub power_characterization: Option<PowerCharacterization>,
 }
 
 /// Optional add-on hardware that may or may not be installed on an optical train.
@@ -630,6 +660,7 @@ mod tests {
                 power_bit_resolution_unit: None,
                 watts_to_volts_algorithm: None,
                 watts_to_volts_params: None,
+                power_characterization: None,
             },
             collimator: Collimator {
                 manufacturer: "Aconity3D".into(),
@@ -807,6 +838,8 @@ mod tests {
             correction_grid_domain_shape: None,
             inverse_grid_domain_shape: None,
             synchronous_sensors: IndexMap::new(),
+            firmware_version: None,
+            power_characterization: None,
         });
         let mut config = sample_config();
         config.optical_trains = vec![train];

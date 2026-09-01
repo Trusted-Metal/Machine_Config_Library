@@ -82,7 +82,12 @@ target_link_libraries(machine_config INTERFACE
   HighFive
   nlohmann_json::nlohmann_json)
 if(MSVC)
-  target_compile_options(machine_config INTERFACE /W4 /utf-8)
+  # /bigobj: a single translation unit that pulls in every File_Version
+  # adapter's template instantiations (e.g. the CLI's main.cpp, via the
+  # umbrella header) can exceed MSVC's default object-file section limit
+  # now that there are two versions' worth of adapter templates instead of
+  # one; this flag only raises that limit, it changes no behavior.
+  target_compile_options(machine_config INTERFACE /W4 /utf-8 /bigobj)
 else()
   target_compile_options(machine_config INTERFACE -Wall -Wextra -Wpedantic)
 endif()

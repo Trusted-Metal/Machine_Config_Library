@@ -153,6 +153,9 @@ impl MockConfigBuilder {
             power_bit_resolution_unit: Some("bits".to_owned()),
             watts_to_volts_algorithm: Some("LINEAR".to_owned()),
             watts_to_volts_params: Some("[1,100,10,1000]".to_owned()),
+            // Not populated by MockConfigBuilder — only real v1.1 fixtures
+            // exercise this field.
+            power_characterization: None,
         };
 
         let collimator = Collimator {
@@ -264,6 +267,10 @@ fn mock_clearbox(index: usize) -> ClearBox {
         // fixtures (reference_config_synchronous_sensors.h5 and the combined
         // OPCUA+sensors fixture) exercise this field today.
         synchronous_sensors: indexmap::IndexMap::new(),
+        // v1.1 fields — not populated by MockConfigBuilder, same reasoning as
+        // synchronous_sensors above; only real v1.1 fixtures exercise these.
+        firmware_version: None,
+        power_characterization: None,
     }
 }
 

@@ -6,6 +6,7 @@ import { capabilityError, type CapabilityError } from './errors.js';
 import type { MachineConfigFile } from './generated.js';
 import { peekFileVersion } from './file_version.js';
 import { MachineConfigFileV1_0 } from './v1_0/index.js';
+import { MachineConfigFileV1_1 } from './v1_1/index.js';
 
 export type { Result } from './result.js';
 export { ok, err, isOk } from './result.js';
@@ -14,6 +15,7 @@ export { capabilityError, SessionClosedError } from './errors.js';
 export { SetMode } from './generated.js';
 export type * from './generated.js';
 export { MachineConfigFileV1_0 } from './v1_0/index.js';
+export { MachineConfigFileV1_1 } from './v1_1/index.js';
 export { applySetMode, snapshot } from './merge.js';
 export { peekFileVersion, UnsupportedFileVersion } from './file_version.js';
 
@@ -22,6 +24,7 @@ const OPEN: Record<
   (path: string) => Promise<Result<MachineConfigFile, CapabilityError>>
 > = {
   '1.0': (path) => MachineConfigFileV1_0.open(path),
+  '1.1': (path) => MachineConfigFileV1_1.open(path),
 };
 
 // Exported (matching reader.ts's `_READERS` / writer.ts's `_WRITERS` convention)
@@ -32,6 +35,7 @@ export const CREATE: Record<
   (version: string) => Result<MachineConfigFile, CapabilityError>
 > = {
   '1.0': (version) => MachineConfigFileV1_0.create(version),
+  '1.1': (version) => MachineConfigFileV1_1.create(version),
 };
 
 export async function openMachineConfig(
