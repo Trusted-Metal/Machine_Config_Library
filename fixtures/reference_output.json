@@ -140,8 +140,35 @@
         "power_min_nominal_unit": "W",
         "power_bit_resolution": null,
         "power_bit_resolution_unit": "bits",
-        "watts_to_volts_algorithm": "LINEAR",
-        "watts_to_volts_params": "[1,102.56666666666666,3,305.5333333333333,6,617.9,9,929.9333333333334,10,1028]"
+        "power_characterization": {
+          "algorithm_type": "LINEAR",
+          "algorithm_equation": "W = a*V + b",
+          "input_type": null,
+          "units_derived_quantity": null,
+          "derivation_equation_constants": [],
+          "characterization_points": [
+            {
+              "input_value": 1.0,
+              "output_value": 102.56666666666666
+            },
+            {
+              "input_value": 3.0,
+              "output_value": 305.5333333333333
+            },
+            {
+              "input_value": 6.0,
+              "output_value": 617.9
+            },
+            {
+              "input_value": 9.0,
+              "output_value": 929.9333333333334
+            },
+            {
+              "input_value": 10.0,
+              "output_value": 1028.0
+            }
+          ]
+        }
       },
       "collimator": {
         "manufacturer": "IPG",
@@ -174,10 +201,25 @@
           "video_output": "HDMI",
           "show_console": false,
           "software_trigger_delay": 3000,
-          "volts_to_watts_algorithm": "LINEAR",
-          "volts_to_watts_params": "50.5,107.5",
           "correction_grid_domain_shape": null,
-          "inverse_grid_domain_shape": null
+          "inverse_grid_domain_shape": null,
+          "power_characterization": {
+            "algorithm_type": "LINEAR",
+            "algorithm_equation": "W = a*V + b",
+            "input_type": null,
+            "units_derived_quantity": null,
+            "derivation_equation_constants": [
+              {
+                "name": "b",
+                "value": 50.5
+              },
+              {
+                "name": "a",
+                "value": 107.5
+              }
+            ],
+            "characterization_points": []
+          }
         }
       },
       "scan_field_correction_file": {
@@ -299,8 +341,35 @@
         "power_min_nominal_unit": "W",
         "power_bit_resolution": null,
         "power_bit_resolution_unit": "bits",
-        "watts_to_volts_algorithm": "LINEAR",
-        "watts_to_volts_params": "[1,101.93333333333332,3,300.7,6,609.6666666666666,9,909.7333333333332,10,1006.3333333333334]"
+        "power_characterization": {
+          "algorithm_type": "LINEAR",
+          "algorithm_equation": "W = a*V + b",
+          "input_type": null,
+          "units_derived_quantity": null,
+          "derivation_equation_constants": [],
+          "characterization_points": [
+            {
+              "input_value": 1.0,
+              "output_value": 101.93333333333332
+            },
+            {
+              "input_value": 3.0,
+              "output_value": 300.7
+            },
+            {
+              "input_value": 6.0,
+              "output_value": 609.6666666666666
+            },
+            {
+              "input_value": 9.0,
+              "output_value": 909.7333333333332
+            },
+            {
+              "input_value": 10.0,
+              "output_value": 1006.3333333333334
+            }
+          ]
+        }
       },
       "collimator": {
         "manufacturer": "IPG",
@@ -333,10 +402,25 @@
           "video_output": "HDMI",
           "show_console": false,
           "software_trigger_delay": 3000,
-          "volts_to_watts_algorithm": "LINEAR",
-          "volts_to_watts_params": "48.5,105",
           "correction_grid_domain_shape": null,
-          "inverse_grid_domain_shape": null
+          "inverse_grid_domain_shape": null,
+          "power_characterization": {
+            "algorithm_type": "LINEAR",
+            "algorithm_equation": "W = a*V + b",
+            "input_type": null,
+            "units_derived_quantity": null,
+            "derivation_equation_constants": [
+              {
+                "name": "b",
+                "value": 48.5
+              },
+              {
+                "name": "a",
+                "value": 105.0
+              }
+            ],
+            "characterization_points": []
+          }
         }
       },
       "scan_field_correction_file": {

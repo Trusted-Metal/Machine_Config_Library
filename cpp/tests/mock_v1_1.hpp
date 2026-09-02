@@ -566,8 +566,6 @@ private:
         ls.power_min_nominal_unit = readUnitLocked(grp, "Power_Min_Nominal_unit", "W");
         ls.power_bit_resolution      = readFloat(grp, "Power_Bit_Resolution");
         ls.power_bit_resolution_unit = readUnitLocked(grp, "Power_Bit_Resolution_unit", "bits");
-        ls.watts_to_volts_algorithm = readStr(grp, "Watts_To_Volts_Algorithm");
-        ls.watts_to_volts_params    = readStr(grp, "Watts_To_Volts_Params");
         return ls;
     }
 
@@ -608,8 +606,6 @@ private:
         cb.video_output            = readStr(grp, "Video_Output");
         cb.show_console            = readBoolFromInt(grp, "Show_Console");
         cb.software_trigger_delay  = readInt(grp, "Software_Trigger_Delay");
-        cb.volts_to_watts_algorithm     = readStr(grp, "Volts_To_Watts_Algorithm");
-        cb.volts_to_watts_params        = readStr(grp, "Volts_To_Watts_Params");
         cb.correction_grid_domain_shape = readStr(grp, "Correction_Grid_Domain_Shape");
         cb.inverse_grid_domain_shape    = readStr(grp, "Inverse_Grid_Domain_Shape");
         cb.synchronous_sensors          = parseSynchronousSensors(grp);
@@ -945,8 +941,6 @@ private:
             : std::string{};
         ws(grp, "Power_Bit_Resolution",       pbr);
         ws(grp, "Power_Bit_Resolution_unit",  ls.power_bit_resolution_unit.value_or("bits"));
-        ws(grp, "Watts_To_Volts_Algorithm",   ls.watts_to_volts_algorithm.value_or(""));
-        ws(grp, "Watts_To_Volts_Params",      ls.watts_to_volts_params.value_or(""));
     }
 
     void writeCollimator(HighFive::Group& grp, const Collimator& c) const {
@@ -981,8 +975,6 @@ private:
         ws(grp, "Video_Output",                cb.video_output.value_or(""));
         wb(grp, "Show_Console",                cb.show_console);
         wi(grp, "Software_Trigger_Delay",      cb.software_trigger_delay);
-        ws(grp, "Volts_To_Watts_Algorithm",    cb.volts_to_watts_algorithm.value_or(""));
-        ws(grp, "Volts_To_Watts_Params",       cb.volts_to_watts_params.value_or(""));
         ws(grp, "Correction_Grid_Domain_Shape",cb.correction_grid_domain_shape.value_or(""));
         ws(grp, "Inverse_Grid_Domain_Shape",   cb.inverse_grid_domain_shape.value_or(""));
         writeCorrectionDataset(grp, "Correction_Data",         cb.correction_data);

@@ -18,19 +18,25 @@
  * outside `src/capabilities/`, so `tests/versionAdapterIsolation.test.ts`
  * (a raw-text scan, not a parser) can never flag it regardless of wording.
  *
- * Both writers — never the readers — call the matching forward/backward
- * function for the *other* shape, and only as a fallback: each writer first
- * looks at its own native field, and only derives from the other shape when
- * its own is absent. Concretely, `Hdf5WriterV1_0` writes
- * `volts_to_watts_*`/`watts_to_volts_*` directly if present, else derives
- * them from `power_characterization`; `Hdf5WriterV1_1` writes
- * `power_characterization` directly if present, else derives it from the
- * flat fields. Both readers stay exactly as simple as every other version's
- * reader — each reads only its own on-disk shape, nothing more. (An earlier
- * draft of Phase 2 put this in the readers instead; rejected because it only
- * works for models that came from an actual `parse()` call — see
- * V1_1_IMPLEMENTATION_PLAN.md Phase 2's "Design decision" section for the
- * full comparison.)
+ * `power_characterization` is the only StableModel representation of this
+ * concept, for files of either version — there is no separate
+ * `volts_to_watts_*`/`watts_to_volts_*` field to fall back to. The v1.0
+ * reader calls the forward function unconditionally as part of ordinary
+ * parsing, to populate `power_characterization` from the on-disk flat
+ * attrs; the v1.0 writer calls the backward function unconditionally to
+ * derive the flat attrs it writes from `power_characterization`. The v1.1
+ * reader/writer read and write `power_characterization` natively, with no
+ * conversion at all.
+ *
+ * (An earlier design — V1_1_IMPLEMENTATION_PLAN.md's Phase 2 — kept both
+ * representations on the StableModel side by side, with each writer
+ * deriving from the other shape only as a fallback when its own native
+ * field was absent, and kept this conversion out of the readers entirely
+ * because it only worked for models that came from an actual `parse()`
+ * call. That asymmetry — silently empty for any consumer that only ever
+ * read the legacy field — is exactly what motivated collapsing to a single
+ * field; see POWER_CHARACTERIZATION_UNIFICATION_PLAN.md's "Context"
+ * section.)
  *
  * Two shapes exist today:
  * - **Coefficients** (Change 3 / ClearBox): `Params` is a positional,

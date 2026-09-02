@@ -80,12 +80,10 @@ export interface LightSource {
   power_min_nominal_unit: string | null;
   power_bit_resolution: number | null;
   power_bit_resolution_unit: string | null;
-  watts_to_volts_algorithm: string | null;
-  watts_to_volts_params: string | null;
-  /** v1.1 addition (Change 4); supersedes watts_to_volts_algorithm/_params,
-   * which stay populated for v1.0 files. Omitted entirely (not `null`) when
-   * absent — same reasoning as `ClearBox.synchronous_sensors`: keeps v1.0
-   * output byte-identical to before this field existed. */
+  /** The only representation of the watts<->volts conversion concept, for
+   * files of either version. Omitted entirely (not `null`) when absent —
+   * same reasoning as `ClearBox.synchronous_sensors`: keeps v1.0 output
+   * byte-identical to before this field existed. */
   power_characterization?: PowerCharacterization | null;
 }
 
@@ -209,8 +207,6 @@ export interface ClearBox {
   video_output: string | null;
   show_console: boolean | null;
   software_trigger_delay: number | null;
-  volts_to_watts_algorithm: string | null;
-  volts_to_watts_params: string | null;
   correction_grid_domain_shape: string | null;
   inverse_grid_domain_shape: string | null;
   /**
@@ -227,9 +223,9 @@ export interface ClearBox {
    * always true for v1.0 files, no on-disk source there. Same reasoning as
    * `synchronous_sensors` above: keeps v1.0 output byte-identical. */
   firmware_version?: string | null;
-  /** v1.1 addition (Change 3); supersedes volts_to_watts_algorithm/_params,
-   * which stay populated for v1.0 files. Omitted when absent, same reasoning
-   * as `firmware_version` above. */
+  /** The only representation of the volts<->watts conversion concept, for
+   * files of either version. Omitted when absent, same reasoning as
+   * `firmware_version` above. */
   power_characterization?: PowerCharacterization | null;
 }
 

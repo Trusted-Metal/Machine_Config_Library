@@ -24,7 +24,6 @@ Tests
   test_v1_1_to_v1_missing_derivation_constants_writes_blank
   test_v1_1_to_v1_missing_characterization_points_writes_blank
   test_v1_unaffected                                 v1.0 path undisturbed
-  test_v1_0_write_never_invokes_fallback_when_native_present   writer fallback must never fire when native data is present
   test_roundtrip_v1_0_to_v1_1_to_v1_0                the acceptance criterion, made concrete
   test_roundtrip_v1_1_to_v1_0_to_v1_1                mirror direction
   test_writer_target_version_overrides_meta
@@ -66,43 +65,13 @@ def _mock_v1_0_config(n_lasers: int = 2):
 
 def _mock_v1_1_config(n_lasers: int = 2):
     """In-memory v1.1-shaped MachineConfig for tests that need one without
-    touching disk — mirrors exactly what a real v1.1 file read produces
-    under Phase 2 (power_characterization populated, flat fields None), so
-    that tests exercising a writer's fallback behave the same as they would
-    against real v1.1-sourced data.
+    touching disk. `MockConfigBuilder` already builds `power_characterization`
+    natively now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md) — there's no
+    separate flat-field shape left to convert away from, so this is just the
+    v1.0 mock with `meta.file_version` overridden.
     """
     cfg = _mock_v1_0_config(n_lasers)
-    new_trains = []
-    for train in cfg.optical_trains:
-        cb = train.optional_components.clearbox
-        new_optional_components = train.optional_components
-        if cb is not None:
-            pc = forward_power_characterization_coefficients(
-                cb.volts_to_watts_algorithm, cb.volts_to_watts_params
-            )
-            new_cb = dc_replace(
-                cb,
-                power_characterization=pc,
-                volts_to_watts_algorithm=None,
-                volts_to_watts_params=None,
-            )
-            new_optional_components = OptionalComponents(clearbox=new_cb)
-        ls = train.light_source
-        pc_ls = forward_power_characterization_points(
-            ls.watts_to_volts_algorithm, ls.watts_to_volts_params
-        )
-        new_ls = dc_replace(
-            ls,
-            power_characterization=pc_ls,
-            watts_to_volts_algorithm=None,
-            watts_to_volts_params=None,
-        )
-        new_trains.append(
-            dc_replace(train, light_source=new_ls, optional_components=new_optional_components)
-        )
-    return dc_replace(
-        cfg, optical_trains=new_trains, meta=dc_replace(cfg.meta, file_version="1.1")
-    )
+    return dc_replace(cfg, meta=dc_replace(cfg.meta, file_version="1.1"))
 
 
 # ---------------------------------------------------------------------------
@@ -128,21 +97,12 @@ def test_v1_1_read():
         assert cb.show_console is None
         assert cb.correction_grid_domain_shape is None
         assert cb.inverse_grid_domain_shape is None
-        # Change 3: superseded — v1.1's reader reads only its own native
-        # shape (Phase 2 does not change this); volts_to_watts_* stay None
-        # unless/until this model is written as v1.0.
-        assert cb.volts_to_watts_algorithm is None
-        assert cb.volts_to_watts_params is None
 
         # Change 5: no on-disk source in v1.1, always None
         assert t.scanner.x_axis.tuning_parameters is None
         assert t.scanner.x_axis.tuning_type is None
         assert t.scanner.y_axis.tuning_parameters is None
         assert t.scanner.y_axis.tuning_type is None
-
-        # Change 4: superseded, same reasoning as Change 3
-        assert t.light_source.watts_to_volts_algorithm is None
-        assert t.light_source.watts_to_volts_params is None
 
     # Change 2: OPCUA relocated, contents unaffected
     assert cfg.opcua is not None
@@ -262,7 +222,7 @@ def test_v1_to_v1_1(tmp_path):
         # Change 3: derived ClearBox data has real constants, zero points.
         assert cb.power_characterization.characterization_points == []
         assert cb.power_characterization.derivation_equation_constants
-        assert cb.power_characterization.algorithm_type == src_cb.volts_to_watts_algorithm
+        assert cb.power_characterization.algorithm_type == src_cb.power_characterization.algorithm_type
 
         ls = t.light_source
         # Change 4: derived Light_Source data is the inverse — zero
@@ -311,8 +271,9 @@ def test_v1_to_v1_1_unrecognized_algorithm_type_best_effort(tmp_path):
     t0 = cfg.optical_trains[0]
     cb0 = dc_replace(
         t0.optional_components.clearbox,
-        volts_to_watts_algorithm="EXPONENTIAL",
-        volts_to_watts_params="1.5,2.5,3.5",
+        power_characterization=forward_power_characterization_coefficients(
+            "EXPONENTIAL", "1.5,2.5,3.5"
+        ),
     )
     cfg = dc_replace(
         cfg, optical_trains=[dc_replace(t0, optional_components=OptionalComponents(clearbox=cb0))]
@@ -326,18 +287,24 @@ def test_v1_to_v1_1_unrecognized_algorithm_type_best_effort(tmp_path):
     assert [c.name for c in pc.derivation_equation_constants] == ["0", "1", "2"]
     assert [c.value for c in pc.derivation_equation_constants] == [1.5, 2.5, 3.5]
 
-    # Round trip: writing back to v1.0 reproduces the original CSV exactly.
+    # Round trip: writing back to v1.0 and re-reading reproduces the same
+    # structure — v1.0's reader now forward-derives power_characterization
+    # from whatever backward_flat_fields_coefficients wrote, so there's no
+    # more raw string field to compare directly.
     v1_0_out = tmp_path / "v1_0_roundtrip.h5"
     MachineConfigWriter(result, target_version="1.0").write(v1_0_out)
     back = MachineConfigReader(v1_0_out).parse()
-    assert back.optical_trains[0].optional_components.clearbox.volts_to_watts_params == "1.5,2.5,3.5"
+    back_pc = back.optical_trains[0].optional_components.clearbox.power_characterization
+    assert back_pc.algorithm_type == "EXPONENTIAL"
+    assert [c.value for c in back_pc.derivation_equation_constants] == [1.5, 2.5, 3.5]
 
 
 def test_v1_to_v1_1_unrecognized_algorithm_type_best_effort_for_light_source(tmp_path):
     cfg = _mock_v1_0_config(n_lasers=1)
     t0 = cfg.optical_trains[0]
     ls0 = dc_replace(
-        t0.light_source, watts_to_volts_algorithm="QUADRATIC", watts_to_volts_params="1,2,3,4"
+        t0.light_source,
+        power_characterization=forward_power_characterization_points("QUADRATIC", "1,2,3,4"),
     )
     cfg = dc_replace(cfg, optical_trains=[dc_replace(t0, light_source=ls0)])
     out = tmp_path / "v1_1_unrecognized_ls.h5"
@@ -367,20 +334,22 @@ def test_v1_1_to_v1(tmp_path):
 
     src_cb0 = source.optical_trains[0].optional_components.clearbox
     cb0 = back.optical_trains[0].optional_components.clearbox
-    assert cb0.volts_to_watts_algorithm == src_cb0.power_characterization.algorithm_type
+    assert cb0.power_characterization.algorithm_type == src_cb0.power_characterization.algorithm_type
     expected = sorted(c.value for c in src_cb0.power_characterization.derivation_equation_constants)
-    actual = sorted(float(x) for x in cb0.volts_to_watts_params.split(","))
+    actual = sorted(c.value for c in cb0.power_characterization.derivation_equation_constants)
     assert actual == expected
     assert cb0.output_path == src_cb0.output_path
     assert cb0.software_trigger_delay == src_cb0.software_trigger_delay
 
     src_ls0 = source.optical_trains[0].light_source
     ls0 = back.optical_trains[0].light_source
-    assert ls0.watts_to_volts_algorithm == src_ls0.power_characterization.algorithm_type
+    assert ls0.power_characterization.algorithm_type == src_ls0.power_characterization.algorithm_type
     expected_points = [
-        v for p in src_ls0.power_characterization.characterization_points for v in (p.input_value, p.output_value)
+        (p.input_value, p.output_value) for p in src_ls0.power_characterization.characterization_points
     ]
-    actual_points = [float(x) for x in ls0.watts_to_volts_params.split(",")]
+    actual_points = [
+        (p.input_value, p.output_value) for p in ls0.power_characterization.characterization_points
+    ]
     assert actual_points == expected_points
 
     # Change 1 Removal fields: lost forever, not restored.
@@ -409,7 +378,12 @@ def test_v1_1_to_v1_reorders_constants_by_name(tmp_path):
     out = tmp_path / "v1_0_reordered.h5"
     MachineConfigWriter(cfg, target_version="1.0").write(out)
     back = MachineConfigReader(out).parse()
-    assert back.optical_trains[0].optional_components.clearbox.volts_to_watts_params == "1.0,2.0"
+    back_pc = back.optical_trains[0].optional_components.clearbox.power_characterization
+    # b before a for LINEAR confirms the writer re-sorted by name before
+    # joining as CSV — checked via the reader's forward-derivation, since
+    # the raw CSV string is no longer exposed on the StableModel directly.
+    assert [c.name for c in back_pc.derivation_equation_constants] == ["b", "a"]
+    assert [c.value for c in back_pc.derivation_equation_constants] == [1.0, 2.0]
 
 
 def test_v1_1_to_v1_missing_derivation_constants_writes_blank(tmp_path):
@@ -427,10 +401,12 @@ def test_v1_1_to_v1_missing_derivation_constants_writes_blank(tmp_path):
     out = tmp_path / "v1_0_blank_constants.h5"
     MachineConfigWriter(cfg, target_version="1.0").write(out)
     back = MachineConfigReader(out).parse()
-    # The writer's fallback produces "" (blank, not an error) — but a real
-    # disk round-trip normalizes an empty string attribute back to None on
-    # read, this codebase's standard convention for absent optional strings.
-    assert back.optical_trains[0].optional_components.clearbox.volts_to_watts_params is None
+    back_pc = back.optical_trains[0].optional_components.clearbox.power_characterization
+    # Volts_To_Watts_Params written blank ("", not an error) — forward-
+    # derivation on read correctly comes back with zero constants, not a
+    # crash. Checked via power_characterization since the raw string is no
+    # longer exposed on the StableModel directly.
+    assert back_pc.derivation_equation_constants == []
 
 
 def test_v1_1_to_v1_missing_characterization_points_writes_blank(tmp_path):
@@ -445,8 +421,8 @@ def test_v1_1_to_v1_missing_characterization_points_writes_blank(tmp_path):
     out = tmp_path / "v1_0_blank_points.h5"
     MachineConfigWriter(cfg, target_version="1.0").write(out)
     back = MachineConfigReader(out).parse()
-    # Same normalization as the Change 3 case above — "" on disk reads back as None.
-    assert back.optical_trains[0].light_source.watts_to_volts_params is None
+    # Same reasoning as the Change 3 case above.
+    assert back.optical_trains[0].light_source.power_characterization.characterization_points == []
 
 
 # ---------------------------------------------------------------------------
@@ -454,34 +430,17 @@ def test_v1_1_to_v1_missing_characterization_points_writes_blank(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_v1_unaffected():
-    """Existing v1.0 read path is undisturbed by v1.1's existence — Phase 2
-    does not touch either reader at all (Option C: derivation lives only in
-    the writers' fallbacks)."""
+    """Existing v1.0 read path still reads the same underlying HDF5
+    attributes — the unification plan didn't change what's on disk for
+    v1.0 files, only how the StableModel represents it (always via
+    power_characterization now, forward-derived; the flat fields it used
+    to populate no longer exist on the StableModel at all)."""
     config = MachineConfigReader(_REFERENCE_V1_0).parse()
     assert config.meta.file_version == "1.0"
     assert len(config.optical_trains) > 0
     cb0 = config.optical_trains[0].optional_components.clearbox
-    assert cb0.volts_to_watts_algorithm == "LINEAR"
-    assert cb0.power_characterization is None
-
-
-def test_v1_0_write_never_invokes_fallback_when_native_present(tmp_path):
-    """The writer's fallback must never fire when the native field is
-    already present — a deliberately odd-but-valid string must pass through
-    byte-for-byte, proving Hdf5WriterV1_0 never reformats via
-    power_characterization when there's nothing for the fallback to do.
-    This is the real risk Phase 2 introduces to the plain v1.0 path.
-    """
-    cfg = _mock_v1_0_config(n_lasers=1)
-    t0 = cfg.optical_trains[0]
-    cb0 = dc_replace(t0.optional_components.clearbox, volts_to_watts_params="50.50,107.500")
-    cfg = dc_replace(
-        cfg, optical_trains=[dc_replace(t0, optional_components=OptionalComponents(clearbox=cb0))]
-    )
-    out = tmp_path / "v1_0_verbatim.h5"
-    MachineConfigWriter(cfg).write(out)
-    result = MachineConfigReader(out).parse()
-    assert result.optical_trains[0].optional_components.clearbox.volts_to_watts_params == "50.50,107.500"
+    assert cb0.power_characterization is not None
+    assert cb0.power_characterization.algorithm_type == "LINEAR"
 
 
 # ---------------------------------------------------------------------------
@@ -506,17 +465,21 @@ def test_roundtrip_v1_0_to_v1_1_to_v1_0(tmp_path):
         cb = t.optional_components.clearbox
         assert cb.output_path == src_cb.output_path
         assert cb.software_trigger_delay == src_cb.software_trigger_delay
-        assert cb.volts_to_watts_algorithm == src_cb.volts_to_watts_algorithm
-        assert [float(x) for x in cb.volts_to_watts_params.split(",")] == [
-            float(x) for x in src_cb.volts_to_watts_params.split(",")
-        ]
+        assert cb.power_characterization.algorithm_type == src_cb.power_characterization.algorithm_type
+        assert sorted(c.value for c in cb.power_characterization.derivation_equation_constants) == sorted(
+            c.value for c in src_cb.power_characterization.derivation_equation_constants
+        )
 
         src_ls = source.optical_trains[i].light_source
         ls = t.light_source
-        assert ls.watts_to_volts_algorithm == src_ls.watts_to_volts_algorithm
-        src_vals = [float(x) for x in src_ls.watts_to_volts_params.strip("[]").split(",")]
-        back_vals = [float(x) for x in ls.watts_to_volts_params.split(",")]
-        assert back_vals == src_vals
+        assert ls.power_characterization.algorithm_type == src_ls.power_characterization.algorithm_type
+        src_points = [
+            (p.input_value, p.output_value) for p in src_ls.power_characterization.characterization_points
+        ]
+        back_points = [
+            (p.input_value, p.output_value) for p in ls.power_characterization.characterization_points
+        ]
+        assert back_points == src_points
 
 
 def test_roundtrip_v1_1_to_v1_0_to_v1_1(tmp_path):
@@ -600,7 +563,10 @@ def test_dispatcher_v1_1_to_v1(tmp_path):
     MachineConfigWriter(v1_1_cfg, target_version="1.0").write(out)
     result = MachineConfigReader(out).parse()
     assert result.meta.file_version == "1.0"
-    assert result.optical_trains[0].optional_components.clearbox.volts_to_watts_algorithm == "LINEAR"
+    assert (
+        result.optical_trains[0].optional_components.clearbox.power_characterization.algorithm_type
+        == "LINEAR"
+    )
 
 
 def test_adapters_satisfy_protocol(tmp_path):

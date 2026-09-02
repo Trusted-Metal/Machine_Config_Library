@@ -142,8 +142,6 @@ class ClearBox:
     video_output: Optional[str]
     show_console: Optional[bool]                         # HDF5 int 0/1
     software_trigger_delay: Optional[int]
-    volts_to_watts_algorithm: Optional[str]
-    volts_to_watts_params: Optional[str]
     correction_grid_domain_shape: Optional[str]
     inverse_grid_domain_shape: Optional[str]
     # Key = free-form sensor label (HDF5 sub-group name under
@@ -155,8 +153,11 @@ class ClearBox:
     synchronous_sensors: dict[str, SynchronousSensor]
     # v1.1 addition (Change 1); None for v1.0 files, no on-disk source there.
     firmware_version: Optional[str] = None
-    # v1.1 addition (Change 3); supersedes volts_to_watts_algorithm/_params,
-    # which stay populated for v1.0 files.
+    # The only representation of this concept, for files of either version.
+    # v1.0's Volts_To_Watts_Algorithm/Params is a lossless flat encoding of
+    # the same data (see power_characterization.py's forward/backward
+    # functions) — the StableModel no longer carries that flat shape as a
+    # separate field (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md).
     power_characterization: Optional[PowerCharacterization] = None
 
 
@@ -283,10 +284,8 @@ class LightSource:
     power_min_nominal_unit: Optional[str]
     power_bit_resolution: Optional[float]                # HDF5 stores as string; parsed via _read_float
     power_bit_resolution_unit: Optional[str]
-    watts_to_volts_algorithm: Optional[str]
-    watts_to_volts_params: Optional[str]
-    # v1.1 addition (Change 4); supersedes watts_to_volts_algorithm/_params,
-    # which stay populated for v1.0 files.
+    # The only representation of this concept, for files of either version —
+    # see ClearBox.power_characterization's comment.
     power_characterization: Optional[PowerCharacterization] = None
 
 

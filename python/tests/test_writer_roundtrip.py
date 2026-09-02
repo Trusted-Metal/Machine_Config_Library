@@ -42,6 +42,10 @@ from machine_config.models import (
     ScannerCard,
     SynchronousSensor,
 )
+from machine_config.power_characterization import (
+    forward_power_characterization_coefficients,
+    forward_power_characterization_points,
+)
 from machine_config.schema import SCHEMA, SCHEMA_VERSION
 
 
@@ -113,8 +117,9 @@ def _light_source() -> LightSource:
         power_min_nominal_unit="W",
         power_bit_resolution=None,
         power_bit_resolution_unit="bits",
-        watts_to_volts_algorithm="LINEAR",
-        watts_to_volts_params="[1,100,10,1000]",
+        power_characterization=forward_power_characterization_points(
+            "LINEAR", "[1,100,10,1000]"
+        ),
     )
 
 
@@ -166,8 +171,9 @@ def _clearbox(grid_size: int = 5) -> ClearBox:
         video_output="HDMI",
         show_console=False,
         software_trigger_delay=3000,
-        volts_to_watts_algorithm="LINEAR",
-        volts_to_watts_params="48.5,105.0",
+        power_characterization=forward_power_characterization_coefficients(
+            "LINEAR", "48.5,105.0"
+        ),
         correction_grid_domain_shape="square",
         inverse_grid_domain_shape="square",
         synchronous_sensors={
@@ -346,8 +352,6 @@ def nan_cb(tmp_path_factory: pytest.TempPathFactory) -> ClearBox:
         video_output=None,
         show_console=None,
         software_trigger_delay=None,
-        volts_to_watts_algorithm=None,
-        volts_to_watts_params=None,
         correction_grid_domain_shape=None,
         inverse_grid_domain_shape=None,
         synchronous_sensors={},
@@ -574,11 +578,20 @@ class TestScalarFieldRoundtrip:
     def test_light_source_power_min_nominal(self, scalar_rt: MachineConfig) -> None:
         assert scalar_rt.optical_trains[0].light_source.power_min_nominal == pytest.approx(50.0)
 
-    def test_light_source_watts_to_volts_algorithm(self, scalar_rt: MachineConfig) -> None:
-        assert scalar_rt.optical_trains[0].light_source.watts_to_volts_algorithm == "LINEAR"
+    def test_light_source_power_characterization_algorithm_type(
+        self, scalar_rt: MachineConfig
+    ) -> None:
+        pc = scalar_rt.optical_trains[0].light_source.power_characterization
+        assert pc is not None
+        assert pc.algorithm_type == "LINEAR"
 
-    def test_light_source_watts_to_volts_params(self, scalar_rt: MachineConfig) -> None:
-        assert scalar_rt.optical_trains[0].light_source.watts_to_volts_params == "[1,100,10,1000]"
+    def test_light_source_power_characterization_points(self, scalar_rt: MachineConfig) -> None:
+        pc = scalar_rt.optical_trains[0].light_source.power_characterization
+        assert pc is not None
+        assert [(p.input_value, p.output_value) for p in pc.characterization_points] == [
+            (1.0, 100.0),
+            (10.0, 1000.0),
+        ]
 
     # --- ScannerCard ---------------------------------------------------------
 
@@ -646,11 +659,18 @@ class TestClearBoxAttributeRoundtrip:
     def test_software_trigger_delay(self, clearbox_cb: ClearBox) -> None:
         assert clearbox_cb.software_trigger_delay == 3000
 
-    def test_volts_to_watts_algorithm(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.volts_to_watts_algorithm == "LINEAR"
+    def test_power_characterization_algorithm_type(self, clearbox_cb: ClearBox) -> None:
+        pc = clearbox_cb.power_characterization
+        assert pc is not None
+        assert pc.algorithm_type == "LINEAR"
 
-    def test_volts_to_watts_params(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.volts_to_watts_params == "48.5,105.0"
+    def test_power_characterization_constants(self, clearbox_cb: ClearBox) -> None:
+        pc = clearbox_cb.power_characterization
+        assert pc is not None
+        assert {c.name: c.value for c in pc.derivation_equation_constants} == {
+            "b": 48.5,
+            "a": 105.0,
+        }
 
     def test_correction_grid_domain_shape(self, clearbox_cb: ClearBox) -> None:
         assert clearbox_cb.correction_grid_domain_shape == "square"

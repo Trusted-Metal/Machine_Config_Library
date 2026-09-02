@@ -494,10 +494,6 @@ class Hdf5AdapterV1_1:
             power_bit_resolution_unit=self._read_str_locked(
                 a, "Power_Bit_Resolution_unit", "bits"
             ),
-            # Change 4: no on-disk source in v1.1 — superseded by
-            # power_characterization.
-            watts_to_volts_algorithm=None,
-            watts_to_volts_params=None,
             power_characterization=power_characterization,
         )
 
@@ -562,10 +558,6 @@ class Hdf5AdapterV1_1:
             custom_video_format=None,
             video_output=None,
             show_console=None,
-            # Change 3: no on-disk source in v1.1 — superseded by
-            # power_characterization.
-            volts_to_watts_algorithm=None,
-            volts_to_watts_params=None,
             correction_grid_domain_shape=None,
             inverse_grid_domain_shape=None,
             synchronous_sensors=synchronous_sensors,
@@ -699,8 +691,12 @@ class Hdf5AdapterV1_1:
 
     # ------------------------------------------------------------------
     # JSON serialisation helpers — independent of v1.0's, since v1.1's
-    # ClearBox/LightSource shape differs (power_characterization,
-    # firmware_version, no watts_to_volts_*, no tuning on AxisConfig).
+    # ClearBox/LightSource shape differs (firmware_version, no tuning on
+    # AxisConfig). Both this file and v1_0/hdf5.py hydrate
+    # power_characterization identically but via their own separate,
+    # deliberately-uncoupled dict-helper methods — same "no coupling
+    # between version dict-helpers" convention this file already follows
+    # for everything else.
     # ------------------------------------------------------------------
 
     def _config_to_dict(self, config: MachineConfig, include_binary: bool = False) -> dict:
@@ -897,8 +893,6 @@ class Hdf5AdapterV1_1:
             "power_min_nominal_unit": ls.power_min_nominal_unit,
             "power_bit_resolution": ls.power_bit_resolution,
             "power_bit_resolution_unit": ls.power_bit_resolution_unit,
-            "watts_to_volts_algorithm": ls.watts_to_volts_algorithm,
-            "watts_to_volts_params": ls.watts_to_volts_params,
         }
         if ls.power_characterization is not None:
             d["power_characterization"] = self._power_characterization_to_dict(
@@ -945,8 +939,6 @@ class Hdf5AdapterV1_1:
             "video_output": cb.video_output,
             "show_console": cb.show_console,
             "software_trigger_delay": cb.software_trigger_delay,
-            "volts_to_watts_algorithm": cb.volts_to_watts_algorithm,
-            "volts_to_watts_params": cb.volts_to_watts_params,
             "correction_grid_domain_shape": cb.correction_grid_domain_shape,
             "inverse_grid_domain_shape": cb.inverse_grid_domain_shape,
         }
@@ -1198,8 +1190,6 @@ def _train_from_dict(t: dict) -> OpticalTrain:
         power_min_nominal_unit=ls.get("power_min_nominal_unit"),
         power_bit_resolution=ls.get("power_bit_resolution"),
         power_bit_resolution_unit=ls.get("power_bit_resolution_unit"),
-        watts_to_volts_algorithm=ls.get("watts_to_volts_algorithm"),
-        watts_to_volts_params=ls.get("watts_to_volts_params"),
         power_characterization=Hdf5AdapterV1_1._power_characterization_from_dict(
             ls.get("power_characterization")
         ),
@@ -1271,8 +1261,6 @@ def _train_from_dict(t: dict) -> OpticalTrain:
             video_output=cb_d.get("video_output"),
             show_console=cb_d.get("show_console"),
             software_trigger_delay=cb_d.get("software_trigger_delay"),
-            volts_to_watts_algorithm=cb_d.get("volts_to_watts_algorithm"),
-            volts_to_watts_params=cb_d.get("volts_to_watts_params"),
             correction_grid_domain_shape=cb_d.get("correction_grid_domain_shape"),
             inverse_grid_domain_shape=cb_d.get("inverse_grid_domain_shape"),
             synchronous_sensors=synchronous_sensors,

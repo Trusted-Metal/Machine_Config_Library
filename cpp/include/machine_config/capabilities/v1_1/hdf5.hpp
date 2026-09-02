@@ -525,10 +525,6 @@ private:
         ls.power_min_nominal_unit = readUnitLocked(grp, "Power_Min_Nominal_unit", "W");
         ls.power_bit_resolution      = readFloat(grp, "Power_Bit_Resolution");
         ls.power_bit_resolution_unit = readUnitLocked(grp, "Power_Bit_Resolution_unit", "bits");
-        // Change 4: no on-disk source in this File_Version — superseded by
-        // power_characterization.
-        ls.watts_to_volts_algorithm = std::nullopt;
-        ls.watts_to_volts_params    = std::nullopt;
         if (grp.exist(GROUP_POWER_CHARACTERIZATION))
             ls.power_characterization = parsePowerCharacterization(grp.getGroup(GROUP_POWER_CHARACTERIZATION));
         return ls;
@@ -582,8 +578,6 @@ private:
         cb.video_output            = std::nullopt;
         cb.show_console            = std::nullopt;
         cb.software_trigger_delay  = sharedSoftwareTriggerDelay;
-        cb.volts_to_watts_algorithm     = std::nullopt;
-        cb.volts_to_watts_params        = std::nullopt;
         cb.correction_grid_domain_shape = std::nullopt;
         cb.inverse_grid_domain_shape    = std::nullopt;
         cb.synchronous_sensors          = parseSynchronousSensors(grp);

@@ -26,6 +26,10 @@ from .models import (
     Scanner,
     ScannerCard,
 )
+from .power_characterization import (
+    forward_power_characterization_coefficients,
+    forward_power_characterization_points,
+)
 from .reader import MachineConfigReader
 from .schema import SCHEMA_VERSION
 from .writer import MachineConfigWriter
@@ -92,14 +96,19 @@ def _mock_clearbox(ip: str, serial: str) -> ClearBox:
         video_output="HDMI",
         show_console=False,
         software_trigger_delay=3000,
-        volts_to_watts_algorithm="LINEAR",
-        volts_to_watts_params="50.0,100.0",
         correction_grid_domain_shape=None,
         inverse_grid_domain_shape=None,
         # Not populated by MockConfigBuilder, same as OPCUA — only the real
         # fixtures (reference_config_synchronous_sensors.h5 and the combined
         # OPCUA+sensors fixture) exercise this field today.
         synchronous_sensors={},
+        # Derived via the same function a real v1.0 read would use, rather
+        # than hand-building a PowerCharacterization literal — the mock can
+        # never drift from what parsing a real file with these same
+        # Volts_To_Watts_* values would actually produce.
+        power_characterization=forward_power_characterization_coefficients(
+            "LINEAR", "50.0,100.0"
+        ),
     )
 
 
@@ -170,8 +179,11 @@ def _mock_train(
         power_min_nominal_unit="W",
         power_bit_resolution=None,
         power_bit_resolution_unit="bits",
-        watts_to_volts_algorithm="LINEAR",
-        watts_to_volts_params="[1,100,10,1000]",
+        # Derived via the same function a real v1.0 read would use — see
+        # _mock_clearbox's identical reasoning.
+        power_characterization=forward_power_characterization_points(
+            "LINEAR", "[1,100,10,1000]"
+        ),
     )
 
     collimator = Collimator(
@@ -450,8 +462,12 @@ class YamlConfigBuilder:
             power_min_nominal_unit="W" if ls.get("power_min_nominal") is not None else None,
             power_bit_resolution=None,
             power_bit_resolution_unit=None,
-            watts_to_volts_algorithm=ls.get("watts_to_volts_algorithm"),
-            watts_to_volts_params=ls.get("watts_to_volts_params"),
+            # YAML spec keys unchanged — still the v1.0 flat shape a user
+            # authors — but the StableModel only carries power_characterization
+            # now, so forward-derive it the same way a real v1.0 read would.
+            power_characterization=forward_power_characterization_points(
+                ls.get("watts_to_volts_algorithm"), ls.get("watts_to_volts_params")
+            ),
         )
 
         col_s = spec.get("collimator", {})

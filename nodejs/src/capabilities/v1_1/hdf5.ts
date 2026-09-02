@@ -376,8 +376,6 @@ function parseLightSource(grp: h5wasm.Group): LightSource {
     power_min_nominal_unit: attrStr(a, "Power_Min_Nominal_unit"),
     power_bit_resolution: attrFloat(a, "Power_Bit_Resolution"),
     power_bit_resolution_unit: attrStr(a, "Power_Bit_Resolution_unit"),
-    watts_to_volts_algorithm: null,
-    watts_to_volts_params: null,
     power_characterization: pcEnt instanceof h5wasm.Group ? parsePowerCharacterization(pcEnt) : undefined,
   };
 }
@@ -449,8 +447,7 @@ function parseSynchronousSensors(grp: h5wasm.Group): Record<string, SynchronousS
  * have no on-disk source (Removal); `output_path`/`software_trigger_delay`
  * come from the caller (Consolidate — one shared value read once at
  * `Extensions/ClearBox/` and threaded through to every train); Change 3's
- * `volts_to_watts_algorithm`/`_params` are superseded by
- * `power_characterization`.
+ * `power_characterization` is read natively, with no flat-field fallback.
  */
 function parseClearBox(
   grp: h5wasm.Group,
@@ -475,8 +472,6 @@ function parseClearBox(
     video_output: null,
     show_console: null,
     software_trigger_delay: sharedSoftwareTriggerDelay,
-    volts_to_watts_algorithm: null,
-    volts_to_watts_params: null,
     correction_grid_domain_shape: null,
     inverse_grid_domain_shape: null,
     synchronous_sensors: parseSynchronousSensors(grp),
@@ -779,7 +774,10 @@ export class Hdf5AdapterV1_1 {
 // Phase 2 clean-up (see the migration implementation plan) removed
 // migrateV1ToV1_1/migrateV1_1ToV1 from here — the coefficients/points
 // shape-conversion functions they used now live in
-// ../../powerCharacterization.js (imported by the previous version's writer
-// and this directory's own writer.ts), called as a write-time fallback, not
-// a standalone migration step. See that module's docs for the full design.
+// ../../powerCharacterization.js. Per the
+// POWER_CHARACTERIZATION_UNIFICATION_PLAN.md follow-on, power_characterization
+// is now the only StableModel representation of this concept: this
+// directory's writer.ts always writes power_characterization directly, with
+// no fallback derivation left to do. See ../../powerCharacterization.js's
+// docs for the full cross-version design.
 // ---------------------------------------------------------------------------

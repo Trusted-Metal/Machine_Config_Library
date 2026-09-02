@@ -684,8 +684,6 @@ impl MockV1_1Reader {
                 "Power_Bit_Resolution_unit",
                 "bits",
             )?,
-            watts_to_volts_algorithm: read_str(grp, "Watts_To_Volts_Algorithm")?,
-            watts_to_volts_params: read_str(grp, "Watts_To_Volts_Params")?,
             power_characterization: None,
         })
     }
@@ -743,8 +741,6 @@ impl MockV1_1Reader {
             video_output: read_str(grp, "Video_Output")?,
             show_console: read_bool_from_int(grp, "Show_Console")?,
             software_trigger_delay: read_int(grp, "Software_Trigger_Delay")?,
-            volts_to_watts_algorithm: read_str(grp, "Volts_To_Watts_Algorithm")?,
-            volts_to_watts_params: read_str(grp, "Volts_To_Watts_Params")?,
             correction_grid_domain_shape: read_str(grp, "Correction_Grid_Domain_Shape")?,
             inverse_grid_domain_shape: read_str(grp, "Inverse_Grid_Domain_Shape")?,
             synchronous_sensors,
@@ -1097,8 +1093,6 @@ impl<'a> MockV1_1Writer<'a> {
         let pbr_str = ls.power_bit_resolution.map(|v| v.to_string()).unwrap_or_default();
         ws(grp, "Power_Bit_Resolution", &pbr_str)?;
         ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit.as_deref().unwrap_or("bits"))?;
-        ws(grp, "Watts_To_Volts_Algorithm", ls.watts_to_volts_algorithm.as_deref().unwrap_or(""))?;
-        ws(grp, "Watts_To_Volts_Params", ls.watts_to_volts_params.as_deref().unwrap_or(""))?;
         Ok(())
     }
 
@@ -1136,8 +1130,6 @@ impl<'a> MockV1_1Writer<'a> {
         ws(grp, "Video_Output", cb.video_output.as_deref().unwrap_or(""))?;
         wb(grp, "Show_Console", cb.show_console)?;
         wi(grp, "Software_Trigger_Delay", cb.software_trigger_delay)?;
-        ws(grp, "Volts_To_Watts_Algorithm", cb.volts_to_watts_algorithm.as_deref().unwrap_or(""))?;
-        ws(grp, "Volts_To_Watts_Params", cb.volts_to_watts_params.as_deref().unwrap_or(""))?;
         ws(grp, "Correction_Grid_Domain_Shape", cb.correction_grid_domain_shape.as_deref().unwrap_or(""))?;
         ws(grp, "Inverse_Grid_Domain_Shape", cb.inverse_grid_domain_shape.as_deref().unwrap_or(""))?;
 

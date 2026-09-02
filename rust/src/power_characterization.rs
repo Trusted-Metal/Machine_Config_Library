@@ -16,19 +16,27 @@
 //! shape needs zero new code here, only a new pair of functions if a third
 //! shape is ever introduced.
 //!
-//! Both writers — never the readers — call the matching forward/backward
-//! function for the *other* shape, and only as a fallback: each writer first
-//! looks at its own native field, and only derives from the other shape when
-//! its own is absent. Concretely, `Hdf5WriterV1_0` writes
-//! `volts_to_watts_*`/`watts_to_volts_*` directly if present, else derives
-//! them from `power_characterization`; `Hdf5WriterV1_1` writes
-//! `power_characterization` directly if present, else derives it from the
-//! flat fields. Both readers stay exactly as simple as every other version's
-//! reader — each reads only its own on-disk shape, nothing more. (An earlier
-//! draft of Phase 2 put this in the readers instead; rejected because it only
-//! works for models that came from an actual `parse()` call — see
-//! `V1_1_IMPLEMENTATION_PLAN.md` Phase 2's "Design decision" section for the
-//! full comparison.)
+//! `power_characterization` is the StableModel's **only** representation of
+//! this concept, for files of either version
+//! (`POWER_CHARACTERIZATION_UNIFICATION_PLAN.md`) — `ClearBox`/`LightSource`
+//! no longer carry the flat `volts_to_watts_*`/`watts_to_volts_*` fields at
+//! all. `Hdf5AdapterV1_0`'s reader unconditionally forward-derives
+//! `power_characterization` from the flat attrs it reads off disk;
+//! `Hdf5WriterV1_0` unconditionally backward-derives the flat attrs from
+//! `power_characterization` to write. `Hdf5AdapterV1_1`/`Hdf5WriterV1_1` read
+//! and write `power_characterization` natively — no conversion needed, since
+//! v1.1's on-disk shape already *is* this shape.
+//!
+//! (Phase 2, since superseded by the unification above, briefly had both a
+//! flat field and `power_characterization` on the StableModel simultaneously,
+//! with each writer preferring its own native field and falling back to
+//! deriving from the other only when absent. That fallback-based design is
+//! what originally motivated keeping this conversion out of the readers —
+//! see `V1_1_IMPLEMENTATION_PLAN.md` Phase 2's "Design decision" section for
+//! the historical comparison. The reasoning no longer applies now that there
+//! is only one StableModel field: v1.0's reader calling this module
+//! unconditionally is not "the readers deriving as a fallback," it is simply
+//! how v1.0's on-disk shape becomes the StableModel's only shape.)
 //!
 //! Two shapes exist today:
 //!

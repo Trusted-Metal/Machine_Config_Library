@@ -4,6 +4,7 @@
 
 #include "machine_config/adapters.hpp"
 #include "machine_config/models.hpp"
+#include "machine_config/power_characterization.hpp"
 #include "machine_config/capabilities/v1_0/compound_types.hpp"
 #include "machine_config/capabilities/v1_0/layout.hpp"
 
@@ -464,8 +465,9 @@ private:
         ls.power_min_nominal_unit = readUnitLocked(grp, "Power_Min_Nominal_unit", "W");
         ls.power_bit_resolution      = readFloat(grp, "Power_Bit_Resolution");
         ls.power_bit_resolution_unit = readUnitLocked(grp, "Power_Bit_Resolution_unit", "bits");
-        ls.watts_to_volts_algorithm = readStr(grp, "Watts_To_Volts_Algorithm");
-        ls.watts_to_volts_params    = readStr(grp, "Watts_To_Volts_Params");
+        auto wattsToVoltsAlgorithm = readStr(grp, "Watts_To_Volts_Algorithm");
+        auto wattsToVoltsParams    = readStr(grp, "Watts_To_Volts_Params");
+        ls.power_characterization = forwardPowerCharacterizationPoints(wattsToVoltsAlgorithm, wattsToVoltsParams);
         return ls;
     }
 
@@ -507,8 +509,9 @@ private:
         cb.video_output            = readStr(grp, "Video_Output");
         cb.show_console            = readBoolFromInt(grp, "Show_Console");
         cb.software_trigger_delay  = readInt(grp, "Software_Trigger_Delay");
-        cb.volts_to_watts_algorithm     = readStr(grp, "Volts_To_Watts_Algorithm");
-        cb.volts_to_watts_params        = readStr(grp, "Volts_To_Watts_Params");
+        auto voltsToWattsAlgorithm = readStr(grp, "Volts_To_Watts_Algorithm");
+        auto voltsToWattsParams    = readStr(grp, "Volts_To_Watts_Params");
+        cb.power_characterization = forwardPowerCharacterizationCoefficients(voltsToWattsAlgorithm, voltsToWattsParams);
         cb.correction_grid_domain_shape = readStr(grp, "Correction_Grid_Domain_Shape");
         cb.inverse_grid_domain_shape    = readStr(grp, "Inverse_Grid_Domain_Shape");
         cb.synchronous_sensors          = parseSynchronousSensors(grp);

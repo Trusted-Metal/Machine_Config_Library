@@ -25,7 +25,6 @@
 //!   test_v1_1_to_v1_missing_derivation_constants_writes_blank
 //!   test_v1_1_to_v1_missing_characterization_points_writes_blank
 //!   test_v1_unaffected                                 v1.0 path undisturbed
-//!   test_v1_0_write_never_invokes_fallback_when_native_present   writer fallback must never fire when native data is present
 //!   test_roundtrip_v1_0_to_v1_1_to_v1_0                the acceptance criterion, made concrete
 //!   test_roundtrip_v1_1_to_v1_0_to_v1_1                mirror direction
 //!   test_writer_target_version_overrides_meta
@@ -57,34 +56,13 @@ fn mock_v1_0_config(n_lasers: usize) -> MachineConfig {
 }
 
 /// In-memory v1.1-shaped MachineConfig for tests that need one without
-/// touching disk — mirrors exactly what a real v1.1 file read produces under
-/// Phase 2 (power_characterization populated, flat fields None), so tests
-/// exercising a writer's fallback behave the same as they would against real
-/// v1.1-sourced data.
+/// touching disk. `MockConfigBuilder` already builds `power_characterization`
+/// natively now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md) — there's no
+/// separate flat-field shape left to convert away from, so this is just the
+/// v1.0 mock with `meta.file_version` overridden.
 fn mock_v1_1_config(n_lasers: usize) -> MachineConfig {
     let mut cfg = mock_v1_0_config(n_lasers);
     cfg.meta.file_version = "1.1".to_string();
-    for train in cfg.optical_trains.iter_mut() {
-        if let Some(cb) = train.optional_components.clearbox.as_mut() {
-            let pc = forward_power_characterization_coefficients(
-                cb.volts_to_watts_algorithm.as_deref(),
-                cb.volts_to_watts_params.as_deref(),
-            )
-            .unwrap();
-            cb.power_characterization = pc;
-            cb.volts_to_watts_algorithm = None;
-            cb.volts_to_watts_params = None;
-        }
-        let ls = &mut train.light_source;
-        let pc_ls = forward_power_characterization_points(
-            ls.watts_to_volts_algorithm.as_deref(),
-            ls.watts_to_volts_params.as_deref(),
-        )
-        .unwrap();
-        ls.power_characterization = pc_ls;
-        ls.watts_to_volts_algorithm = None;
-        ls.watts_to_volts_params = None;
-    }
     cfg
 }
 
@@ -115,21 +93,12 @@ fn test_v1_1_read() {
         assert!(cb.show_console.is_none());
         assert!(cb.correction_grid_domain_shape.is_none());
         assert!(cb.inverse_grid_domain_shape.is_none());
-        // Change 3: superseded — v1.1's reader reads only its own native
-        // shape (Phase 2 does not change this); volts_to_watts_* stay None
-        // unless/until this model is written as v1.0.
-        assert!(cb.volts_to_watts_algorithm.is_none());
-        assert!(cb.volts_to_watts_params.is_none());
 
         // Change 5: no on-disk source in v1.1, always None.
         assert!(t.scanner.x_axis.tuning_parameters.is_none());
         assert!(t.scanner.x_axis.tuning_type.is_none());
         assert!(t.scanner.y_axis.tuning_parameters.is_none());
         assert!(t.scanner.y_axis.tuning_type.is_none());
-
-        // Change 4: superseded, same reasoning as Change 3.
-        assert!(t.light_source.watts_to_volts_algorithm.is_none());
-        assert!(t.light_source.watts_to_volts_params.is_none());
     }
 
     // Change 2: OPCUA relocated, contents unaffected.
@@ -258,7 +227,7 @@ fn test_v1_to_v1_1() {
         let pc = cb.power_characterization.as_ref().unwrap();
         assert!(pc.characterization_points.is_empty());
         assert!(!pc.derivation_equation_constants.is_empty());
-        assert_eq!(pc.algorithm_type, src_cb.volts_to_watts_algorithm);
+        assert_eq!(pc.algorithm_type, src_cb.power_characterization.as_ref().unwrap().algorithm_type);
 
         // Change 4: derived Light_Source data is the inverse — zero
         // constants, real points.
@@ -304,8 +273,11 @@ fn test_v1_to_v1_1_unrecognized_algorithm_type_best_effort() {
     let mut cfg = mock_v1_0_config(1);
     {
         let cb = cfg.optical_trains[0].optional_components.clearbox.as_mut().unwrap();
-        cb.volts_to_watts_algorithm = Some("EXPONENTIAL".to_string());
-        cb.volts_to_watts_params = Some("1.5,2.5,3.5".to_string());
+        cb.power_characterization = forward_power_characterization_coefficients(
+            Some("EXPONENTIAL"),
+            Some("1.5,2.5,3.5"),
+        )
+        .unwrap();
     }
     let out = NamedTempFile::with_suffix(".h5").unwrap();
     MachineConfigWriter::with_target_version(&cfg, "1.1").write(out.path()).unwrap();
@@ -324,14 +296,24 @@ fn test_v1_to_v1_1_unrecognized_algorithm_type_best_effort() {
     let values: Vec<f64> = pc.derivation_equation_constants.iter().map(|c| c.value).collect();
     assert_eq!(values, vec![1.5, 2.5, 3.5]);
 
-    // Round trip: writing back to v1.0 reproduces the original CSV exactly.
+    // Round trip: writing back to v1.0 and re-reading reproduces the same
+    // structure — v1.0's reader now forward-derives power_characterization
+    // from whatever backward_flat_fields_coefficients wrote, so there's no
+    // more raw string field to compare directly.
     let v1_0_out = NamedTempFile::with_suffix(".h5").unwrap();
     MachineConfigWriter::with_target_version(&result, "1.0").write(v1_0_out.path()).unwrap();
     let back = MachineConfigReader::open(v1_0_out.path()).unwrap().parse().unwrap();
-    assert_eq!(
-        back.optical_trains[0].optional_components.clearbox.as_ref().unwrap().volts_to_watts_params.as_deref(),
-        Some("1.5,2.5,3.5")
-    );
+    let back_pc = back.optical_trains[0]
+        .optional_components
+        .clearbox
+        .as_ref()
+        .unwrap()
+        .power_characterization
+        .as_ref()
+        .unwrap();
+    assert_eq!(back_pc.algorithm_type.as_deref(), Some("EXPONENTIAL"));
+    let back_values: Vec<f64> = back_pc.derivation_equation_constants.iter().map(|c| c.value).collect();
+    assert_eq!(back_values, vec![1.5, 2.5, 3.5]);
 }
 
 #[test]
@@ -339,8 +321,8 @@ fn test_v1_to_v1_1_unrecognized_algorithm_type_best_effort_for_light_source() {
     let mut cfg = mock_v1_0_config(1);
     {
         let ls = &mut cfg.optical_trains[0].light_source;
-        ls.watts_to_volts_algorithm = Some("QUADRATIC".to_string());
-        ls.watts_to_volts_params = Some("1,2,3,4".to_string());
+        ls.power_characterization =
+            forward_power_characterization_points(Some("QUADRATIC"), Some("1,2,3,4")).unwrap();
     }
     let out = NamedTempFile::with_suffix(".h5").unwrap();
     MachineConfigWriter::with_target_version(&cfg, "1.1").write(out.path()).unwrap();
@@ -366,17 +348,12 @@ fn test_v1_1_to_v1() {
     let src_cb0 = source.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
     let cb0 = back.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
     let src_pc0 = src_cb0.power_characterization.as_ref().unwrap();
-    assert_eq!(cb0.volts_to_watts_algorithm, src_pc0.algorithm_type);
+    let pc0 = cb0.power_characterization.as_ref().unwrap();
+    assert_eq!(pc0.algorithm_type, src_pc0.algorithm_type);
     let mut expected: Vec<f64> =
         src_pc0.derivation_equation_constants.iter().map(|c| c.value).collect();
     expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let mut actual: Vec<f64> = cb0
-        .volts_to_watts_params
-        .as_deref()
-        .unwrap()
-        .split(',')
-        .map(|x| x.parse().unwrap())
-        .collect();
+    let mut actual: Vec<f64> = pc0.derivation_equation_constants.iter().map(|c| c.value).collect();
     actual.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert_eq!(actual, expected);
     assert_eq!(cb0.output_path, src_cb0.output_path);
@@ -385,14 +362,15 @@ fn test_v1_1_to_v1() {
     let src_ls0 = &source.optical_trains[0].light_source;
     let ls0 = &back.optical_trains[0].light_source;
     let src_ls_pc0 = src_ls0.power_characterization.as_ref().unwrap();
-    assert_eq!(ls0.watts_to_volts_algorithm, src_ls_pc0.algorithm_type);
-    let expected_points: Vec<f64> = src_ls_pc0
+    let ls_pc0 = ls0.power_characterization.as_ref().unwrap();
+    assert_eq!(ls_pc0.algorithm_type, src_ls_pc0.algorithm_type);
+    let expected_points: Vec<(f64, f64)> = src_ls_pc0
         .characterization_points
         .iter()
-        .flat_map(|p| [p.input_value, p.output_value])
+        .map(|p| (p.input_value, p.output_value))
         .collect();
-    let actual_points: Vec<f64> =
-        ls0.watts_to_volts_params.as_deref().unwrap().split(',').map(|x| x.parse().unwrap()).collect();
+    let actual_points: Vec<(f64, f64)> =
+        ls_pc0.characterization_points.iter().map(|p| (p.input_value, p.output_value)).collect();
     assert_eq!(actual_points, expected_points);
 
     // Change 1 Removal fields: lost forever, not restored.
@@ -421,16 +399,20 @@ fn test_v1_1_to_v1_reorders_constants_by_name() {
     let out = NamedTempFile::with_suffix(".h5").unwrap();
     MachineConfigWriter::with_target_version(&cfg, "1.0").write(out.path()).unwrap();
     let back = MachineConfigReader::open(out.path()).unwrap().parse().unwrap();
-    assert_eq!(
-        back.optical_trains[0]
-            .optional_components
-            .clearbox
-            .as_ref()
-            .unwrap()
-            .volts_to_watts_params
-            .as_deref(),
-        Some("1.0,2.0")
-    );
+    let back_pc = back.optical_trains[0]
+        .optional_components
+        .clearbox
+        .as_ref()
+        .unwrap()
+        .power_characterization
+        .as_ref()
+        .unwrap();
+    // b before a for LINEAR confirms the writer re-sorted by name before
+    // joining as CSV — checked via the reader's forward-derivation, since
+    // the raw CSV string is no longer exposed on the StableModel directly.
+    assert_eq!(names(&back_pc.derivation_equation_constants), vec!["b", "a"]);
+    let values: Vec<f64> = back_pc.derivation_equation_constants.iter().map(|c| c.value).collect();
+    assert_eq!(values, vec![1.0, 2.0]);
 }
 
 #[test]
@@ -446,13 +428,19 @@ fn test_v1_1_to_v1_missing_derivation_constants_writes_blank() {
     let out = NamedTempFile::with_suffix(".h5").unwrap();
     MachineConfigWriter::with_target_version(&cfg, "1.0").write(out.path()).unwrap();
     let back = MachineConfigReader::open(out.path()).unwrap().parse().unwrap();
-    // The writer's fallback produces "" (blank, not an error) — but a real
-    // disk round-trip normalizes an empty string attribute back to None on
-    // read, matching this codebase's standard convention for absent
-    // optional strings (confirmed against Python's identical finding).
-    assert!(
-        back.optical_trains[0].optional_components.clearbox.as_ref().unwrap().volts_to_watts_params.is_none()
-    );
+    let back_pc = back.optical_trains[0]
+        .optional_components
+        .clearbox
+        .as_ref()
+        .unwrap()
+        .power_characterization
+        .as_ref()
+        .unwrap();
+    // Volts_To_Watts_Params written blank ("", not an error) — forward-
+    // derivation on read correctly comes back with zero constants, not a
+    // crash. Checked via power_characterization since the raw string is no
+    // longer exposed on the StableModel directly.
+    assert!(back_pc.derivation_equation_constants.is_empty());
 }
 
 #[test]
@@ -468,7 +456,14 @@ fn test_v1_1_to_v1_missing_characterization_points_writes_blank() {
     let out = NamedTempFile::with_suffix(".h5").unwrap();
     MachineConfigWriter::with_target_version(&cfg, "1.0").write(out.path()).unwrap();
     let back = MachineConfigReader::open(out.path()).unwrap().parse().unwrap();
-    assert!(back.optical_trains[0].light_source.watts_to_volts_params.is_none());
+    // Same reasoning as the Change 3 case above.
+    assert!(back.optical_trains[0]
+        .light_source
+        .power_characterization
+        .as_ref()
+        .unwrap()
+        .characterization_points
+        .is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -477,39 +472,17 @@ fn test_v1_1_to_v1_missing_characterization_points_writes_blank() {
 
 #[test]
 fn test_v1_unaffected() {
-    // Existing v1.0 read path is undisturbed by v1.1's existence — Phase 2
-    // does not touch either reader at all (Option C: derivation lives only
-    // in the writers' fallbacks).
+    // Existing v1.0 read path still reads the same underlying HDF5
+    // attributes — the unification plan didn't change what's on disk for
+    // v1.0 files, only how the StableModel represents it (always via
+    // power_characterization now, forward-derived; the flat fields it used
+    // to populate no longer exist on the StableModel at all).
     let config = MachineConfigReader::open(REFERENCE_V1_0).unwrap().parse().unwrap();
     assert_eq!(config.meta.file_version, "1.0");
     assert!(!config.optical_trains.is_empty());
     let cb0 = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-    assert_eq!(cb0.volts_to_watts_algorithm.as_deref(), Some("LINEAR"));
-    assert!(cb0.power_characterization.is_none());
-}
-
-#[test]
-fn test_v1_0_write_never_invokes_fallback_when_native_present() {
-    // The writer's fallback must never fire when the native field is
-    // already present — a deliberately odd-but-valid string must pass
-    // through byte-for-byte, proving Hdf5WriterV1_0 never reformats via
-    // power_characterization when there's nothing for the fallback to do.
-    let mut cfg = mock_v1_0_config(1);
-    cfg.optical_trains[0].optional_components.clearbox.as_mut().unwrap().volts_to_watts_params =
-        Some("50.50,107.500".to_string());
-    let out = NamedTempFile::with_suffix(".h5").unwrap();
-    MachineConfigWriter::new(&cfg).write(out.path()).unwrap();
-    let result = MachineConfigReader::open(out.path()).unwrap().parse().unwrap();
-    assert_eq!(
-        result.optical_trains[0]
-            .optional_components
-            .clearbox
-            .as_ref()
-            .unwrap()
-            .volts_to_watts_params
-            .as_deref(),
-        Some("50.50,107.500")
-    );
+    let pc0 = cb0.power_characterization.as_ref().expect("power_characterization present");
+    assert_eq!(pc0.algorithm_type.as_deref(), Some("LINEAR"));
 }
 
 // ---------------------------------------------------------------------------
@@ -532,37 +505,25 @@ fn test_roundtrip_v1_0_to_v1_1_to_v1_0() {
         let cb = t.optional_components.clearbox.as_ref().unwrap();
         assert_eq!(cb.output_path, src_cb.output_path);
         assert_eq!(cb.software_trigger_delay, src_cb.software_trigger_delay);
-        assert_eq!(cb.volts_to_watts_algorithm, src_cb.volts_to_watts_algorithm);
-        let a: Vec<f64> = cb
-            .volts_to_watts_params
-            .as_deref()
-            .unwrap()
-            .split(',')
-            .map(|x| x.parse().unwrap())
-            .collect();
-        let b: Vec<f64> = src_cb
-            .volts_to_watts_params
-            .as_deref()
-            .unwrap()
-            .split(',')
-            .map(|x| x.parse().unwrap())
-            .collect();
+        let src_pc = src_cb.power_characterization.as_ref().unwrap();
+        let pc = cb.power_characterization.as_ref().unwrap();
+        assert_eq!(pc.algorithm_type, src_pc.algorithm_type);
+        let mut a: Vec<f64> = pc.derivation_equation_constants.iter().map(|c| c.value).collect();
+        let mut b: Vec<f64> = src_pc.derivation_equation_constants.iter().map(|c| c.value).collect();
+        a.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        b.sort_by(|x, y| x.partial_cmp(y).unwrap());
         assert_eq!(a, b);
 
         let src_ls = &source.optical_trains[i].light_source;
         let ls = &t.light_source;
-        assert_eq!(ls.watts_to_volts_algorithm, src_ls.watts_to_volts_algorithm);
-        let src_vals: Vec<f64> = src_ls
-            .watts_to_volts_params
-            .as_deref()
-            .unwrap()
-            .trim_matches(|c| c == '[' || c == ']')
-            .split(',')
-            .map(|x| x.parse().unwrap())
-            .collect();
-        let back_vals: Vec<f64> =
-            ls.watts_to_volts_params.as_deref().unwrap().split(',').map(|x| x.parse().unwrap()).collect();
-        assert_eq!(back_vals, src_vals);
+        let src_ls_pc = src_ls.power_characterization.as_ref().unwrap();
+        let ls_pc = ls.power_characterization.as_ref().unwrap();
+        assert_eq!(ls_pc.algorithm_type, src_ls_pc.algorithm_type);
+        let src_points: Vec<(f64, f64)> =
+            src_ls_pc.characterization_points.iter().map(|p| (p.input_value, p.output_value)).collect();
+        let back_points: Vec<(f64, f64)> =
+            ls_pc.characterization_points.iter().map(|p| (p.input_value, p.output_value)).collect();
+        assert_eq!(back_points, src_points);
     }
 }
 
@@ -658,7 +619,10 @@ fn test_dispatcher_v1_1_to_v1() {
     let result = MachineConfigReader::open(out.path()).unwrap().parse().unwrap();
     assert_eq!(result.meta.file_version, "1.0");
     let cb = result.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-    assert_eq!(cb.volts_to_watts_algorithm.as_deref(), Some("LINEAR"));
+    assert_eq!(
+        cb.power_characterization.as_ref().unwrap().algorithm_type.as_deref(),
+        Some("LINEAR")
+    );
 }
 
 // ---------------------------------------------------------------------------

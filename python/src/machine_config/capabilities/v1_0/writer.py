@@ -247,13 +247,10 @@ class Hdf5WriterV1_0:
         # Power_Bit_Resolution is stored as String type in real HDF5 files
         grp.attrs["Power_Bit_Resolution"]      = self._s(ls.power_bit_resolution)
         grp.attrs["Power_Bit_Resolution_unit"] = ls.power_bit_resolution_unit or "bits"
-        # Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native flat fields
-        # if present; only derive from power_characterization as a fallback
-        # when there's nothing native to write (e.g. a v1.1-sourced model).
-        # Never the other way around — a present native value always wins.
-        algorithm, params = ls.watts_to_volts_algorithm, ls.watts_to_volts_params
-        if algorithm is None and params is None and ls.power_characterization is not None:
-            algorithm, params = backward_flat_fields_points(ls.power_characterization)
+        # power_characterization is the only StableModel representation of
+        # this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md) —
+        # always derive the flat v1.0 shape from it, unconditionally.
+        algorithm, params = backward_flat_fields_points(ls.power_characterization)
         grp.attrs["Watts_To_Volts_Algorithm"] = self._s(algorithm)
         grp.attrs["Watts_To_Volts_Params"]    = self._s(params)
 
@@ -287,13 +284,10 @@ class Hdf5WriterV1_0:
         grp.attrs["Video_Output"]         = self._s(cb.video_output)
         grp.attrs["Show_Console"]         = self._b(cb.show_console)
         grp.attrs["Software_Trigger_Delay"]    = self._i(cb.software_trigger_delay)
-        # Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native flat fields
-        # if present; only derive from power_characterization as a fallback
-        # when there's nothing native to write (e.g. a v1.1-sourced model).
-        # Never the other way around — a present native value always wins.
-        algorithm, params = cb.volts_to_watts_algorithm, cb.volts_to_watts_params
-        if algorithm is None and params is None and cb.power_characterization is not None:
-            algorithm, params = backward_flat_fields_coefficients(cb.power_characterization)
+        # power_characterization is the only StableModel representation of
+        # this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md) —
+        # always derive the flat v1.0 shape from it, unconditionally.
+        algorithm, params = backward_flat_fields_coefficients(cb.power_characterization)
         grp.attrs["Volts_To_Watts_Algorithm"]  = self._s(algorithm)
         grp.attrs["Volts_To_Watts_Params"]     = self._s(params)
         grp.attrs["Correction_Grid_Domain_Shape"]  = self._s(cb.correction_grid_domain_shape)

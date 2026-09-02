@@ -646,13 +646,7 @@ func writeLightSource(g *h5c.Group, ls *LightSource) error {
 	if err := ws(g, "Power_Bit_Resolution", pbr); err != nil {
 		return err
 	}
-	if err := ws(g, "Power_Bit_Resolution_unit", strOrDefault(ls.PowerBitResolutionUnit, "bits")); err != nil {
-		return err
-	}
-	if err := ws(g, "Watts_To_Volts_Algorithm", strOrEmpty(ls.WattsToVoltsAlgorithm)); err != nil {
-		return err
-	}
-	return ws(g, "Watts_To_Volts_Params", strOrEmpty(ls.WattsToVoltsParams))
+	return ws(g, "Power_Bit_Resolution_unit", strOrDefault(ls.PowerBitResolutionUnit, "bits"))
 }
 
 // ---------------------------------------------------------------------------
@@ -743,12 +737,6 @@ func writeClearBox(g *h5c.Group, cb *ClearBox) error {
 		return err
 	}
 	if err := wi(g, "Software_Trigger_Delay", cb.SoftwareTriggerDelay); err != nil {
-		return err
-	}
-	if err := ws(g, "Volts_To_Watts_Algorithm", strOrEmpty(cb.VoltsToWattsAlgorithm)); err != nil {
-		return err
-	}
-	if err := ws(g, "Volts_To_Watts_Params", strOrEmpty(cb.VoltsToWattsParams)); err != nil {
 		return err
 	}
 	if err := ws(g, "Correction_Grid_Domain_Shape", strOrEmpty(cb.CorrectionGridDomainShape)); err != nil {

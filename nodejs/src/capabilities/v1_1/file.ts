@@ -10,10 +10,6 @@ import { Hdf5WriterV1_1 } from './writer.js';
 import { MockConfigBuilder } from '../../builder.js';
 import type { CorrectionData, MachineConfig } from '../../models.js';
 import { nestedToFlat } from '../../models.js';
-import {
-  forwardPowerCharacterizationCoefficients,
-  forwardPowerCharacterizationPoints,
-} from '../../powerCharacterization.js';
 import { err, ok, type Result } from '../result.js';
 import { capabilityError, SessionClosedError, type CapabilityError } from '../errors.js';
 import { applySetMode, snapshot } from '../merge.js';
@@ -82,45 +78,13 @@ export class MachineConfigFileV1_1 implements MachineConfigFile {
         capabilityError('UnsupportedVersion', `create() unsupported for File_Version "${fv}"`),
       );
     }
-    // Builds a plain previous-version-shaped mock config and derives
-    // power_characterization for each ClearBox/LightSource directly — avoids
-    // a second, independent mock-data builder just for create().
-    //
-    // Unlike Python's MachineConfigFileV1_1.create() (which writes the mock
-    // to a real temp file via Hdf5WriterV1_1 and re-opens it, letting the
-    // writer's own Phase 2 fallback derive power_characterization along the
-    // way), this facade holds config in memory directly with no HDF5 round
-    // trip at all — so the writer's fallback never runs here, and this
-    // method must call the shared derivation functions itself (same
-    // situation as the Rust/C++ facades' create()).
+    // Builds a plain previous-version-shaped mock config — MockConfigBuilder
+    // already builds power_characterization natively, so nothing further
+    // needs deriving here.
     const mock = new MockConfigBuilder({ nLasers: 1 }).build();
-    const optical_trains = mock.optical_trains.map((train) => {
-      const cb = train.optional_components.clearbox;
-      const optional_components = cb
-        ? {
-            clearbox: {
-              ...cb,
-              power_characterization: forwardPowerCharacterizationCoefficients(
-                cb.volts_to_watts_algorithm,
-                cb.volts_to_watts_params,
-              ),
-            },
-          }
-        : train.optional_components;
-      const ls = train.light_source;
-      const light_source = {
-        ...ls,
-        power_characterization: forwardPowerCharacterizationPoints(
-          ls.watts_to_volts_algorithm,
-          ls.watts_to_volts_params,
-        ),
-      };
-      return { ...train, light_source, optional_components };
-    });
     const config: MachineConfig = {
       ...mock,
       meta: { ...mock.meta, file_version: '1.1' },
-      optical_trains,
     };
     return ok(new MachineConfigFileV1_1(asJson(config), null, '1.1'));
   }

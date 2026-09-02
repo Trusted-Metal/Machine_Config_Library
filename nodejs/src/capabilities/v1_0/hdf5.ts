@@ -27,6 +27,10 @@ import type {
   CorrectionData,
 } from "../../models.js";
 import { float64ToNested3D } from "../../models.js";
+import {
+  forwardPowerCharacterizationCoefficients,
+  forwardPowerCharacterizationPoints,
+} from "../../powerCharacterization.js";
 
 export type { CorrectionData } from "../../models.js";
 import * as layout from "./layout.js";
@@ -336,9 +340,11 @@ function parseLightSource(grp: h5wasm.Group): LightSource {
     power_min_nominal_unit: attrStr(a, "Power_Min_Nominal_unit"),
     power_bit_resolution: attrFloat(a, "Power_Bit_Resolution"),
     power_bit_resolution_unit: attrStr(a, "Power_Bit_Resolution_unit"),
-    watts_to_volts_algorithm: attrStr(a, "Watts_To_Volts_Algorithm"),
-    watts_to_volts_params: attrStr(a, "Watts_To_Volts_Params"),
-    // power_characterization intentionally omitted — no v1.0 on-disk source.
+    power_characterization:
+      forwardPowerCharacterizationPoints(
+        attrStr(a, "Watts_To_Volts_Algorithm"),
+        attrStr(a, "Watts_To_Volts_Params"),
+      ) ?? undefined,
   };
 }
 
@@ -459,13 +465,15 @@ function parseClearBox(grp: h5wasm.Group, includeBinary: boolean): ClearBox {
     video_output: attrStr(a, "Video_Output"),
     show_console: attrBool(a, "Show_Console"),
     software_trigger_delay: attrInt(a, "Software_Trigger_Delay"),
-    volts_to_watts_algorithm: attrStr(a, "Volts_To_Watts_Algorithm"),
-    volts_to_watts_params: attrStr(a, "Volts_To_Watts_Params"),
+    power_characterization:
+      forwardPowerCharacterizationCoefficients(
+        attrStr(a, "Volts_To_Watts_Algorithm"),
+        attrStr(a, "Volts_To_Watts_Params"),
+      ) ?? undefined,
     correction_grid_domain_shape: attrStr(a, "Correction_Grid_Domain_Shape"),
     inverse_grid_domain_shape: attrStr(a, "Inverse_Grid_Domain_Shape"),
     synchronous_sensors: parseSynchronousSensors(grp),
-    // firmware_version / power_characterization intentionally omitted — no
-    // v1.0 on-disk source.
+    // firmware_version intentionally omitted — no v1.0 on-disk source.
   };
 
   if (includeBinary) {

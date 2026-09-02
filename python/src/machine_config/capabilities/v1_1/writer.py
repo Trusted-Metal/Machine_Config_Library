@@ -36,11 +36,6 @@ from machine_config.models import (
     nested_to_array,
 )
 
-from machine_config.power_characterization import (
-    forward_power_characterization_coefficients,
-    forward_power_characterization_points,
-)
-
 from . import layout
 from .hdf5 import (
     EQUATION_CONSTANT_NAME_MAX_BYTES,
@@ -320,20 +315,13 @@ class Hdf5WriterV1_1:
         grp.attrs["Power_Bit_Resolution"] = self._s(ls.power_bit_resolution)
         grp.attrs["Power_Bit_Resolution_unit"] = ls.power_bit_resolution_unit or "bits"
         # Change 4: Watts_To_Volts_Algorithm/Params are not written in
-        # v1.1 — superseded by Power_Characterization.
-        #
-        # Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native
-        # power_characterization if present; only derive from the flat
-        # fields as a fallback when there's nothing native to write (e.g. a
-        # v1.0-sourced model). Never the other way around — a present
-        # native value always wins.
-        pc = ls.power_characterization
-        if pc is None:
-            pc = forward_power_characterization_points(
-                ls.watts_to_volts_algorithm, ls.watts_to_volts_params
-            )
+        # v1.1 — power_characterization is the only StableModel
+        # representation of this concept now
+        # (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md), so there's nothing
+        # else to fall back to deriving from.
         self._write_power_characterization(
-            grp.require_group(layout.GROUP_POWER_CHARACTERIZATION), pc
+            grp.require_group(layout.GROUP_POWER_CHARACTERIZATION),
+            ls.power_characterization,
         )
 
     def _write_collimator(self, grp: h5py.Group, c: Collimator) -> None:
@@ -388,18 +376,12 @@ class Hdf5WriterV1_1:
             for name, sensor in cb.synchronous_sensors.items():
                 self._write_synchronous_sensor(sensors_grp.require_group(name), sensor)
 
-        # Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native
-        # power_characterization if present; only derive from the flat
-        # fields as a fallback when there's nothing native to write (e.g. a
-        # v1.0-sourced model). Never the other way around — a present
-        # native value always wins.
-        pc = cb.power_characterization
-        if pc is None:
-            pc = forward_power_characterization_coefficients(
-                cb.volts_to_watts_algorithm, cb.volts_to_watts_params
-            )
+        # power_characterization is the only StableModel representation of
+        # this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md), so
+        # there's nothing else to fall back to deriving from.
         self._write_power_characterization(
-            grp.require_group(layout.GROUP_POWER_CHARACTERIZATION), pc
+            grp.require_group(layout.GROUP_POWER_CHARACTERIZATION),
+            cb.power_characterization,
         )
 
     def _write_synchronous_sensor(self, grp: h5py.Group, sensor: SynchronousSensor) -> None:

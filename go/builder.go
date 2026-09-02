@@ -5,12 +5,34 @@ import (
 	"math"
 
 	"machine-config-go/capabilities/v1_0/layout"
+	"machine-config-go/internal/models"
 )
 
 const (
 	mockExportDate    = "2026-01-01T00:00:00.000Z"
 	mockSchemaVersion = "v1"
 )
+
+// mustPowerCharacterizationCoefficients/Points derive PowerCharacterization
+// from fixed, known-valid literals — the forward functions can only fail on
+// a genuinely malformed CSV float, which these mock literals never are, so
+// the error is asserted away rather than threaded through this
+// non-error-returning builder.
+func mustPowerCharacterizationCoefficients(algorithmType, params string) *models.PowerCharacterization {
+	pc, err := models.ForwardPowerCharacterizationCoefficients(StrPtr(algorithmType), StrPtr(params))
+	if err != nil {
+		panic(err)
+	}
+	return pc
+}
+
+func mustPowerCharacterizationPoints(algorithmType, params string) *models.PowerCharacterization {
+	pc, err := models.ForwardPowerCharacterizationPoints(StrPtr(algorithmType), StrPtr(params))
+	if err != nil {
+		panic(err)
+	}
+	return pc
+}
 
 // MockConfigBuilder generates deterministic synthetic machine-config files for testing.
 // Values are fixed so tests are reproducible across platforms.
@@ -134,8 +156,7 @@ func (b *MockConfigBuilder) buildTrain(index int) OpticalTrain {
 		PowerMinActualUnit:    StrPtr("W"),
 		PowerMinNominalUnit:   StrPtr("W"),
 		PowerBitResolutionUnit: StrPtr("bits"),
-		WattsToVoltsAlgorithm: StrPtr("LINEAR"),
-		WattsToVoltsParams:    StrPtr("[1,100,10,1000]"),
+		PowerCharacterization: mustPowerCharacterizationPoints("LINEAR", "[1,100,10,1000]"),
 	}
 
 	col := Collimator{
@@ -231,8 +252,7 @@ func mockClearbox(index int) ClearBox {
 		VideoOutput:           StrPtr("HDMI"),
 		ShowConsole:           BoolPtr(false),
 		SoftwareTriggerDelay:  IntPtr(3000),
-		VoltsToWattsAlgorithm: StrPtr("LINEAR"),
-		VoltsToWattsParams:    StrPtr("50.0,100.0"),
+		PowerCharacterization: mustPowerCharacterizationCoefficients("LINEAR", "50.0,100.0"),
 	}
 }
 

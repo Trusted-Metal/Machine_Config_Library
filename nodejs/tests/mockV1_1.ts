@@ -340,8 +340,6 @@ function parseLightSource(grp: h5wasm.Group): LightSource {
     power_min_nominal_unit: attrStr(a, 'Power_Min_Nominal_unit'),
     power_bit_resolution: attrFloat(a, 'Power_Bit_Resolution'),
     power_bit_resolution_unit: attrStr(a, 'Power_Bit_Resolution_unit'),
-    watts_to_volts_algorithm: attrStr(a, 'Watts_To_Volts_Algorithm'),
-    watts_to_volts_params: attrStr(a, 'Watts_To_Volts_Params'),
   };
 }
 
@@ -445,8 +443,6 @@ function parseClearBox(grp: h5wasm.Group, includeBinary: boolean): ClearBox {
     video_output: attrStr(a, 'Video_Output'),
     show_console: attrBool(a, 'Show_Console'),
     software_trigger_delay: attrInt(a, 'Software_Trigger_Delay'),
-    volts_to_watts_algorithm: attrStr(a, 'Volts_To_Watts_Algorithm'),
-    volts_to_watts_params: attrStr(a, 'Volts_To_Watts_Params'),
     correction_grid_domain_shape: attrStr(a, 'Correction_Grid_Domain_Shape'),
     inverse_grid_domain_shape: attrStr(a, 'Inverse_Grid_Domain_Shape'),
     synchronous_sensors: parseSynchronousSensors(grp),
@@ -860,8 +856,6 @@ function writeLightSource(grp: h5wasm.Group, ls: LightSource): void {
   ws(grp, 'Power_Min_Nominal_unit', ls.power_min_nominal_unit ?? 'W');
   ws(grp, 'Power_Bit_Resolution', ls.power_bit_resolution != null ? String(ls.power_bit_resolution) : null);
   ws(grp, 'Power_Bit_Resolution_unit', ls.power_bit_resolution_unit ?? 'bits');
-  ws(grp, 'Watts_To_Volts_Algorithm', ls.watts_to_volts_algorithm);
-  ws(grp, 'Watts_To_Volts_Params', ls.watts_to_volts_params);
 }
 
 function writeCollimator(grp: h5wasm.Group, c: Collimator): void {
@@ -896,8 +890,6 @@ function writeClearBox(grp: h5wasm.Group, cb: ClearBox): void {
   ws(grp, 'Video_Output', cb.video_output);
   wb(grp, 'Show_Console', cb.show_console);
   wi(grp, 'Software_Trigger_Delay', cb.software_trigger_delay);
-  ws(grp, 'Volts_To_Watts_Algorithm', cb.volts_to_watts_algorithm);
-  ws(grp, 'Volts_To_Watts_Params', cb.volts_to_watts_params);
   ws(grp, 'Correction_Grid_Domain_Shape', cb.correction_grid_domain_shape);
   ws(grp, 'Inverse_Grid_Domain_Shape', cb.inverse_grid_domain_shape);
   writeCorrectionDataset(grp, 'Correction_Data', cb.correction_data);

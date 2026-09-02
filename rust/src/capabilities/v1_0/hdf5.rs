@@ -60,6 +60,9 @@ pub(crate) struct RawCalibrationPoint {
 use super::layout;
 use crate::error::{MachineConfigError, Result};
 use crate::models::*;
+use crate::power_characterization::{
+    forward_power_characterization_coefficients, forward_power_characterization_points,
+};
 use crate::reader::ReaderAdapter;
 
 const SCHEMA_VERSION: &str = "v1";
@@ -638,6 +641,8 @@ impl Hdf5AdapterV1_0 {
     }
 
     fn parse_light_source(&self, grp: &Group) -> Result<LightSource> {
+        let watts_to_volts_algorithm = read_str(grp, "Watts_To_Volts_Algorithm")?;
+        let watts_to_volts_params = read_str(grp, "Watts_To_Volts_Params")?;
         Ok(LightSource {
             manufacturer: read_required_str(grp, "Manufacturer")?,
             model: read_required_str(grp, "Model")?,
@@ -658,10 +663,10 @@ impl Hdf5AdapterV1_0 {
                 "Power_Bit_Resolution_unit",
                 "bits",
             )?,
-            watts_to_volts_algorithm: read_str(grp, "Watts_To_Volts_Algorithm")?,
-            watts_to_volts_params: read_str(grp, "Watts_To_Volts_Params")?,
-            // v1.1 field; no v1.0 on-disk source.
-            power_characterization: None,
+            power_characterization: forward_power_characterization_points(
+                watts_to_volts_algorithm.as_deref(),
+                watts_to_volts_params.as_deref(),
+            )?,
         })
     }
 
@@ -710,6 +715,8 @@ impl Hdf5AdapterV1_0 {
             }
             Err(_) => IndexMap::new(),
         };
+        let volts_to_watts_algorithm = read_str(grp, "Volts_To_Watts_Algorithm")?;
+        let volts_to_watts_params = read_str(grp, "Volts_To_Watts_Params")?;
         Ok(ClearBox {
             ip_address: read_required_str(grp, "Ip_Address")?,
             serial_number: read_str(grp, "Serial_Number")?,
@@ -727,14 +734,15 @@ impl Hdf5AdapterV1_0 {
             video_output: read_str(grp, "Video_Output")?,
             show_console: read_bool_from_int(grp, "Show_Console")?,
             software_trigger_delay: read_int(grp, "Software_Trigger_Delay")?,
-            volts_to_watts_algorithm: read_str(grp, "Volts_To_Watts_Algorithm")?,
-            volts_to_watts_params: read_str(grp, "Volts_To_Watts_Params")?,
             correction_grid_domain_shape: read_str(grp, "Correction_Grid_Domain_Shape")?,
             inverse_grid_domain_shape: read_str(grp, "Inverse_Grid_Domain_Shape")?,
             synchronous_sensors,
-            // v1.1 fields; no v1.0 on-disk source.
+            // v1.1 field; no v1.0 on-disk source.
             firmware_version: None,
-            power_characterization: None,
+            power_characterization: forward_power_characterization_coefficients(
+                volts_to_watts_algorithm.as_deref(),
+                volts_to_watts_params.as_deref(),
+            )?,
         })
     }
 

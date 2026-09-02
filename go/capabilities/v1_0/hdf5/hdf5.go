@@ -443,6 +443,12 @@ func parseAxis(g *h5c.Group) (AxisConfig, error) {
 }
 
 func parseLightSource(g *h5c.Group) (LightSource, error) {
+	wattsToVoltsAlgorithm := readStrAttr(g, "Watts_To_Volts_Algorithm")
+	wattsToVoltsParams := readStrAttr(g, "Watts_To_Volts_Params")
+	pc, err := ForwardPowerCharacterizationPoints(wattsToVoltsAlgorithm, wattsToVoltsParams)
+	if err != nil {
+		return LightSource{}, err
+	}
 	return LightSource{
 		Manufacturer:           readRequiredStr(g, "Manufacturer"),
 		Model:                  readRequiredStr(g, "Model"),
@@ -459,8 +465,7 @@ func parseLightSource(g *h5c.Group) (LightSource, error) {
 		PowerMinNominalUnit:    readStrAttr(g, "Power_Min_Nominal_unit"),
 		PowerBitResolution:     mustFloat(g, "Power_Bit_Resolution"),
 		PowerBitResolutionUnit: readStrAttr(g, "Power_Bit_Resolution_unit"),
-		WattsToVoltsAlgorithm:  readStrAttr(g, "Watts_To_Volts_Algorithm"),
-		WattsToVoltsParams:     readStrAttr(g, "Watts_To_Volts_Params"),
+		PowerCharacterization:  pc,
 	}, nil
 }
 
@@ -519,6 +524,12 @@ func parseClearBox(f *h5c.File, path string, g *h5c.Group, includeBinary bool) (
 	if err != nil {
 		return ClearBox{}, err
 	}
+	voltsToWattsAlgorithm := readStrAttr(g, "Volts_To_Watts_Algorithm")
+	voltsToWattsParams := readStrAttr(g, "Volts_To_Watts_Params")
+	pc, err := ForwardPowerCharacterizationCoefficients(voltsToWattsAlgorithm, voltsToWattsParams)
+	if err != nil {
+		return ClearBox{}, err
+	}
 	cb := ClearBox{
 		IPAddress:                 readRequiredStr(g, "Ip_Address"),
 		SerialNumber:              readStrAttr(g, "Serial_Number"),
@@ -534,8 +545,7 @@ func parseClearBox(f *h5c.File, path string, g *h5c.Group, includeBinary bool) (
 		VideoOutput:               readStrAttr(g, "Video_Output"),
 		ShowConsole:               sc,
 		SoftwareTriggerDelay:      std,
-		VoltsToWattsAlgorithm:     readStrAttr(g, "Volts_To_Watts_Algorithm"),
-		VoltsToWattsParams:        readStrAttr(g, "Volts_To_Watts_Params"),
+		PowerCharacterization:     pc,
 		CorrectionGridDomainShape: readStrAttr(g, "Correction_Grid_Domain_Shape"),
 		InverseGridDomainShape:    readStrAttr(g, "Inverse_Grid_Domain_Shape"),
 		SynchronousSensors:        parseSynchronousSensors(g),

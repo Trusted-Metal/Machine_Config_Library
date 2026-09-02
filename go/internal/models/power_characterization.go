@@ -17,18 +17,23 @@
 // reference regardless of what calls it. See V1_1_IMPLEMENTATION_PLAN.md's
 // Phase 2 "Structural requirement" note for the full reasoning.
 //
-// Both writers — never the readers — call the matching forward/backward
-// function for the *other* shape, and only as a fallback: each writer first
-// looks at its own native field, and only derives from the other shape when
-// its own is absent. Concretely, v1_0/hdf5.Write writes
-// Volts_To_Watts_*/Watts_To_Volts_* directly if present, else derives them
-// from PowerCharacterization; v1_1/hdf5.Write writes PowerCharacterization
-// directly if present, else derives it from the flat fields. Both readers
-// stay exactly as simple as every other version's reader — each reads only
-// its own on-disk shape, nothing more. (An earlier draft of Phase 2 put this
-// in the readers instead; rejected because it only works for models that
-// came from an actual Parse call — see V1_1_IMPLEMENTATION_PLAN.md Phase 2's
-// "Design decision" section for the full comparison.)
+// PowerCharacterization is the only StableModel representation of this
+// concept, for files of either version — there is no separate
+// Volts_To_Watts_*/Watts_To_Volts_* field to fall back to. v1_0/hdf5.Parse
+// calls the forward function unconditionally as part of ordinary parsing,
+// to populate PowerCharacterization from the on-disk flat attrs;
+// v1_0/hdf5.Write calls the backward function unconditionally to derive the
+// flat attrs it writes from PowerCharacterization. v1_1/hdf5 reads and
+// writes PowerCharacterization natively, with no conversion at all.
+//
+// (An earlier design — V1_1_IMPLEMENTATION_PLAN.md's Phase 2 — kept both
+// representations on the StableModel side by side, with each writer
+// deriving from the other shape only as a fallback when its own native
+// field was absent, and kept this conversion out of the readers entirely
+// because it only worked for models that came from an actual Parse call.
+// That asymmetry — silently empty for any consumer that only ever read the
+// legacy field — is exactly what motivated collapsing to a single field;
+// see POWER_CHARACTERIZATION_UNIFICATION_PLAN.md's "Context" section.)
 //
 // Two shapes exist today:
 //   - Coefficients (Change 3 / ClearBox): Params is a positional,

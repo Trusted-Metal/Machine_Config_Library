@@ -10,7 +10,6 @@
 
 #include "machine_config/adapters.hpp"
 #include "machine_config/models.hpp"
-#include "machine_config/power_characterization.hpp"
 #include "machine_config/capabilities/v1_1/compound_types.hpp"
 #include "machine_config/capabilities/v1_1/layout.hpp"
 
@@ -338,16 +337,8 @@ private:
         ws(grp, "Power_Bit_Resolution",       pbr);
         ws(grp, "Power_Bit_Resolution_unit",  ls.power_bit_resolution_unit.value_or("bits"));
         // Change 4: Watts_To_Volts_Algorithm/Params are not written in this
-        // File_Version — superseded by Power_Characterization.
-        //
-        // Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native
-        // power_characterization if present; only derive from the flat
-        // fields as a fallback when there's nothing native to write (e.g. a
-        // v1.0-sourced model). Never the other way around — a present
-        // native value always wins.
-        auto pc = ls.power_characterization
-            ? ls.power_characterization
-            : forwardPowerCharacterizationPoints(ls.watts_to_volts_algorithm, ls.watts_to_volts_params);
+        // File_Version — power_characterization is the only representation.
+        auto pc = ls.power_characterization;
         auto pcGrp = grp.createGroup(GROUP_POWER_CHARACTERIZATION);
         writePowerCharacterization(pcGrp, pc);
     }
@@ -400,14 +391,7 @@ private:
             }
         }
 
-        // Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native
-        // power_characterization if present; only derive from the flat
-        // fields as a fallback when there's nothing native to write (e.g. a
-        // v1.0-sourced model). Never the other way around — a present
-        // native value always wins.
-        auto pc = cb.power_characterization
-            ? cb.power_characterization
-            : forwardPowerCharacterizationCoefficients(cb.volts_to_watts_algorithm, cb.volts_to_watts_params);
+        auto pc = cb.power_characterization;
         auto pcGrp = grp.createGroup(GROUP_POWER_CHARACTERIZATION);
         writePowerCharacterization(pcGrp, pc);
     }

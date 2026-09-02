@@ -24,7 +24,6 @@ import type {
   CalibrationPoint,
 } from "../../models.js";
 import { nestedToFlat } from "../../models.js";
-import { forwardPowerCharacterizationCoefficients, forwardPowerCharacterizationPoints } from "../../powerCharacterization.js";
 import * as layout from "./layout.js";
 
 // ---------------------------------------------------------------------------
@@ -326,15 +325,7 @@ function writeLightSource(grp: h5wasm.Group, ls: LightSource): void {
   ws(grp, "Power_Bit_Resolution",
     ls.power_bit_resolution != null ? String(ls.power_bit_resolution) : null);
   ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit ?? "bits");
-  // Phase 2 clean-up (see the migration implementation plan): write the
-  // native power_characterization if present; only derive from the flat
-  // fields as a fallback when there's nothing native to write (e.g. a
-  // v1.0-sourced model). Never the other way around — a present native
-  // value always wins.
-  const pc =
-    ls.power_characterization ??
-    forwardPowerCharacterizationPoints(ls.watts_to_volts_algorithm, ls.watts_to_volts_params);
-  writePowerCharacterization(grp.create_group(layout.GROUP_POWER_CHARACTERIZATION), pc);
+  writePowerCharacterization(grp.create_group(layout.GROUP_POWER_CHARACTERIZATION), ls.power_characterization);
 }
 
 function writeCollimator(grp: h5wasm.Group, c: Collimator): void {
@@ -382,15 +373,7 @@ function writeClearBox(grp: h5wasm.Group, cb: ClearBox): void {
     }
   }
 
-  // Phase 2 clean-up (see the migration implementation plan): write the
-  // native power_characterization if present; only derive from the flat
-  // fields as a fallback when there's nothing native to write (e.g. a
-  // v1.0-sourced model). Never the other way around — a present native
-  // value always wins.
-  const pc =
-    cb.power_characterization ??
-    forwardPowerCharacterizationCoefficients(cb.volts_to_watts_algorithm, cb.volts_to_watts_params);
-  writePowerCharacterization(grp.create_group(layout.GROUP_POWER_CHARACTERIZATION), pc);
+  writePowerCharacterization(grp.create_group(layout.GROUP_POWER_CHARACTERIZATION), cb.power_characterization);
 }
 
 function writeSfcf(trainGrp: h5wasm.Group, sfcf: ScanFieldCorrectionFile): void {

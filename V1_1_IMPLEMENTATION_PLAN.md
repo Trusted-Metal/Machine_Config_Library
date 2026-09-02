@@ -1,6 +1,8 @@
 # File_Version 1.1 — Implementation Plan
 
-**Status: Phase 0 and Phase 1 both complete, all 5 languages (2026-09-01).**
+**Status: Phase 0 and Phase 1 both complete, all 5 languages (2026-09-01). Phase 2
+superseded (2026-09-02) — see the postscript at the end of this document and
+`POWER_CHARACTERIZATION_UNIFICATION_PLAN.md`.**
 `DISPATCH_REGISTRY_PLAN.md` is done and verified in all 5 languages (2026-08-31) — every
 `File_Version` dispatch point is a real registry, so adding v1.1 was a one-line entry per
 language, not a bespoke dispatch edit. All four manifest blockers are resolved
@@ -667,7 +669,21 @@ the mock's Addition/Removal/Name/Path/Name+Path set.
 
 ## Phase 2 — clean-up: writer-side fallback derivation, remove migrate functions
 
-**Status: Python done (2026-09-01); Rust, C++, Go, Node.js not started.** Raised after
+**Status: superseded (2026-09-02) — see `POWER_CHARACTERIZATION_UNIFICATION_PLAN.md`.**
+Phase 2's design (below) kept both the flat v1.0 fields and the structured
+`power_characterization` field alive side by side on the StableModel, with each
+writer deriving from the other shape only as a fallback when its own native field
+was absent. That asymmetry caused a real, confirmed integration bug downstream (a
+consumer that only ever read the legacy field got a silently empty value for every
+v1.1 file — see that plan's "Context" section for the full incident). The
+follow-on plan removes the flat fields (`ClearBox.volts_to_watts_algorithm`/
+`_params`, `LightSource.watts_to_volts_algorithm`/`_params`) from the StableModel
+entirely in all 5 languages, leaving `power_characterization` as the sole
+representation for files of either version — the migrate-function removal and the
+target-version-override writer API described in this Phase 2 section are unaffected
+and remain as implemented; only the "keep both fields, derive as fallback" part of
+the design was superseded. Original Phase 2 status before this note: Python done
+(2026-09-01); Rust, C++, Go, Node.js not started. Raised after
 Phase 1 shipped, during a review of why separate `migrate_v1_to_v1_1`/`migrate_v1_1_to_v1`
 functions exist at all given the StableModel-plus-adapters architecture. Confirmed as a
 real, demonstrable gap, not a style preference — see "Root cause" below.
@@ -1597,3 +1613,25 @@ repo's usual convention.
    bodies and let the release-notes-generator produce the entry. `docs/contributing.md`'s
    step 6 rewritten to match: the migration manifest's own "API impact" section is the
    consumer-facing detail, not a hand-authored CHANGELOG table.
+
+---
+
+## Postscript: Phase 2 superseded by `POWER_CHARACTERIZATION_UNIFICATION_PLAN.md` (2026-09-02)
+
+This plan's Phase 2 (item 3 above, "Confirmed, not just assumed") explicitly predicted
+that `PARITY_AUDIT.md`'s Node float-formatting item "did not surface here, and
+structurally cannot with `cross_check.py` as it exists today," and named the exact
+condition that would make it live: exercising the acceptance criterion directly by
+writing a v1.0-sourced config out as v1.1, or vice versa. That is precisely what
+motivated the follow-on plan — a real downstream integration bug (`clearbox-tauri`
+reading the legacy flat field and getting silent empty data from every v1.1 file)
+surfaced exactly this scenario in practice, not in `cross_check.py`. Rather than
+patching the fallback-derivation asymmetry, `POWER_CHARACTERIZATION_UNIFICATION_PLAN.md`
+removed `ClearBox.volts_to_watts_algorithm`/`_params` and
+`LightSource.watts_to_volts_algorithm`/`_params` from the StableModel entirely, in all 5
+languages, leaving `power_characterization` as the only representation of this concept
+for files of either version. Implemented and verified language-by-language
+(Python → Rust → C++ → Go → Node.js, 2026-09-02), with a full `tools/cross_check.py`
+run afterward (all 5 phases, all 5 languages, clean) confirming no regression. See that
+plan for the full incident, the per-language diffs, and the "not a breaking change"
+semver reasoning.

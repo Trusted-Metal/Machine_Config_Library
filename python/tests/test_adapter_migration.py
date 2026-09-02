@@ -385,8 +385,6 @@ class MockV1_1Reader:
             power_min_nominal_unit=_read_str_locked(a, "Power_Min_Nominal_unit", "W"),
             power_bit_resolution=_read_float(a, "Power_Bit_Resolution"),
             power_bit_resolution_unit=_read_str_locked(a, "Power_Bit_Resolution_unit", "bits"),
-            watts_to_volts_algorithm=_read_str(a, "Watts_To_Volts_Algorithm"),
-            watts_to_volts_params=_read_str(a, "Watts_To_Volts_Params"),
         )
 
     def _parse_collimator(self, grp: h5py.Group) -> Collimator:
@@ -436,8 +434,6 @@ class MockV1_1Reader:
             video_output=_read_str(a, "Video_Output"),
             show_console=_read_bool_from_int(a, "Show_Console"),
             software_trigger_delay=_read_int(a, "Software_Trigger_Delay"),
-            volts_to_watts_algorithm=_read_str(a, "Volts_To_Watts_Algorithm"),
-            volts_to_watts_params=_read_str(a, "Volts_To_Watts_Params"),
             correction_grid_domain_shape=_read_str(a, "Correction_Grid_Domain_Shape"),
             inverse_grid_domain_shape=_read_str(a, "Inverse_Grid_Domain_Shape"),
             synchronous_sensors=synchronous_sensors,
@@ -659,8 +655,6 @@ class MockV1_1Writer:
         grp.attrs["Power_Min_Nominal_unit"] = ls.power_min_nominal_unit or "W"
         grp.attrs["Power_Bit_Resolution"]      = _s(ls.power_bit_resolution)
         grp.attrs["Power_Bit_Resolution_unit"] = ls.power_bit_resolution_unit or "bits"
-        grp.attrs["Watts_To_Volts_Algorithm"] = _s(ls.watts_to_volts_algorithm)
-        grp.attrs["Watts_To_Volts_Params"]    = _s(ls.watts_to_volts_params)
 
     def _write_collimator(self, grp: h5py.Group, c: Collimator) -> None:
         grp.attrs["Manufacturer"]  = c.manufacturer
@@ -692,8 +686,6 @@ class MockV1_1Writer:
         grp.attrs["Video_Output"]         = _s(cb.video_output)
         grp.attrs["Show_Console"]         = _b(cb.show_console)
         grp.attrs["Software_Trigger_Delay"]    = _i(cb.software_trigger_delay)
-        grp.attrs["Volts_To_Watts_Algorithm"]  = _s(cb.volts_to_watts_algorithm)
-        grp.attrs["Volts_To_Watts_Params"]     = _s(cb.volts_to_watts_params)
         grp.attrs["Correction_Grid_Domain_Shape"]  = _s(cb.correction_grid_domain_shape)
         grp.attrs["Inverse_Grid_Domain_Shape"]     = _s(cb.inverse_grid_domain_shape)
         grp.create_dataset("Correction_Data", data=nested_to_array(cb.correction_data))
@@ -865,8 +857,6 @@ def _make_config(
                     power_min_actual=10.0,   power_min_actual_unit="W",
                     power_min_nominal=10.0,  power_min_nominal_unit="W",
                     power_bit_resolution=None, power_bit_resolution_unit="bits",
-                    watts_to_volts_algorithm=None,
-                    watts_to_volts_params=None,
                 ),
                 collimator=Collimator(
                     manufacturer="Sill",

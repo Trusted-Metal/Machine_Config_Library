@@ -165,8 +165,6 @@ pub struct ClearBox {
     /// HDF5 int 0/1.
     pub show_console: Option<bool>,
     pub software_trigger_delay: Option<i64>,
-    pub volts_to_watts_algorithm: Option<String>,
-    pub volts_to_watts_params: Option<String>,
     pub correction_grid_domain_shape: Option<String>,
     pub inverse_grid_domain_shape: Option<String>,
     /// Key = free-form sensor label (HDF5 sub-group name under
@@ -186,8 +184,11 @@ pub struct ClearBox {
     /// v1.1 addition (Change 1); `None` for v1.0 files, no on-disk source there.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub firmware_version: Option<String>,
-    /// v1.1 addition (Change 3); supersedes `volts_to_watts_algorithm`/
-    /// `volts_to_watts_params`, which stay populated for v1.0 files.
+    /// The only representation of this concept, for files of either version.
+    /// v1.0's `Volts_To_Watts_Algorithm`/`Params` is a lossless flat encoding
+    /// of the same data (see `power_characterization.rs`'s forward/backward
+    /// functions) — the StableModel no longer carries that flat shape as a
+    /// separate field (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub power_characterization: Option<PowerCharacterization>,
 }
@@ -367,10 +368,8 @@ pub struct LightSource {
     /// HDF5 stores this attribute as a string; the reader parses it to `f64`.
     pub power_bit_resolution: Option<f64>,
     pub power_bit_resolution_unit: Option<String>,
-    pub watts_to_volts_algorithm: Option<String>,
-    pub watts_to_volts_params: Option<String>,
-    /// v1.1 addition (Change 4); supersedes `watts_to_volts_algorithm`/
-    /// `watts_to_volts_params`, which stay populated for v1.0 files.
+    /// The only representation of this concept, for files of either
+    /// version — see `ClearBox.power_characterization`'s comment.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub power_characterization: Option<PowerCharacterization>,
 }
@@ -658,8 +657,6 @@ mod tests {
                 power_min_nominal_unit: None,
                 power_bit_resolution: None,
                 power_bit_resolution_unit: None,
-                watts_to_volts_algorithm: None,
-                watts_to_volts_params: None,
                 power_characterization: None,
             },
             collimator: Collimator {
@@ -833,8 +830,6 @@ mod tests {
             video_output: None,
             show_console: None,
             software_trigger_delay: None,
-            volts_to_watts_algorithm: None,
-            volts_to_watts_params: None,
             correction_grid_domain_shape: None,
             inverse_grid_domain_shape: None,
             synchronous_sensors: IndexMap::new(),

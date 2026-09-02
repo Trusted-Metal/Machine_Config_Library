@@ -779,19 +779,7 @@ func writeLightSource(g *h5c.Group, ls *LightSource) error {
 		return err
 	}
 
-	// Phase 2 (V1_1_IMPLEMENTATION_PLAN.md, clean-up phase): write the
-	// native PowerCharacterization if present; only derive from the flat
-	// fields as a fallback when there's nothing native to write (e.g. a
-	// v1.0-sourced model). Never the other way around — a present native
-	// value always wins.
 	pc := ls.PowerCharacterization
-	if pc == nil {
-		var err error
-		pc, err = ForwardPowerCharacterizationPoints(ls.WattsToVoltsAlgorithm, ls.WattsToVoltsParams)
-		if err != nil {
-			return err
-		}
-	}
 	pcGrp, err := g.CreateGroup(layout.GroupPowerCharacterization)
 	if err != nil {
 		return err
@@ -933,19 +921,7 @@ func writeClearBoxPerTrain(g *h5c.Group, cb *ClearBox) error {
 		}
 	}
 
-	// Phase 2 (V1_1_IMPLEMENTATION_PLAN.md, clean-up phase): write the
-	// native PowerCharacterization if present; only derive from the flat
-	// fields as a fallback when there's nothing native to write (e.g. a
-	// v1.0-sourced model). Never the other way around — a present native
-	// value always wins.
 	pc := cb.PowerCharacterization
-	if pc == nil {
-		var perr error
-		pc, perr = ForwardPowerCharacterizationCoefficients(cb.VoltsToWattsAlgorithm, cb.VoltsToWattsParams)
-		if perr != nil {
-			return perr
-		}
-	}
 	pcGrp, err := g.CreateGroup(layout.GroupPowerCharacterization)
 	if err != nil {
 		return err

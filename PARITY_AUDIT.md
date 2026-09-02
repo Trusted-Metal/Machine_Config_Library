@@ -228,6 +228,81 @@ One language can do less than the others, without necessarily producing wrong ou
     touching existing v1.0 float-serialization call sites and their golden-file/
     round-trip tests — bigger and riskier than the discovery context, deliberately not
     undertaken as part of Phase 2 clean-up.
+  - **Reachability update (2026-09-02):** `POWER_CHARACTERIZATION_UNIFICATION_PLAN.md`
+    made `backwardFlatFieldsCoefficients`/`Points` unconditional on v1.0's writer path —
+    every v1.0 write now calls them, not just the old Phase 2 fallback case (native field
+    absent). This doesn't change the fix above, but it does raise this item's practical
+    likelihood: the whole-number-CSV-formatting mismatch is now reachable from *any*
+    `power_characterization`-bearing v1.0 write in Node, not a narrower fallback-only
+    path.
+
+- [ ] **Python's generated `MachineConfigFile` Protocol is dead code — and quietly
+      incomplete.** `python/src/machine_config/capabilities/generated.py:63` defines
+      `class MachineConfigFile(Protocol)`, but `capabilities/__init__.py:20` only
+      imports `SetMode` from that module, never `MachineConfigFile` itself, and
+      `open_machine_config`/`create_machine_config` (`__init__.py:58,74`) are typed as
+      returning the concrete `MachineConfigFileV1_0`/`MachineConfigFileV1_1`, not the
+      Protocol. Confirmed by a repo-wide grep: `MachineConfigFile` as a symbol appears
+      only in its own definition and one unrelated string literal in `errors.py:38`
+      ("MachineConfigFile session is closed") — no `isinstance(x, MachineConfigFile)`
+      check, no annotation, nothing else references it. This is a real asymmetry with
+      the other 3 generated languages: Rust (`impl ... MachineConfigFile for
+      MachineConfigFileV1_0`, `capabilities/v1_0/file.rs:394`), C++ (`class
+      MachineConfigFileV1_0 : public IMachineConfigFile`, `v1_0/file.hpp:18`), and TS
+      (`implements MachineConfigFile`, `v1_0/file.ts:39`) all compile-enforce it as the
+      real dispatch return type. Separately, and independently of being unused, it's
+      also structurally incomplete versus the class it claims to describe: it has no
+      `get_correction_data`/`get_inverse_correction_data`-equivalent methods, even
+      though `capabilities/v1_0/file.py:120-140` implements them and TS's generated
+      `MachineConfigFile` interface has both (`generated.ts:80-81`).
+  - **Impact:** none today, precisely because nothing consults it — that's the risk.
+    If Python's dispatch is ever changed to actually type-check against this Protocol
+    (matching what the other 3 generated languages already do), it would immediately
+    fail to describe `get_correction_data`/`get_inverse_correction_data`, silently
+    narrowing what a caller could do through that type.
+
+- [ ] **No CI check verifies the 4 `generate_capabilities.py` outputs are consistent
+      with *each other*.** `--check` (enforced in `.github/workflows/python.yml`)
+      only detects a single template drifting from its own previously-generated file —
+      it never compares Rust's/C++'s/Python's/TS's rendered method lists against one
+      another. This is exactly how the confirmed gaps above (Python's Protocol missing
+      correction-data methods; C++'s `IMachineConfigFile` missing a `setTrain`
+      equivalent that Rust's trait has, per the generator's own comment at
+      `tools/generate_capabilities.py:176-181`) can exist without failing any pipeline.
+      `DISPATCH_REGISTRY_PLAN.md` records that C++'s generated interface was once far
+      more incomplete still (4 methods vs. the concrete class's ~23) before a manual
+      audit caught it — not an automated one.
+  - **Impact:** cross-language facade parity depends entirely on whoever edits
+    `generate_capabilities.py` remembering to update all 4 render functions in
+    lockstep, and on periodic manual audits (like this one) to catch it when they
+    don't. No regression test would fail if that discipline lapses again.
+
+- [ ] **`create()`/`create_machine_config` is fully implemented and tested in all 5
+      languages but has essentially no real-world caller and inconsistent
+      documentation.** Every call site found, in every language, is either a unit test
+      or one of the `docs/validation/*/app/scenarios.*` cross-language parity-checklist
+      harnesses (not example code) — specifically scenario S-10, whose own purpose is
+      confirming the function is *importable*, not demonstrating real usage. The
+      consumer-facing example code never calls it at all: `examples/quickstart/*` has
+      zero matches for "create" across all 5 languages, and `examples/full_workflow/*`
+      is empty `.gitkeep` placeholders with no real content in any language. Documented
+      as an actual "start a new config" feature only in `docs/nodejs.md` (with a real
+      example); Python's docs import it without demonstrating it; Rust's and C++'s docs
+      omit it from their Capability API sections entirely, documenting
+      `MockConfigBuilder` separately instead ("generate a synthetic test config"); Go's
+      docs omit it too. It's also implemented three different ways across 5 languages —
+      real `MockConfigBuilder` output written to a real temp file and read back
+      (Python, so the writer/reader's own fallback logic does any needed derivation as
+      a side effect); real `MockConfigBuilder` output held in memory with explicit
+      derivation calls (Rust/C++/Node, relevant to
+      `POWER_CHARACTERIZATION_UNIFICATION_PLAN.md`); and a hand-built literal mock with
+      no `MockConfigBuilder` involvement at all (Go — consistent with `docs/go.md`
+      still listing `MockConfigBuilder` as a TODO for Go).
+  - **Impact:** none currently — nothing depends on it — but it's real, ongoing
+    maintenance surface (a full dispatch registry, tests in all 5 languages, and now
+    the derivation logic `POWER_CHARACTERIZATION_UNIFICATION_PLAN.md` touches) carried
+    for a feature that isn't consistently positioned anywhere as something a consumer
+    should actually reach for.
 
 ---
 

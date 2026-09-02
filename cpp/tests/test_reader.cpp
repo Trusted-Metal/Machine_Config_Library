@@ -109,7 +109,8 @@ TEST_CASE("ClearBoxScalars") {
     REQUIRE(cb.commanded_timing_offset == std::optional<int64_t>{50});
     REQUIRE(cb.show_console      == std::optional<bool>{false});
     REQUIRE(cb.software_trigger_delay == std::optional<int64_t>{3000});
-    REQUIRE(cb.volts_to_watts_algorithm == std::optional<std::string>{"LINEAR"});
+    REQUIRE(cb.power_characterization.has_value());
+    REQUIRE(cb.power_characterization->algorithm_type == std::optional<std::string>{"LINEAR"});
     // correction_data and inverse_correction_data deferred to §4.11
     REQUIRE_FALSE(cb.correction_data.has_value());
     REQUIRE_FALSE(cb.inverse_correction_data.has_value());

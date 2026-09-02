@@ -303,16 +303,7 @@ function writeLightSource(grp: h5wasm.Group, ls: LightSource): void {
   ws(grp, "Power_Bit_Resolution",
     ls.power_bit_resolution != null ? String(ls.power_bit_resolution) : null);
   ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit ?? "bits");
-  // Phase 2 clean-up (see the migration implementation plan): write the
-  // native flat fields if present; only derive from power_characterization
-  // as a fallback when there's nothing native to write (e.g. a
-  // v1.1-sourced model). Never the other way around — a present native
-  // value always wins.
-  let wattsAlgorithm = ls.watts_to_volts_algorithm;
-  let wattsParams = ls.watts_to_volts_params;
-  if (wattsAlgorithm == null && wattsParams == null) {
-    [wattsAlgorithm, wattsParams] = backwardFlatFieldsPoints(ls.power_characterization);
-  }
+  const [wattsAlgorithm, wattsParams] = backwardFlatFieldsPoints(ls.power_characterization);
   ws(grp, "Watts_To_Volts_Algorithm", wattsAlgorithm);
   ws(grp, "Watts_To_Volts_Params", wattsParams);
 }
@@ -349,16 +340,7 @@ function writeClearBox(grp: h5wasm.Group, cb: ClearBox): void {
   ws(grp, "Video_Output", cb.video_output);
   wb(grp, "Show_Console", cb.show_console);
   wi(grp, "Software_Trigger_Delay", cb.software_trigger_delay);
-  // Phase 2 clean-up (see the migration implementation plan): write the
-  // native flat fields if present; only derive from power_characterization
-  // as a fallback when there's nothing native to write (e.g. a
-  // v1.1-sourced model). Never the other way around — a present native
-  // value always wins.
-  let voltsAlgorithm = cb.volts_to_watts_algorithm;
-  let voltsParams = cb.volts_to_watts_params;
-  if (voltsAlgorithm == null && voltsParams == null) {
-    [voltsAlgorithm, voltsParams] = backwardFlatFieldsCoefficients(cb.power_characterization);
-  }
+  const [voltsAlgorithm, voltsParams] = backwardFlatFieldsCoefficients(cb.power_characterization);
   ws(grp, "Volts_To_Watts_Algorithm", voltsAlgorithm);
   ws(grp, "Volts_To_Watts_Params", voltsParams);
   ws(grp, "Correction_Grid_Domain_Shape", cb.correction_grid_domain_shape);

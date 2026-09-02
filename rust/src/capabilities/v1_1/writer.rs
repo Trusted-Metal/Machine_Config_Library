@@ -20,9 +20,6 @@ use super::hdf5::{RawCalibrationPoint, RawEquationConstant, EQUATION_CONSTANT_NA
 use super::layout;
 use crate::error::{MachineConfigError, Result};
 use crate::models::*;
-use crate::power_characterization::{
-    forward_power_characterization_coefficients, forward_power_characterization_points,
-};
 use crate::writer::WriterAdapter;
 
 // ---------------------------------------------------------------------------
@@ -468,27 +465,12 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Power_Bit_Resolution", &pbr_str)?;
         ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit.as_deref().unwrap_or("bits"))?;
         // Change 4: Watts_To_Volts_Algorithm/Params are not written in v1.1 —
-        // superseded by Power_Characterization.
-        //
-        // Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native
-        // power_characterization if present; only derive from the flat
-        // fields as a fallback when there's nothing native to write (e.g. a
-        // v1.0-sourced model). Never the other way around — a present
-        // native value always wins.
-        let derived_pc;
-        let pc = match ls.power_characterization.as_ref() {
-            Some(pc) => Some(pc),
-            None => {
-                derived_pc = forward_power_characterization_points(
-                    ls.watts_to_volts_algorithm.as_deref(),
-                    ls.watts_to_volts_params.as_deref(),
-                )?;
-                derived_pc.as_ref()
-            }
-        };
+        // power_characterization is the only StableModel representation of
+        // this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md), so
+        // there's nothing else to fall back to deriving from.
         self.write_power_characterization(
             &grp.create_group(layout::GROUP_POWER_CHARACTERIZATION)?,
-            pc,
+            ls.power_characterization.as_ref(),
         )?;
         Ok(())
     }
@@ -551,25 +533,12 @@ impl<'a> Hdf5WriterV1_1<'a> {
             }
         }
 
-        // Phase 2 (V1_1_IMPLEMENTATION_PLAN.md): write the native
-        // power_characterization if present; only derive from the flat
-        // fields as a fallback when there's nothing native to write (e.g. a
-        // v1.0-sourced model). Never the other way around — a present
-        // native value always wins.
-        let derived_pc;
-        let pc = match cb.power_characterization.as_ref() {
-            Some(pc) => Some(pc),
-            None => {
-                derived_pc = forward_power_characterization_coefficients(
-                    cb.volts_to_watts_algorithm.as_deref(),
-                    cb.volts_to_watts_params.as_deref(),
-                )?;
-                derived_pc.as_ref()
-            }
-        };
+        // power_characterization is the only StableModel representation of
+        // this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md), so
+        // there's nothing else to fall back to deriving from.
         self.write_power_characterization(
             &grp.create_group(layout::GROUP_POWER_CHARACTERIZATION)?,
-            pc,
+            cb.power_characterization.as_ref(),
         )?;
 
         Ok(())

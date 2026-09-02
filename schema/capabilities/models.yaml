@@ -102,8 +102,6 @@ models:
       - { id: power_min_nominal_unit, type: string, nullable: true }
       - { id: power_bit_resolution, type: number, nullable: true }
       - { id: power_bit_resolution_unit, type: string, nullable: true }
-      - { id: watts_to_volts_algorithm, type: string, nullable: true }
-      - { id: watts_to_volts_params, type: string, nullable: true }
 
   Collimator:
     extra: true
@@ -141,8 +139,6 @@ models:
       - { id: video_output, type: string, nullable: true }
       - { id: show_console, type: boolean, nullable: true }
       - { id: software_trigger_delay, type: number, nullable: true }
-      - { id: volts_to_watts_algorithm, type: string, nullable: true }
-      - { id: volts_to_watts_params, type: string, nullable: true }
       - { id: correction_grid_domain_shape, type: string, nullable: true }
       - { id: inverse_grid_domain_shape, type: string, nullable: true }
       - { id: firmware_version, type: string, nullable: true } # v1.1 (Change 1); no v1.0 source

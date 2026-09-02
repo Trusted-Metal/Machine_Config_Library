@@ -332,6 +332,38 @@ in every language simultaneously.
 If a new version introduces a concept that has no place in `MachineConfig`, that is the
 signal to add an optional field to the model — not to work around it via `extra` dicts.
 
+**New field vs. replacement field — decide which one this is.** Not every new field a
+version adds is a genuinely *new* concept. Two shapes look similar at the moment you add
+the field but diverge badly afterward:
+
+- **New orthogonal concept.** The new field represents something the model never
+  captured before — nothing on the old version's side claims to hold the same
+  information in a different shape. Add the optional field and leave every existing
+  field exactly as it is. This is the common, safe case the bullets above describe.
+- **Transform of an existing concept's on-disk shape.** The new version represents a
+  concept the model *already has a field for*, just in a richer or different on-disk
+  shape (a flat string replaced by a structured group, an enum widened to a struct,
+  etc.). Here, the *old* field should usually be **removed** — via the same major
+  breaking change review as any other field removal — with the version-specific
+  adapters doing the shape conversion, not left sitting alongside the new field with
+  each version populating whichever one it recognizes.
+
+  Leaving both fields alive when the second is actually a replacement produces a real,
+  live bug, not just untidiness: it invites downstream consumers to read the field that
+  happens to work for whichever version *they* were written against, so a consumer that
+  only ever reads the old field is silently correct for one version and silently wrong
+  for the other — no compiler error, no schema error, just quietly missing data. This is
+  exactly what `POWER_CHARACTERIZATION_UNIFICATION_PLAN.md` documents as a worked
+  example: v1.1 added `ClearBox.power_characterization`/`LightSource.power_characterization`
+  as structured replacements for v1.0's flat `volts_to_watts_algorithm`/`_params` and
+  `watts_to_volts_algorithm`/`_params`, initially left the old fields in place (populated
+  for v1.0 files, `None` for v1.1 files), and that asymmetry caused a real, confirmed
+  integration bug downstream — a consumer that only ever read the legacy field got a
+  silently empty value for every v1.1 file. The fix was to remove the old fields entirely
+  and make the new field the sole representation for files of either version, with the
+  version-specific readers/writers doing the shape conversion. Read that plan's "Context"
+  section for the full incident and the concrete before/after diff.
+
 ### 4 — Test requirements (Python — template all other languages)
 
 Copy the pattern from `python/tests/test_adapter_migration.py`. Every new version

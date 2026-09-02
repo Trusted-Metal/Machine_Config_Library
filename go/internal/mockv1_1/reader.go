@@ -484,8 +484,6 @@ func parseLightSource(g *h5c.Group) (LightSource, error) {
 		PowerMinNominalUnit:    readStrAttr(g, "Power_Min_Nominal_unit"),
 		PowerBitResolution:     mustFloat(g, "Power_Bit_Resolution"),
 		PowerBitResolutionUnit: readStrAttr(g, "Power_Bit_Resolution_unit"),
-		WattsToVoltsAlgorithm:  readStrAttr(g, "Watts_To_Volts_Algorithm"),
-		WattsToVoltsParams:     readStrAttr(g, "Watts_To_Volts_Params"),
 	}, nil
 }
 
@@ -559,8 +557,6 @@ func parseClearBox(g *h5c.Group) (ClearBox, error) {
 		VideoOutput:               readStrAttr(g, "Video_Output"),
 		ShowConsole:               sc,
 		SoftwareTriggerDelay:      std,
-		VoltsToWattsAlgorithm:     readStrAttr(g, "Volts_To_Watts_Algorithm"),
-		VoltsToWattsParams:        readStrAttr(g, "Volts_To_Watts_Params"),
 		CorrectionGridDomainShape: readStrAttr(g, "Correction_Grid_Domain_Shape"),
 		InverseGridDomainShape:    readStrAttr(g, "Inverse_Grid_Domain_Shape"),
 		SynchronousSensors:        parseSynchronousSensors(g),

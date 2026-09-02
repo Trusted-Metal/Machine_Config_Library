@@ -229,8 +229,6 @@ struct ClearBox {
     std::optional<std::string>  video_output;
     std::optional<bool>         show_console; // HDF5 int 0/1
     std::optional<std::int64_t> software_trigger_delay;
-    std::optional<std::string>  volts_to_watts_algorithm;
-    std::optional<std::string>  volts_to_watts_params;
     std::optional<std::string>  correction_grid_domain_shape;
     std::optional<std::string>  inverse_grid_domain_shape;
     // Omitted entirely (not "{}") when there are no sensors — matches
@@ -246,8 +244,10 @@ struct ClearBox {
     // there. Omitted from JSON when nullopt, same reasoning as
     // synchronous_sensors above.
     std::optional<std::string> firmware_version;
-    // v1.1 addition (Change 3); supersedes volts_to_watts_algorithm/_params,
-    // which stay populated for v1.0 files.
+    // The only representation of the volts<->watts conversion concept, for
+    // files of either version. v1.0's reader forward-derives this from the
+    // on-disk flat Algorithm/Params attrs; v1.0's writer backward-derives
+    // the flat attrs from this. v1.1 reads/writes it natively.
     std::optional<PowerCharacterization> power_characterization;
 };
 
@@ -343,11 +343,10 @@ struct LightSource {
     // HDF5 stores this attribute as a string; the reader parses it to double.
     std::optional<double>      power_bit_resolution;
     std::optional<std::string> power_bit_resolution_unit;
-    std::optional<std::string> watts_to_volts_algorithm;
-    std::optional<std::string> watts_to_volts_params;
-    // v1.1 addition (Change 4); supersedes watts_to_volts_algorithm/_params,
-    // which stay populated for v1.0 files. Omitted from JSON when nullopt,
-    // same reasoning as ClearBox::synchronous_sensors.
+    // The only representation of the watts<->volts conversion concept, for
+    // files of either version — same shift in responsibility described on
+    // ClearBox::power_characterization above. Omitted from JSON when
+    // nullopt, same reasoning as ClearBox::synchronous_sensors.
     std::optional<PowerCharacterization> power_characterization;
 };
 
@@ -682,8 +681,6 @@ inline void to_json(nlohmann::json& j, const ClearBox& c) {
         {"show_console",                 detail::opt_to_j(c.show_console)},
         {"software_trigger_delay",       detail::opt_to_j(c.software_trigger_delay)},
         {"video_output",                 detail::opt_to_j(c.video_output)},
-        {"volts_to_watts_algorithm",     detail::opt_to_j(c.volts_to_watts_algorithm)},
-        {"volts_to_watts_params",        detail::opt_to_j(c.volts_to_watts_params)},
     };
     // Correction grids: omitted when absent (include_binary=false).
     if (c.correction_data.has_value())
@@ -717,8 +714,6 @@ inline void from_json(const nlohmann::json& j, ClearBox& c) {
     c.video_output            = detail::j_to_opt<std::string>(j, "video_output");
     c.show_console            = detail::j_to_opt<bool>(j, "show_console");
     c.software_trigger_delay  = detail::j_to_opt<std::int64_t>(j, "software_trigger_delay");
-    c.volts_to_watts_algorithm     = detail::j_to_opt<std::string>(j, "volts_to_watts_algorithm");
-    c.volts_to_watts_params        = detail::j_to_opt<std::string>(j, "volts_to_watts_params");
     c.correction_grid_domain_shape = detail::j_to_opt<std::string>(j, "correction_grid_domain_shape");
     c.inverse_grid_domain_shape    = detail::j_to_opt<std::string>(j, "inverse_grid_domain_shape");
     if (j.contains("correction_data") && !j.at("correction_data").is_null())
@@ -910,8 +905,6 @@ inline void to_json(nlohmann::json& j, const LightSource& l) {
         {"power_min_nominal",         detail::opt_to_j(l.power_min_nominal)},
         {"power_min_nominal_unit",    detail::opt_to_j(l.power_min_nominal_unit)},
         {"serial_number",             l.serial_number},
-        {"watts_to_volts_algorithm",  detail::opt_to_j(l.watts_to_volts_algorithm)},
-        {"watts_to_volts_params",     detail::opt_to_j(l.watts_to_volts_params)},
         {"wavelength",                detail::opt_to_j(l.wavelength)},
         {"wavelength_unit",           detail::opt_to_j(l.wavelength_unit)},
     };
@@ -937,8 +930,6 @@ inline void from_json(const nlohmann::json& j, LightSource& l) {
     l.power_min_nominal_unit  = detail::j_to_opt<std::string>(j, "power_min_nominal_unit");
     l.power_bit_resolution    = detail::j_to_opt<double>(j, "power_bit_resolution");
     l.power_bit_resolution_unit= detail::j_to_opt<std::string>(j, "power_bit_resolution_unit");
-    l.watts_to_volts_algorithm= detail::j_to_opt<std::string>(j, "watts_to_volts_algorithm");
-    l.watts_to_volts_params   = detail::j_to_opt<std::string>(j, "watts_to_volts_params");
     if (j.contains("power_characterization") && !j.at("power_characterization").is_null())
         l.power_characterization = j.at("power_characterization").get<PowerCharacterization>();
     else

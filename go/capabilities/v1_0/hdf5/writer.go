@@ -618,15 +618,7 @@ func writeLightSource(g *h5c.Group, ls *LightSource) error {
 	if err := ws(g, "Power_Bit_Resolution_unit", strOrDefault(ls.PowerBitResolutionUnit, "bits")); err != nil {
 		return err
 	}
-	// Phase 2 (V1_1_IMPLEMENTATION_PLAN.md, clean-up phase): write the native
-	// flat fields if present; only derive from PowerCharacterization as a
-	// fallback when there's nothing native to write (e.g. a v1.1-sourced
-	// model). Never the other way around — a present native value always
-	// wins.
-	algorithm, params := ls.WattsToVoltsAlgorithm, ls.WattsToVoltsParams
-	if algorithm == nil && params == nil {
-		algorithm, params = BackwardFlatFieldsPoints(ls.PowerCharacterization)
-	}
+	algorithm, params := BackwardFlatFieldsPoints(ls.PowerCharacterization)
 	if err := ws(g, "Watts_To_Volts_Algorithm", strOrEmpty(algorithm)); err != nil {
 		return err
 	}
@@ -723,15 +715,7 @@ func writeClearBox(g *h5c.Group, cb *ClearBox) error {
 	if err := wi(g, "Software_Trigger_Delay", cb.SoftwareTriggerDelay); err != nil {
 		return err
 	}
-	// Phase 2 (V1_1_IMPLEMENTATION_PLAN.md, clean-up phase): write the native
-	// flat fields if present; only derive from PowerCharacterization as a
-	// fallback when there's nothing native to write (e.g. a v1.1-sourced
-	// model). Never the other way around — a present native value always
-	// wins.
-	cbAlgorithm, cbParams := cb.VoltsToWattsAlgorithm, cb.VoltsToWattsParams
-	if cbAlgorithm == nil && cbParams == nil {
-		cbAlgorithm, cbParams = BackwardFlatFieldsCoefficients(cb.PowerCharacterization)
-	}
+	cbAlgorithm, cbParams := BackwardFlatFieldsCoefficients(cb.PowerCharacterization)
 	if err := ws(g, "Volts_To_Watts_Algorithm", strOrEmpty(cbAlgorithm)); err != nil {
 		return err
 	}

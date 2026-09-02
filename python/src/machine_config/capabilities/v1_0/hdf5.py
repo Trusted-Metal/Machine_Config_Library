@@ -30,6 +30,7 @@ from machine_config.models import (
     OpcuaTrigger,
     OpticalTrain,
     OptionalComponents,
+    PowerCharacterization,
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
@@ -37,6 +38,10 @@ from machine_config.models import (
     nan_array_to_nested,
 )
 from machine_config.capabilities.file_version import MissingRequiredGroup
+from machine_config.power_characterization import (
+    forward_power_characterization_coefficients,
+    forward_power_characterization_points,
+)
 from machine_config.schema import SCHEMA_VERSION
 
 from . import layout
@@ -452,6 +457,8 @@ class Hdf5AdapterV1_0:
 
     def _parse_light_source(self, grp: h5py.Group) -> LightSource:
         a = grp.attrs
+        watts_to_volts_algorithm = self._read_str(a, "Watts_To_Volts_Algorithm")
+        watts_to_volts_params = self._read_str(a, "Watts_To_Volts_Params")
         return LightSource(
             manufacturer=str(a.get("Manufacturer", "")),
             model=str(a.get("Model", "")),
@@ -478,8 +485,9 @@ class Hdf5AdapterV1_0:
             power_bit_resolution_unit=self._read_str_locked(
                 a, "Power_Bit_Resolution_unit", "bits"
             ),
-            watts_to_volts_algorithm=self._read_str(a, "Watts_To_Volts_Algorithm"),
-            watts_to_volts_params=self._read_str(a, "Watts_To_Volts_Params"),
+            power_characterization=forward_power_characterization_points(
+                watts_to_volts_algorithm, watts_to_volts_params
+            ),
         )
 
     def _parse_collimator(self, grp: h5py.Group) -> Collimator:
@@ -505,6 +513,8 @@ class Hdf5AdapterV1_0:
 
     def _parse_clearbox(self, grp: h5py.Group) -> ClearBox:
         a = grp.attrs
+        volts_to_watts_algorithm = self._read_str(a, "Volts_To_Watts_Algorithm")
+        volts_to_watts_params = self._read_str(a, "Volts_To_Watts_Params")
         corr_data = nan_array_to_nested(grp["Correction_Data"][:])
         inv_data  = nan_array_to_nested(grp["Inverse_Correction_Data"][:])
         # Synchronous_Sensors: absent entirely (e.g. today's plain
@@ -532,13 +542,14 @@ class Hdf5AdapterV1_0:
             video_output=self._read_str(a, "Video_Output"),
             show_console=self._read_bool_from_int(a, "Show_Console"),
             software_trigger_delay=self._read_int(a, "Software_Trigger_Delay"),
-            volts_to_watts_algorithm=self._read_str(a, "Volts_To_Watts_Algorithm"),
-            volts_to_watts_params=self._read_str(a, "Volts_To_Watts_Params"),
             correction_grid_domain_shape=self._read_str(
                 a, "Correction_Grid_Domain_Shape"
             ),
             inverse_grid_domain_shape=self._read_str(a, "Inverse_Grid_Domain_Shape"),
             synchronous_sensors=synchronous_sensors,
+            power_characterization=forward_power_characterization_coefficients(
+                volts_to_watts_algorithm, volts_to_watts_params
+            ),
         )
 
     def _parse_synchronous_sensor(self, grp: h5py.Group) -> SynchronousSensor:
@@ -826,7 +837,7 @@ class Hdf5AdapterV1_0:
         return d
 
     def _light_source_to_dict(self, ls: LightSource) -> dict:
-        return {
+        d: dict = {
             "manufacturer": ls.manufacturer,
             "model": ls.model,
             "serial_number": ls.serial_number,
@@ -842,9 +853,58 @@ class Hdf5AdapterV1_0:
             "power_min_nominal_unit": ls.power_min_nominal_unit,
             "power_bit_resolution": ls.power_bit_resolution,
             "power_bit_resolution_unit": ls.power_bit_resolution_unit,
-            "watts_to_volts_algorithm": ls.watts_to_volts_algorithm,
-            "watts_to_volts_params": ls.watts_to_volts_params,
         }
+        if ls.power_characterization is not None:
+            d["power_characterization"] = self._power_characterization_to_dict(
+                ls.power_characterization
+            )
+        return d
+
+    @staticmethod
+    def _power_characterization_to_dict(pc) -> Optional[dict]:
+        """Deliberately independent of v1_1/hdf5.py's identically-shaped
+        helper — same "no coupling between version dict-helpers" convention
+        already used throughout this file pair, not an oversight. Needed
+        here now that v1.0's own reader always populates
+        power_characterization (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md)
+        — previously harmless to omit, since the field was always None for
+        v1.0 data; omitting it now would silently drop real data from every
+        v1.0 file's canonical JSON.
+        """
+        if pc is None:
+            return None
+        return {
+            "algorithm_type": pc.algorithm_type,
+            "algorithm_equation": pc.algorithm_equation,
+            "input_type": pc.input_type,
+            "units_derived_quantity": pc.units_derived_quantity,
+            "derivation_equation_constants": [
+                {"name": c.name, "value": c.value} for c in pc.derivation_equation_constants
+            ],
+            "characterization_points": [
+                {"input_value": p.input_value, "output_value": p.output_value}
+                for p in pc.characterization_points
+            ],
+        }
+
+    @staticmethod
+    def _power_characterization_from_dict(d: Optional[dict]):
+        if d is None:
+            return None
+        return PowerCharacterization(
+            algorithm_type=d.get("algorithm_type"),
+            algorithm_equation=d.get("algorithm_equation"),
+            input_type=d.get("input_type"),
+            units_derived_quantity=d.get("units_derived_quantity"),
+            derivation_equation_constants=[
+                EquationConstant(name=c["name"], value=c["value"])
+                for c in d.get("derivation_equation_constants", [])
+            ],
+            characterization_points=[
+                CalibrationPoint(input_value=p["input_value"], output_value=p["output_value"])
+                for p in d.get("characterization_points", [])
+            ],
+        )
 
     def _collimator_to_dict(self, c: Collimator) -> dict:
         return {
@@ -885,11 +945,13 @@ class Hdf5AdapterV1_0:
             "video_output": cb.video_output,
             "show_console": cb.show_console,
             "software_trigger_delay": cb.software_trigger_delay,
-            "volts_to_watts_algorithm": cb.volts_to_watts_algorithm,
-            "volts_to_watts_params": cb.volts_to_watts_params,
             "correction_grid_domain_shape": cb.correction_grid_domain_shape,
             "inverse_grid_domain_shape": cb.inverse_grid_domain_shape,
         }
+        if cb.power_characterization is not None:
+            d["power_characterization"] = self._power_characterization_to_dict(
+                cb.power_characterization
+            )
         if include_binary:
             d["correction_data"] = cb.correction_data
             d["inverse_correction_data"] = cb.inverse_correction_data
@@ -1147,8 +1209,9 @@ def _train_from_dict(t: dict) -> OpticalTrain:
         power_min_nominal_unit=ls.get("power_min_nominal_unit"),
         power_bit_resolution=ls.get("power_bit_resolution"),
         power_bit_resolution_unit=ls.get("power_bit_resolution_unit"),
-        watts_to_volts_algorithm=ls.get("watts_to_volts_algorithm"),
-        watts_to_volts_params=ls.get("watts_to_volts_params"),
+        power_characterization=Hdf5AdapterV1_0._power_characterization_from_dict(
+            ls.get("power_characterization")
+        ),
     )
 
     collimator = Collimator(
@@ -1217,11 +1280,12 @@ def _train_from_dict(t: dict) -> OpticalTrain:
             video_output=cb_d.get("video_output"),
             show_console=cb_d.get("show_console"),
             software_trigger_delay=cb_d.get("software_trigger_delay"),
-            volts_to_watts_algorithm=cb_d.get("volts_to_watts_algorithm"),
-            volts_to_watts_params=cb_d.get("volts_to_watts_params"),
             correction_grid_domain_shape=cb_d.get("correction_grid_domain_shape"),
             inverse_grid_domain_shape=cb_d.get("inverse_grid_domain_shape"),
             synchronous_sensors=synchronous_sensors,
+            power_characterization=Hdf5AdapterV1_0._power_characterization_from_dict(
+                cb_d.get("power_characterization")
+            ),
         )
 
     sfcf: Optional[ScanFieldCorrectionFile] = None

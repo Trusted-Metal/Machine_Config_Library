@@ -638,9 +638,6 @@ impl Hdf5AdapterV1_1 {
             power_min_nominal_unit: read_unit_locked(grp, "Power_Min_Nominal_unit", "W")?,
             power_bit_resolution: read_float(grp, "Power_Bit_Resolution")?,
             power_bit_resolution_unit: read_unit_locked(grp, "Power_Bit_Resolution_unit", "bits")?,
-            // Change 4: no on-disk source in v1.1 — superseded by power_characterization.
-            watts_to_volts_algorithm: None,
-            watts_to_volts_params: None,
             power_characterization,
         })
     }
@@ -716,9 +713,6 @@ impl Hdf5AdapterV1_1 {
             custom_video_format: None,
             video_output: None,
             show_console: None,
-            // Change 3: no on-disk source in v1.1 — superseded by power_characterization.
-            volts_to_watts_algorithm: None,
-            volts_to_watts_params: None,
             correction_grid_domain_shape: None,
             inverse_grid_domain_shape: None,
             synchronous_sensors,

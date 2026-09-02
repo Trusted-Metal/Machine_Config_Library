@@ -45,17 +45,9 @@ class MachineConfigFileV1_1 : public IMachineConfigFile {
     }
   }
 
-  // Builds a plain previous-version-shaped mock config and derives
-  // power_characterization for each ClearBox/LightSource directly — avoids
-  // a second, independent mock-data builder just for create().
-  //
-  // Unlike Python's MachineConfigFileV1_1.create() (which writes the mock to
-  // a real temp file via Hdf5WriterV1_1 and re-opens it, letting the
-  // writer's own Phase 2 fallback derive power_characterization along the
-  // way), this facade holds config in memory directly with no HDF5 round
-  // trip at all — so the writer's fallback never runs here, and this method
-  // must call the shared derivation functions itself (same situation as
-  // Rust's MachineConfigFileV1_1::create).
+  // Builds a plain previous-version-shaped mock config — MockConfigBuilder
+  // already builds power_characterization natively, so nothing further needs
+  // deriving here.
   static Result<std::shared_ptr<MachineConfigFileV1_1>> create(const std::string& version) {
     std::string fv = version.empty() ? "1.1" : version;
     if (fv != "1.1") {
@@ -67,16 +59,6 @@ class MachineConfigFileV1_1 : public IMachineConfigFile {
       b.laser_count = 1;
       MachineConfig config = b.build();
       config.meta.file_version = "1.1";
-      for (auto& train : config.optical_trains) {
-        if (train.optional_components.clearbox) {
-          auto& cb = *train.optional_components.clearbox;
-          cb.power_characterization =
-              forwardPowerCharacterizationCoefficients(cb.volts_to_watts_algorithm, cb.volts_to_watts_params);
-        }
-        auto& ls = train.light_source;
-        ls.power_characterization =
-            forwardPowerCharacterizationPoints(ls.watts_to_volts_algorithm, ls.watts_to_volts_params);
-      }
       return Result<std::shared_ptr<MachineConfigFileV1_1>>::Ok(
           std::shared_ptr<MachineConfigFileV1_1>(
               new MachineConfigFileV1_1(std::move(config), {}, "1.1")));

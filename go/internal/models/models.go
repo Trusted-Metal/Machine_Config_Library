@@ -264,10 +264,8 @@ type LightSource struct {
 	PowerMinNominalUnit    *string  `json:"power_min_nominal_unit"`
 	PowerBitResolution     *float64 `json:"power_bit_resolution"`
 	PowerBitResolutionUnit *string  `json:"power_bit_resolution_unit"`
-	WattsToVoltsAlgorithm  *string  `json:"watts_to_volts_algorithm"`
-	WattsToVoltsParams     *string  `json:"watts_to_volts_params"`
-	// PowerCharacterization: v1.1 addition (Change 4); supersedes
-	// WattsToVoltsAlgorithm/Params, which stay populated for v1.0 files.
+	// PowerCharacterization is the only representation of the
+	// watts<->volts conversion concept, for files of either version.
 	// omitempty for the same byte-identical-output reasoning as
 	// ClearBox.SynchronousSensors.
 	PowerCharacterization *PowerCharacterization `json:"power_characterization,omitempty"`
@@ -315,8 +313,6 @@ type ClearBox struct {
 	VideoOutput               *string         `json:"video_output"`
 	ShowConsole               *bool           `json:"show_console"`
 	SoftwareTriggerDelay      *int            `json:"software_trigger_delay"`
-	VoltsToWattsAlgorithm     *string         `json:"volts_to_watts_algorithm"`
-	VoltsToWattsParams        *string         `json:"volts_to_watts_params"`
 	CorrectionGridDomainShape *string         `json:"correction_grid_domain_shape"`
 	InverseGridDomainShape    *string         `json:"inverse_grid_domain_shape"`
 	// omitempty: omitted entirely (not "{}") when there are no sensors —
@@ -331,8 +327,8 @@ type ClearBox struct {
 	// on-disk source there. omitempty for the same byte-identical-output
 	// reasoning as SynchronousSensors above.
 	FirmwareVersion *string `json:"firmware_version,omitempty"`
-	// PowerCharacterization: v1.1 addition (Change 3); supersedes
-	// VoltsToWattsAlgorithm/Params, which stay populated for v1.0 files.
+	// PowerCharacterization is the only representation of the
+	// volts<->watts conversion concept, for files of either version.
 	PowerCharacterization *PowerCharacterization `json:"power_characterization,omitempty"`
 }
 

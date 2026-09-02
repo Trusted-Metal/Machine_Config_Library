@@ -529,8 +529,6 @@ func parseLightSource(g *h5c.Group) (LightSource, error) {
 		PowerMinNominalUnit:    readStrAttr(g, "Power_Min_Nominal_unit"),
 		PowerBitResolution:     mustFloat(g, "Power_Bit_Resolution"),
 		PowerBitResolutionUnit: readStrAttr(g, "Power_Bit_Resolution_unit"),
-		WattsToVoltsAlgorithm:  nil,
-		WattsToVoltsParams:     nil,
 		PowerCharacterization:  pc,
 	}, nil
 }
@@ -609,8 +607,6 @@ func parseClearBox(f *h5c.File, trainID string, sharedOutputPath *string, shared
 		VideoOutput:               nil,
 		ShowConsole:               nil,
 		SoftwareTriggerDelay:      sharedSoftwareTriggerDelay,
-		VoltsToWattsAlgorithm:     nil,
-		VoltsToWattsParams:        nil,
 		CorrectionGridDomainShape: nil,
 		InverseGridDomainShape:    nil,
 		SynchronousSensors:        parseSynchronousSensors(g),

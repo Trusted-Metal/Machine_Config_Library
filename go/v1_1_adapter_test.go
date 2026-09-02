@@ -15,7 +15,6 @@ package machineconfig_test
 import (
 	"encoding/json"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -43,34 +42,33 @@ func mockV1_0Config(t *testing.T, nLasers int) *machineconfig.MachineConfig {
 }
 
 // mockV1_1Config builds an in-memory v1.1-shaped MachineConfig for tests
-// that need one without touching disk — mirrors exactly what a real v1.1
-// file read produces under Phase 2 (PowerCharacterization populated, flat
-// fields nil), so tests exercising a writer's fallback behave the same as
-// they would against real v1.1-sourced data.
+// that need one without touching disk — MockConfigBuilder already builds
+// PowerCharacterization natively, so this is just the v1.0 mock with
+// FileVersion overridden.
 func mockV1_1Config(t *testing.T, nLasers int) *machineconfig.MachineConfig {
 	t.Helper()
 	cfg := mockV1_0Config(t, nLasers)
 	cfg.Meta.FileVersion = "1.1"
-	for i := range cfg.OpticalTrains {
-		train := &cfg.OpticalTrains[i]
-		if cb := train.OptionalComponents.Clearbox; cb != nil {
-			pc, err := models.ForwardPowerCharacterizationCoefficients(cb.VoltsToWattsAlgorithm, cb.VoltsToWattsParams)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cb.PowerCharacterization = pc
-			cb.VoltsToWattsAlgorithm = nil
-			cb.VoltsToWattsParams = nil
-		}
-		lsPC, err := models.ForwardPowerCharacterizationPoints(train.LightSource.WattsToVoltsAlgorithm, train.LightSource.WattsToVoltsParams)
-		if err != nil {
-			t.Fatal(err)
-		}
-		train.LightSource.PowerCharacterization = lsPC
-		train.LightSource.WattsToVoltsAlgorithm = nil
-		train.LightSource.WattsToVoltsParams = nil
-	}
 	return cfg
+}
+
+// constantValues/pointValues flatten a PowerCharacterization's derived data
+// to plain float slices, in on-disk order — for comparing derived data
+// without caring about its name/label.
+func constantValues(pc *machineconfig.PowerCharacterization) []float64 {
+	out := make([]float64, len(pc.DerivationEquationConstants))
+	for i, c := range pc.DerivationEquationConstants {
+		out[i] = c.Value
+	}
+	return out
+}
+
+func pointValues(pc *machineconfig.PowerCharacterization) []float64 {
+	out := make([]float64, 0, len(pc.CharacterizationPoints)*2)
+	for _, p := range pc.CharacterizationPoints {
+		out = append(out, p.InputValue, p.OutputValue)
+	}
+	return out
 }
 
 func equationConstantNames(constants []machineconfig.EquationConstant) []string {
@@ -103,32 +101,6 @@ func floatSliceEqual(a, b []float64) bool {
 		}
 	}
 	return true
-}
-
-func parseCSVToFloats(t *testing.T, s *string) []float64 {
-	t.Helper()
-	if s == nil {
-		t.Fatal("parseCSVToFloats: nil string")
-	}
-	str := strings.Trim(strings.TrimSpace(*s), "[]")
-	str = strings.TrimSpace(str)
-	if str == "" {
-		return nil
-	}
-	parts := strings.Split(str, ",")
-	out := make([]float64, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		v, err := strconv.ParseFloat(p, 64)
-		if err != nil {
-			t.Fatalf("parseCSVToFloats: %v", err)
-		}
-		out = append(out, v)
-	}
-	return out
 }
 
 func writeAs(t *testing.T, cfg *machineconfig.MachineConfig, path string, targetVersion string) {
@@ -181,24 +153,12 @@ func TestV1_1AdapterRead(t *testing.T) {
 			cb.ShowConsole != nil || cb.CorrectionGridDomainShape != nil || cb.InverseGridDomainShape != nil {
 			t.Fatalf("expected all removed ClearBox fields nil, got %+v", cb)
 		}
-		// Change 3: superseded — v1.1's reader reads only its own native
-		// shape (Phase 2 does not change this); volts_to_watts_* stay nil
-		// unless/until this model is written as v1.0.
-		if cb.VoltsToWattsAlgorithm != nil || cb.VoltsToWattsParams != nil {
-			t.Fatalf("expected volts_to_watts_* nil, got %v / %v", cb.VoltsToWattsAlgorithm, cb.VoltsToWattsParams)
-		}
-
 		// Change 5: no on-disk source in v1.1, always nil.
 		if train.Scanner.XAxis.TuningParameters != nil || train.Scanner.XAxis.TuningType != nil {
 			t.Fatal("expected x_axis tuning_parameters/tuning_type nil")
 		}
 		if train.Scanner.YAxis.TuningParameters != nil || train.Scanner.YAxis.TuningType != nil {
 			t.Fatal("expected y_axis tuning_parameters/tuning_type nil")
-		}
-
-		// Change 4: superseded, same reasoning as Change 3.
-		if train.LightSource.WattsToVoltsAlgorithm != nil || train.LightSource.WattsToVoltsParams != nil {
-			t.Fatal("expected light_source watts_to_volts_* nil")
 		}
 	}
 
@@ -431,9 +391,10 @@ func TestV1_1AdapterForwardMigration(t *testing.T) {
 		if len(pc.DerivationEquationConstants) == 0 {
 			t.Fatal("expected non-empty derivation_equation_constants")
 		}
-		if (pc.AlgorithmType == nil) != (srcCB.VoltsToWattsAlgorithm == nil) ||
-			(srcCB.VoltsToWattsAlgorithm != nil && *pc.AlgorithmType != *srcCB.VoltsToWattsAlgorithm) {
-			t.Fatalf("algorithm_type: got %v want %v", pc.AlgorithmType, srcCB.VoltsToWattsAlgorithm)
+		srcPC := srcCB.PowerCharacterization
+		if (pc.AlgorithmType == nil) != (srcPC.AlgorithmType == nil) ||
+			(srcPC.AlgorithmType != nil && *pc.AlgorithmType != *srcPC.AlgorithmType) {
+			t.Fatalf("algorithm_type: got %v want %v", pc.AlgorithmType, srcPC.AlgorithmType)
 		}
 
 		// Change 4: derived Light_Source data is the inverse — zero
@@ -487,8 +448,11 @@ func TestV1_1AdapterSoftwareTriggerDelayDisagreementRaises(t *testing.T) {
 
 func TestV1_1AdapterUnrecognizedAlgorithmTypeBestEffortClearbox(t *testing.T) {
 	cfg := mockV1_0Config(t, 1)
-	cfg.OpticalTrains[0].OptionalComponents.Clearbox.VoltsToWattsAlgorithm = machineconfig.StrPtr("EXPONENTIAL")
-	cfg.OpticalTrains[0].OptionalComponents.Clearbox.VoltsToWattsParams = machineconfig.StrPtr("1.5,2.5,3.5")
+	inputPC, err := models.ForwardPowerCharacterizationCoefficients(machineconfig.StrPtr("EXPONENTIAL"), machineconfig.StrPtr("1.5,2.5,3.5"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpticalTrains[0].OptionalComponents.Clearbox.PowerCharacterization = inputPC
 	tmp := filepath.Join(t.TempDir(), "unrecognized_clearbox.h5")
 	writeAs(t, cfg, tmp, "1.1")
 	result := parseFile(t, tmp)
@@ -514,20 +478,28 @@ func TestV1_1AdapterUnrecognizedAlgorithmTypeBestEffortClearbox(t *testing.T) {
 		t.Fatalf("constant values = %v", gotValues)
 	}
 
-	// Round trip: writing back to v1.0 reproduces the original CSV exactly.
+	// Round trip: writing back to v1.0 reproduces the original CSV exactly
+	// (checked via the structured shape, since the flat field no longer
+	// exists to compare against directly).
 	v1_0Out := filepath.Join(t.TempDir(), "unrecognized_clearbox_roundtrip.h5")
 	writeAs(t, result, v1_0Out, "1.0")
 	back := parseFile(t, v1_0Out)
-	backCB := back.OpticalTrains[0].OptionalComponents.Clearbox
-	if backCB.VoltsToWattsParams == nil || *backCB.VoltsToWattsParams != "1.5,2.5,3.5" {
-		t.Fatalf("volts_to_watts_params = %v, want \"1.5,2.5,3.5\"", backCB.VoltsToWattsParams)
+	backPC := back.OpticalTrains[0].OptionalComponents.Clearbox.PowerCharacterization
+	if backPC == nil || backPC.AlgorithmType == nil || *backPC.AlgorithmType != "EXPONENTIAL" {
+		t.Fatalf("algorithm_type = %v, want \"EXPONENTIAL\"", backPC)
+	}
+	if !floatSliceEqual(constantValues(backPC), []float64{1.5, 2.5, 3.5}) {
+		t.Fatalf("constant values = %v, want [1.5 2.5 3.5]", constantValues(backPC))
 	}
 }
 
 func TestV1_1AdapterUnrecognizedAlgorithmTypeBestEffortLightSource(t *testing.T) {
 	cfg := mockV1_0Config(t, 1)
-	cfg.OpticalTrains[0].LightSource.WattsToVoltsAlgorithm = machineconfig.StrPtr("QUADRATIC")
-	cfg.OpticalTrains[0].LightSource.WattsToVoltsParams = machineconfig.StrPtr("1,2,3,4")
+	inputPC, err := models.ForwardPowerCharacterizationPoints(machineconfig.StrPtr("QUADRATIC"), machineconfig.StrPtr("1,2,3,4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OpticalTrains[0].LightSource.PowerCharacterization = inputPC
 	tmp := filepath.Join(t.TempDir(), "unrecognized_lightsource.h5")
 	writeAs(t, cfg, tmp, "1.1")
 	result := parseFile(t, tmp)
@@ -562,16 +534,14 @@ func TestV1_1AdapterBackwardMigration(t *testing.T) {
 	srcCB0 := source.OpticalTrains[0].OptionalComponents.Clearbox
 	cb0 := back.OpticalTrains[0].OptionalComponents.Clearbox
 	srcPC0 := srcCB0.PowerCharacterization
-	if cb0.VoltsToWattsAlgorithm == nil || srcPC0.AlgorithmType == nil || *cb0.VoltsToWattsAlgorithm != *srcPC0.AlgorithmType {
-		t.Fatalf("volts_to_watts_algorithm: got %v want %v", cb0.VoltsToWattsAlgorithm, srcPC0.AlgorithmType)
+	pc0 := cb0.PowerCharacterization
+	if pc0.AlgorithmType == nil || srcPC0.AlgorithmType == nil || *pc0.AlgorithmType != *srcPC0.AlgorithmType {
+		t.Fatalf("algorithm_type: got %v want %v", pc0.AlgorithmType, srcPC0.AlgorithmType)
 	}
-	expected := make([]float64, len(srcPC0.DerivationEquationConstants))
-	for i, c := range srcPC0.DerivationEquationConstants {
-		expected[i] = c.Value
-	}
-	actual := parseCSVToFloats(t, cb0.VoltsToWattsParams)
+	expected := constantValues(srcPC0)
+	actual := constantValues(pc0)
 	if len(actual) != len(expected) {
-		t.Fatalf("volts_to_watts_params count: got %v want %v", actual, expected)
+		t.Fatalf("derivation_equation_constants count: got %v want %v", actual, expected)
 	}
 
 	if (cb0.OutputPath == nil) != (srcCB0.OutputPath == nil) || (srcCB0.OutputPath != nil && *cb0.OutputPath != *srcCB0.OutputPath) {
@@ -585,16 +555,12 @@ func TestV1_1AdapterBackwardMigration(t *testing.T) {
 	srcLS0 := source.OpticalTrains[0].LightSource
 	ls0 := back.OpticalTrains[0].LightSource
 	srcLsPC0 := srcLS0.PowerCharacterization
-	if ls0.WattsToVoltsAlgorithm == nil || srcLsPC0.AlgorithmType == nil || *ls0.WattsToVoltsAlgorithm != *srcLsPC0.AlgorithmType {
-		t.Fatalf("watts_to_volts_algorithm: got %v want %v", ls0.WattsToVoltsAlgorithm, srcLsPC0.AlgorithmType)
+	lsPC0 := ls0.PowerCharacterization
+	if lsPC0.AlgorithmType == nil || srcLsPC0.AlgorithmType == nil || *lsPC0.AlgorithmType != *srcLsPC0.AlgorithmType {
+		t.Fatalf("algorithm_type: got %v want %v", lsPC0.AlgorithmType, srcLsPC0.AlgorithmType)
 	}
-	expectedPoints := make([]float64, 0, len(srcLsPC0.CharacterizationPoints)*2)
-	for _, p := range srcLsPC0.CharacterizationPoints {
-		expectedPoints = append(expectedPoints, p.InputValue, p.OutputValue)
-	}
-	actualPoints := parseCSVToFloats(t, ls0.WattsToVoltsParams)
-	if !floatSliceEqual(actualPoints, expectedPoints) {
-		t.Fatalf("watts_to_volts_params: got %v want %v", actualPoints, expectedPoints)
+	if !floatSliceEqual(pointValues(lsPC0), pointValues(srcLsPC0)) {
+		t.Fatalf("characterization_points: got %v want %v", pointValues(lsPC0), pointValues(srcLsPC0))
 	}
 
 	// Change 1 Removal fields: lost forever, not restored.
@@ -619,9 +585,12 @@ func TestV1_1AdapterBackwardMigrationReordersConstantsByName(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "backward_reorders.h5")
 	writeAs(t, cfg, tmp, "1.0")
 	back := parseFile(t, tmp)
-	backCB0 := back.OpticalTrains[0].OptionalComponents.Clearbox
-	if backCB0.VoltsToWattsParams == nil || *backCB0.VoltsToWattsParams != "1.0,2.0" {
-		t.Fatalf("volts_to_watts_params = %v, want \"1.0,2.0\"", backCB0.VoltsToWattsParams)
+	// Written CSV is "1.0,2.0" (b before a); the v1.0 reader forward-derives
+	// that back into named constants positionally (b, then a) for LINEAR.
+	backConstants := back.OpticalTrains[0].OptionalComponents.Clearbox.PowerCharacterization.DerivationEquationConstants
+	if len(backConstants) != 2 || backConstants[0].Name != "b" || backConstants[0].Value != 1.0 ||
+		backConstants[1].Name != "a" || backConstants[1].Value != 2.0 {
+		t.Fatalf("derivation_equation_constants = %+v, want [{b 1} {a 2}]", backConstants)
 	}
 }
 
@@ -635,13 +604,15 @@ func TestV1_1AdapterBackwardMigrationMissingDerivationConstantsWritesBlank(t *te
 	tmp := filepath.Join(t.TempDir(), "backward_blank_constants.h5")
 	writeAs(t, cfg, tmp, "1.0")
 	back := parseFile(t, tmp)
-	backCB0 := back.OpticalTrains[0].OptionalComponents.Clearbox
-	// The writer's fallback produces "" (blank, not an error) — but a real
-	// disk round-trip normalizes an empty string attribute back to nil on
-	// read, this codebase's standard convention for absent optional
-	// strings (confirmed against Python's/Rust's/C++'s identical finding).
-	if backCB0.VoltsToWattsParams != nil {
-		t.Fatalf("volts_to_watts_params = %v, want nil", *backCB0.VoltsToWattsParams)
+	// Backward derivation produces "" for Volts_To_Watts_Params (blank, not
+	// an error) — a real disk round-trip normalizes an empty string
+	// attribute back to nil on read, this codebase's standard convention
+	// for absent optional strings (confirmed against Python's/Rust's/C++'s
+	// identical finding), so forward re-derivation on read produces zero
+	// constants.
+	backConstants := back.OpticalTrains[0].OptionalComponents.Clearbox.PowerCharacterization.DerivationEquationConstants
+	if len(backConstants) != 0 {
+		t.Fatalf("derivation_equation_constants = %v, want empty", backConstants)
 	}
 }
 
@@ -655,9 +626,9 @@ func TestV1_1AdapterBackwardMigrationMissingCharacterizationPointsWritesBlank(t 
 	tmp := filepath.Join(t.TempDir(), "backward_blank_points.h5")
 	writeAs(t, cfg, tmp, "1.0")
 	back := parseFile(t, tmp)
-	backLS0 := back.OpticalTrains[0].LightSource
-	if backLS0.WattsToVoltsParams != nil {
-		t.Fatalf("watts_to_volts_params = %v, want nil", *backLS0.WattsToVoltsParams)
+	backPoints := back.OpticalTrains[0].LightSource.PowerCharacterization.CharacterizationPoints
+	if len(backPoints) != 0 {
+		t.Fatalf("characterization_points = %v, want empty", backPoints)
 	}
 }
 
@@ -666,9 +637,8 @@ func TestV1_1AdapterBackwardMigrationMissingCharacterizationPointsWritesBlank(t 
 // ---------------------------------------------------------------------------
 
 func TestV1_1AdapterV1Unaffected(t *testing.T) {
-	// Existing v1.0 read path is undisturbed by v1.1's existence — Phase 2
-	// does not touch either reader at all (Option C: derivation lives only
-	// in the writers' fallbacks).
+	// v1.0 read path forward-derives power_characterization from the flat
+	// fields, unconditionally, on every read.
 	cfg := parseFile(t, referenceV1_0Fixture(t))
 	if cfg.Meta.FileVersion != "1.0" {
 		t.Fatalf("file_version = %q", cfg.Meta.FileVersion)
@@ -677,29 +647,11 @@ func TestV1_1AdapterV1Unaffected(t *testing.T) {
 		t.Fatal("expected optical trains")
 	}
 	cb0 := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb0 == nil || cb0.VoltsToWattsAlgorithm == nil || *cb0.VoltsToWattsAlgorithm != "LINEAR" {
-		t.Fatalf("volts_to_watts_algorithm = %v", cb0)
+	if cb0 == nil || cb0.PowerCharacterization == nil {
+		t.Fatalf("expected power_characterization present, got %v", cb0)
 	}
-	if cb0.PowerCharacterization != nil {
-		t.Fatalf("power_characterization = %v, want nil", cb0.PowerCharacterization)
-	}
-}
-
-func TestV1_1AdapterV1_0WriteNeverInvokesFallbackWhenNativePresent(t *testing.T) {
-	// The writer's fallback must never fire when the native field is
-	// already present — a deliberately odd-but-valid string must pass
-	// through byte-for-byte, proving v1_0/hdf5.Write never reformats via
-	// PowerCharacterization when there's nothing for the fallback to do.
-	cfg := mockV1_0Config(t, 1)
-	cfg.OpticalTrains[0].OptionalComponents.Clearbox.VoltsToWattsParams = machineconfig.StrPtr("50.50,107.500")
-	tmp := filepath.Join(t.TempDir(), "v1_0_verbatim.h5")
-	if err := machineconfig.NewWriter().Write(cfg, tmp); err != nil {
-		t.Fatal(err)
-	}
-	result := parseFile(t, tmp)
-	cb := result.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb.VoltsToWattsParams == nil || *cb.VoltsToWattsParams != "50.50,107.500" {
-		t.Fatalf("volts_to_watts_params = %v, want \"50.50,107.500\"", cb.VoltsToWattsParams)
+	if cb0.PowerCharacterization.AlgorithmType == nil || *cb0.PowerCharacterization.AlgorithmType != "LINEAR" {
+		t.Fatalf("algorithm_type = %v", cb0.PowerCharacterization.AlgorithmType)
 	}
 }
 
@@ -729,22 +681,26 @@ func TestV1_1AdapterRoundtripV1_0ToV1_1ToV1_0(t *testing.T) {
 			(srcCB.SoftwareTriggerDelay != nil && *cb.SoftwareTriggerDelay != *srcCB.SoftwareTriggerDelay) {
 			t.Fatalf("software_trigger_delay: got %v want %v", cb.SoftwareTriggerDelay, srcCB.SoftwareTriggerDelay)
 		}
-		if (cb.VoltsToWattsAlgorithm == nil) != (srcCB.VoltsToWattsAlgorithm == nil) ||
-			(srcCB.VoltsToWattsAlgorithm != nil && *cb.VoltsToWattsAlgorithm != *srcCB.VoltsToWattsAlgorithm) {
-			t.Fatalf("volts_to_watts_algorithm: got %v want %v", cb.VoltsToWattsAlgorithm, srcCB.VoltsToWattsAlgorithm)
+		pc := cb.PowerCharacterization
+		srcPC := srcCB.PowerCharacterization
+		if (pc.AlgorithmType == nil) != (srcPC.AlgorithmType == nil) ||
+			(srcPC.AlgorithmType != nil && *pc.AlgorithmType != *srcPC.AlgorithmType) {
+			t.Fatalf("algorithm_type: got %v want %v", pc.AlgorithmType, srcPC.AlgorithmType)
 		}
-		if !floatSliceEqual(parseCSVToFloats(t, cb.VoltsToWattsParams), parseCSVToFloats(t, srcCB.VoltsToWattsParams)) {
-			t.Fatalf("volts_to_watts_params: got %v want %v", cb.VoltsToWattsParams, srcCB.VoltsToWattsParams)
+		if !floatSliceEqual(constantValues(pc), constantValues(srcPC)) {
+			t.Fatalf("derivation_equation_constants: got %v want %v", constantValues(pc), constantValues(srcPC))
 		}
 
 		srcLS := source.OpticalTrains[i].LightSource
 		ls := train.LightSource
-		if (ls.WattsToVoltsAlgorithm == nil) != (srcLS.WattsToVoltsAlgorithm == nil) ||
-			(srcLS.WattsToVoltsAlgorithm != nil && *ls.WattsToVoltsAlgorithm != *srcLS.WattsToVoltsAlgorithm) {
-			t.Fatalf("watts_to_volts_algorithm: got %v want %v", ls.WattsToVoltsAlgorithm, srcLS.WattsToVoltsAlgorithm)
+		lsPC := ls.PowerCharacterization
+		srcLsPC := srcLS.PowerCharacterization
+		if (lsPC.AlgorithmType == nil) != (srcLsPC.AlgorithmType == nil) ||
+			(srcLsPC.AlgorithmType != nil && *lsPC.AlgorithmType != *srcLsPC.AlgorithmType) {
+			t.Fatalf("algorithm_type: got %v want %v", lsPC.AlgorithmType, srcLsPC.AlgorithmType)
 		}
-		if !floatSliceEqual(parseCSVToFloats(t, ls.WattsToVoltsParams), parseCSVToFloats(t, srcLS.WattsToVoltsParams)) {
-			t.Fatalf("watts_to_volts_params: got %v want %v", ls.WattsToVoltsParams, srcLS.WattsToVoltsParams)
+		if !floatSliceEqual(pointValues(lsPC), pointValues(srcLsPC)) {
+			t.Fatalf("characterization_points: got %v want %v", pointValues(lsPC), pointValues(srcLsPC))
 		}
 	}
 }
@@ -880,8 +836,9 @@ func TestV1_1AdapterDispatcherBackward(t *testing.T) {
 		t.Fatalf("file_version = %q", result.Meta.FileVersion)
 	}
 	cb := result.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb == nil || cb.VoltsToWattsAlgorithm == nil || *cb.VoltsToWattsAlgorithm != "LINEAR" {
-		t.Fatalf("volts_to_watts_algorithm = %v", cb)
+	if cb == nil || cb.PowerCharacterization == nil || cb.PowerCharacterization.AlgorithmType == nil ||
+		*cb.PowerCharacterization.AlgorithmType != "LINEAR" {
+		t.Fatalf("power_characterization.algorithm_type = %v", cb)
 	}
 }
 

@@ -261,14 +261,7 @@ private:
             : std::string{};
         ws(grp, "Power_Bit_Resolution",       pbr);
         ws(grp, "Power_Bit_Resolution_unit",  ls.power_bit_resolution_unit.value_or("bits"));
-        // Phase 2 clean-up (see the migration implementation plan): write the native flat fields
-        // if present; only derive from power_characterization as a fallback
-        // when there's nothing native to write (e.g. a v1.1-sourced model).
-        // Never the other way around — a present native value always wins.
-        auto [algorithm, params] =
-            (!ls.watts_to_volts_algorithm && !ls.watts_to_volts_params)
-                ? backwardFlatFieldsPoints(ls.power_characterization)
-                : std::make_pair(ls.watts_to_volts_algorithm, ls.watts_to_volts_params);
+        auto [algorithm, params] = backwardFlatFieldsPoints(ls.power_characterization);
         ws(grp, "Watts_To_Volts_Algorithm",   algorithm.value_or(""));
         ws(grp, "Watts_To_Volts_Params",      params.value_or(""));
     }
@@ -305,14 +298,7 @@ private:
         ws(grp, "Video_Output",                cb.video_output.value_or(""));
         wb(grp, "Show_Console",                cb.show_console);
         wi(grp, "Software_Trigger_Delay",      cb.software_trigger_delay);
-        // Phase 2 clean-up (see the migration implementation plan): write the native flat fields
-        // if present; only derive from power_characterization as a fallback
-        // when there's nothing native to write (e.g. a v1.1-sourced model).
-        // Never the other way around — a present native value always wins.
-        auto [algorithm, params] =
-            (!cb.volts_to_watts_algorithm && !cb.volts_to_watts_params)
-                ? backwardFlatFieldsCoefficients(cb.power_characterization)
-                : std::make_pair(cb.volts_to_watts_algorithm, cb.volts_to_watts_params);
+        auto [algorithm, params] = backwardFlatFieldsCoefficients(cb.power_characterization);
         ws(grp, "Volts_To_Watts_Algorithm",    algorithm.value_or(""));
         ws(grp, "Volts_To_Watts_Params",       params.value_or(""));
         ws(grp, "Correction_Grid_Domain_Shape",cb.correction_grid_domain_shape.value_or(""));

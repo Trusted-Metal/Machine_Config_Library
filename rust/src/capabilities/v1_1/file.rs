@@ -16,9 +16,6 @@ use std::path::{Path, PathBuf};
 
 use super::hdf5::Hdf5AdapterV1_1;
 use super::writer::Hdf5WriterV1_1;
-use crate::power_characterization::{
-    forward_power_characterization_coefficients, forward_power_characterization_points,
-};
 
 pub struct MachineConfigFileV1_1 {
     config: MachineConfig,
@@ -47,16 +44,12 @@ impl MachineConfigFileV1_1 {
         Ok(Self { config, path: Some(path), file_version: fv, closed: false })
     }
 
-    /// Builds a v1.0-shaped mock config and derives `power_characterization`
-    /// for each ClearBox/LightSource directly — avoids a second, independent
-    /// mock-data builder just for `create()`.
-    ///
-    /// Unlike Python's `MachineConfigFileV1_1.create()` (which writes the
-    /// mock to a real temp file via `Hdf5WriterV1_1` and re-opens it, letting
-    /// the writer's own Phase 2 fallback derive `power_characterization`
-    /// along the way), this facade holds `config` in memory directly with no
-    /// HDF5 round trip at all — so the writer's fallback never runs here,
-    /// and this method must call the shared derivation functions itself.
+    /// Builds a mock config via `MockConfigBuilder`, which now builds
+    /// `power_characterization` natively
+    /// (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md) — no explicit derivation
+    /// needed here any more, unlike before that plan, when this facade held
+    /// `config` in memory with no HDF5 round trip to let a writer's fallback
+    /// derive it along the way.
     pub fn create(version: &str) -> Result<Self, CapabilityError> {
         let fv = version.trim();
         let fv = if fv.is_empty() { "1.1" } else { fv };
@@ -67,21 +60,6 @@ impl MachineConfigFileV1_1 {
         }
         let mut config = MockConfigBuilder::new(1).build();
         config.meta.file_version = "1.1".to_owned();
-        for train in config.optical_trains.iter_mut() {
-            if let Some(cb) = train.optional_components.clearbox.as_mut() {
-                cb.power_characterization = forward_power_characterization_coefficients(
-                    cb.volts_to_watts_algorithm.as_deref(),
-                    cb.volts_to_watts_params.as_deref(),
-                )
-                .map_err(|e| CapabilityError::IoError(e.to_string()))?;
-            }
-            let ls = &mut train.light_source;
-            ls.power_characterization = forward_power_characterization_points(
-                ls.watts_to_volts_algorithm.as_deref(),
-                ls.watts_to_volts_params.as_deref(),
-            )
-            .map_err(|e| CapabilityError::IoError(e.to_string()))?;
-        }
         Ok(Self { config, path: None, file_version: "1.1".to_owned(), closed: false })
     }
 
