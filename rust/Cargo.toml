@@ -1,6 +1,6 @@
 [package]
 name = "machine-config"
-version = "0.2.0-rc.5"
+version = "0.2.0-rc.6"
 edition = "2021"
 description = "Machine configuration library for LPBF machine HDF5 files"
 
