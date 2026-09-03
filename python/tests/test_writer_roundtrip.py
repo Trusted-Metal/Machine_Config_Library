@@ -8,6 +8,9 @@ assert every individual field value survives the roundtrip.
 Covers:
   - Every scalar field across all seven model types
   - All 18 ClearBox scalar attributes (post-1.8a complete model)
+  - ClearBox.synchronous_sensors: one fully-populated sensor (18 scalar
+    fields + both compound datasets), plus the empty/zero-row/arbitrary-key
+    edge cases (SYNCHRONOUS_SENSOR_PLAN.md Phase 1)
   - NaN ↔ None convention for correction arrays
   - axis_configuration discriminator: "2D", "3D", "3D+Focus"
   - Machine-agnostic path: config with no ClearBox
@@ -24,8 +27,10 @@ from machine_config import MachineConfigReader, MachineConfigWriter
 from machine_config.models import (
     AxisConfig,
     BuildPlate,
+    CalibrationPoint,
     ClearBox,
     Collimator,
+    EquationConstant,
     LightSource,
     Machine,
     MachineConfig,
@@ -35,6 +40,11 @@ from machine_config.models import (
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
+    SynchronousSensor,
+)
+from machine_config.power_characterization import (
+    forward_power_characterization_coefficients,
+    forward_power_characterization_points,
 )
 from machine_config.schema import SCHEMA, SCHEMA_VERSION
 
@@ -107,8 +117,9 @@ def _light_source() -> LightSource:
         power_min_nominal_unit="W",
         power_bit_resolution=None,
         power_bit_resolution_unit="bits",
-        watts_to_volts_algorithm="LINEAR",
-        watts_to_volts_params="[1,100,10,1000]",
+        power_characterization=forward_power_characterization_points(
+            "LINEAR", "[1,100,10,1000]"
+        ),
     )
 
 
@@ -160,10 +171,41 @@ def _clearbox(grid_size: int = 5) -> ClearBox:
         video_output="HDMI",
         show_console=False,
         software_trigger_delay=3000,
-        volts_to_watts_algorithm="LINEAR",
-        volts_to_watts_params="48.5,105.0",
+        power_characterization=forward_power_characterization_coefficients(
+            "LINEAR", "48.5,105.0"
+        ),
         correction_grid_domain_shape="square",
         inverse_grid_domain_shape="square",
+        synchronous_sensors={
+            "Oxygen Sensor": SynchronousSensor(
+                enabled=True,
+                sensor_name="ZR800 Oxygen Analyzer",
+                sensor_output_range_low=-1.0,
+                sensor_output_range_high=6.0,
+                sensor_output_space="log10(ppm)",
+                sensor_model="ZR810",
+                sensor_manufacturer="Industrial Physics",
+                sensor_scope="Global",
+                units_derived_quantity="ppm",
+                port_id=5,
+                sensor_type="Oxygen Sensor",
+                input_type="4-20 mA",
+                algorithm_type="Log-Linear",
+                algorithm_equation="log(ppm) = a*mA + b",
+                calibration_source="Datasheet",
+                calibration_verified=False,
+                sample_period=5.0,
+                metadata="Synchronous Sensor because Clearbox is responsible for recording.",
+                derivation_equation_constants=[
+                    EquationConstant(name="a", value=0.4375),
+                    EquationConstant(name="b", value=-2.75),
+                ],
+                calibration_points=[
+                    CalibrationPoint(input_value=4.0, output_value=-1.0),
+                    CalibrationPoint(input_value=20.0, output_value=6.0),
+                ],
+            ),
+        },
     )
 
 
@@ -310,10 +352,9 @@ def nan_cb(tmp_path_factory: pytest.TempPathFactory) -> ClearBox:
         video_output=None,
         show_console=None,
         software_trigger_delay=None,
-        volts_to_watts_algorithm=None,
-        volts_to_watts_params=None,
         correction_grid_domain_shape=None,
         inverse_grid_domain_shape=None,
+        synchronous_sensors={},
     )
     base = _config(include_clearbox=False)
     patched = dc_replace(base.optical_trains[0], optional_components=OptionalComponents(clearbox=cb_obj))
@@ -537,11 +578,20 @@ class TestScalarFieldRoundtrip:
     def test_light_source_power_min_nominal(self, scalar_rt: MachineConfig) -> None:
         assert scalar_rt.optical_trains[0].light_source.power_min_nominal == pytest.approx(50.0)
 
-    def test_light_source_watts_to_volts_algorithm(self, scalar_rt: MachineConfig) -> None:
-        assert scalar_rt.optical_trains[0].light_source.watts_to_volts_algorithm == "LINEAR"
+    def test_light_source_power_characterization_algorithm_type(
+        self, scalar_rt: MachineConfig
+    ) -> None:
+        pc = scalar_rt.optical_trains[0].light_source.power_characterization
+        assert pc is not None
+        assert pc.algorithm_type == "LINEAR"
 
-    def test_light_source_watts_to_volts_params(self, scalar_rt: MachineConfig) -> None:
-        assert scalar_rt.optical_trains[0].light_source.watts_to_volts_params == "[1,100,10,1000]"
+    def test_light_source_power_characterization_points(self, scalar_rt: MachineConfig) -> None:
+        pc = scalar_rt.optical_trains[0].light_source.power_characterization
+        assert pc is not None
+        assert [(p.input_value, p.output_value) for p in pc.characterization_points] == [
+            (1.0, 100.0),
+            (10.0, 1000.0),
+        ]
 
     # --- ScannerCard ---------------------------------------------------------
 
@@ -609,17 +659,44 @@ class TestClearBoxAttributeRoundtrip:
     def test_software_trigger_delay(self, clearbox_cb: ClearBox) -> None:
         assert clearbox_cb.software_trigger_delay == 3000
 
-    def test_volts_to_watts_algorithm(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.volts_to_watts_algorithm == "LINEAR"
+    def test_power_characterization_algorithm_type(self, clearbox_cb: ClearBox) -> None:
+        pc = clearbox_cb.power_characterization
+        assert pc is not None
+        assert pc.algorithm_type == "LINEAR"
 
-    def test_volts_to_watts_params(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.volts_to_watts_params == "48.5,105.0"
+    def test_power_characterization_constants(self, clearbox_cb: ClearBox) -> None:
+        pc = clearbox_cb.power_characterization
+        assert pc is not None
+        assert {c.name: c.value for c in pc.derivation_equation_constants} == {
+            "b": 48.5,
+            "a": 105.0,
+        }
 
     def test_correction_grid_domain_shape(self, clearbox_cb: ClearBox) -> None:
         assert clearbox_cb.correction_grid_domain_shape == "square"
 
     def test_inverse_grid_domain_shape(self, clearbox_cb: ClearBox) -> None:
         assert clearbox_cb.inverse_grid_domain_shape == "square"
+
+    def test_synchronous_sensor_present_and_named(self, clearbox_cb: ClearBox) -> None:
+        assert len(clearbox_cb.synchronous_sensors) == 1
+        sensor = clearbox_cb.synchronous_sensors["Oxygen Sensor"]
+        assert sensor.sensor_name == "ZR800 Oxygen Analyzer"
+        assert sensor.port_id == 5
+        assert sensor.calibration_verified is False
+
+    def test_synchronous_sensor_compound_datasets_exact_values_in_order(
+        self, clearbox_cb: ClearBox
+    ) -> None:
+        sensor = clearbox_cb.synchronous_sensors["Oxygen Sensor"]
+        assert [(c.name, c.value) for c in sensor.derivation_equation_constants] == [
+            ("a", 0.4375),
+            ("b", -2.75),
+        ]
+        assert [(p.input_value, p.output_value) for p in sensor.calibration_points] == [
+            (4.0, -1.0),
+            (20.0, 6.0),
+        ]
 
     def test_correction_data_shape(self, clearbox_cb: ClearBox) -> None:
         assert isinstance(clearbox_cb.correction_data, list)
@@ -736,6 +813,167 @@ class TestScannerAxisConfigurations:
             _config(axis_cfg="3D"), tmp_path / "rom.h5"
         ).optical_trains[0].scanner.y_axis
         assert ax.range_of_motion == pytest.approx(120.5)
+
+
+class TestScannerInvertFlags:
+    """Invert_Actual_X/Y, Invert_Commanded_X/Y — plain bool, written (and
+    JSON-serialised) only when True; False and absent are indistinguishable
+    everywhere except immediately after a read (user-confirmed, 2026-08-21).
+    """
+
+    def test_defaults_to_false_and_omitted_from_json(self, tmp_path: Path) -> None:
+        rt = _roundtrip(_config(), tmp_path / "defaults.h5")
+        s = rt.optical_trains[0].scanner
+        assert s.invert_actual_x is False
+        assert s.invert_actual_y is False
+        assert s.invert_commanded_x is False
+        assert s.invert_commanded_y is False
+
+    def test_only_true_values_survive_as_real_hdf5_attributes(self, tmp_path: Path) -> None:
+        import h5py
+
+        cfg = _config()
+        cfg.optical_trains[0].scanner.invert_actual_x = True
+        cfg.optical_trains[0].scanner.invert_actual_y = False
+        cfg.optical_trains[0].scanner.invert_commanded_x = True
+        cfg.optical_trains[0].scanner.invert_commanded_y = False
+        out = tmp_path / "invert.h5"
+        rt = _roundtrip(cfg, out)
+
+        # Raw HDF5 inspection: only the two True-valued attributes exist at all.
+        with h5py.File(out, "r") as f:
+            attrs = f["Machine/Optical_Trains/Optical_Train_01/Scanner"].attrs
+            assert "Invert_Actual_X" in attrs
+            assert "Invert_Commanded_X" in attrs
+            assert "Invert_Actual_Y" not in attrs
+            assert "Invert_Commanded_Y" not in attrs
+
+        s = rt.optical_trains[0].scanner
+        assert s.invert_actual_x is True
+        assert s.invert_actual_y is False
+        assert s.invert_commanded_x is True
+        assert s.invert_commanded_y is False
+
+
+class TestSynchronousSensorEdgeCases:
+    """Edge cases distinct from TestClearBoxAttributeRoundtrip's happy path."""
+
+    def test_empty_sensors_map_roundtrips_as_empty_not_absent(self, tmp_path: Path) -> None:
+        """The write path must skip creating the Synchronous_Sensors group
+        entirely when the map is empty (not write an empty placeholder), and
+        the read path must default back to an empty dict, not error.
+        """
+        cfg = _config()
+        cfg.optical_trains[0].optional_components.clearbox.synchronous_sensors = {}
+        rt = _roundtrip(cfg, tmp_path / "empty_sensors.h5")
+        assert rt.optical_trains[0].optional_components.clearbox.synchronous_sensors == {}
+
+    def test_zero_row_compound_datasets_for_existing_sensor(self, tmp_path: Path) -> None:
+        """Distinct edge case from the empty-*map* test above: here the
+        sensor itself exists (its group is created), but both compound
+        datasets have zero rows — proving 0-length compound dataset
+        creation/read genuinely works, not assumed.
+        """
+        cfg = _config()
+        cfg.optical_trains[0].optional_components.clearbox.synchronous_sensors = {
+            "Untested Sensor": SynchronousSensor(
+                enabled=False,
+                sensor_name="Placeholder",
+                sensor_output_range_low=None,
+                sensor_output_range_high=None,
+                sensor_output_space=None,
+                sensor_model=None,
+                sensor_manufacturer=None,
+                sensor_scope=None,
+                units_derived_quantity=None,
+                port_id=None,
+                sensor_type=None,
+                input_type=None,
+                algorithm_type=None,
+                algorithm_equation=None,
+                calibration_source=None,
+                calibration_verified=None,
+                sample_period=None,
+                metadata=None,
+                derivation_equation_constants=[],
+                calibration_points=[],
+            ),
+        }
+        rt = _roundtrip(cfg, tmp_path / "zero_row.h5")
+        sensor = rt.optical_trains[0].optional_components.clearbox.synchronous_sensors["Untested Sensor"]
+        assert sensor.derivation_equation_constants == []
+        assert sensor.calibration_points == []
+        assert sensor.sensor_name == "Placeholder"
+
+    def test_arbitrary_differently_styled_key_survives_roundtrip(self, tmp_path: Path) -> None:
+        """The map key is a free-form label with no schema meaning — proves a
+        key unlike the fixture's own "Oxygen Sensor" (different style:
+        underscore-joined, all-caps) survives a write->read cycle verbatim.
+        """
+        cfg = _config()
+        cfg.optical_trains[0].optional_components.clearbox.synchronous_sensors = {
+            "HUMIDITY_SENSOR_2": SynchronousSensor(
+                enabled=True,
+                sensor_name=None,
+                sensor_output_range_low=None,
+                sensor_output_range_high=None,
+                sensor_output_space=None,
+                sensor_model=None,
+                sensor_manufacturer=None,
+                sensor_scope=None,
+                units_derived_quantity=None,
+                port_id=9,
+                sensor_type=None,
+                input_type=None,
+                algorithm_type=None,
+                algorithm_equation=None,
+                calibration_source=None,
+                calibration_verified=None,
+                sample_period=None,
+                metadata=None,
+                derivation_equation_constants=[],
+                calibration_points=[],
+            ),
+        }
+        rt = _roundtrip(cfg, tmp_path / "arbitrary_key.h5")
+        sensors = rt.optical_trains[0].optional_components.clearbox.synchronous_sensors
+        assert "HUMIDITY_SENSOR_2" in sensors
+        assert sensors["HUMIDITY_SENSOR_2"].port_id == 9
+
+    def test_constant_name_too_long_for_fixed64_raises(self, tmp_path: Path) -> None:
+        """Derivation_Equation_Constants.name is a 64-byte fixed-length
+        field (see SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string
+        convention"). A name whose UTF-8 encoding exceeds 64 bytes must be
+        rejected with a clear error at write time, not silently truncated
+        by numpy's fixed-width string dtype.
+        """
+        cfg = _config()
+        cfg.optical_trains[0].optional_components.clearbox.synchronous_sensors = {
+            "Oversized Name Sensor": SynchronousSensor(
+                enabled=None,
+                sensor_name=None,
+                sensor_output_range_low=None,
+                sensor_output_range_high=None,
+                sensor_output_space=None,
+                sensor_model=None,
+                sensor_manufacturer=None,
+                sensor_scope=None,
+                units_derived_quantity=None,
+                port_id=None,
+                sensor_type=None,
+                input_type=None,
+                algorithm_type=None,
+                algorithm_equation=None,
+                calibration_source=None,
+                calibration_verified=None,
+                sample_period=None,
+                metadata=None,
+                derivation_equation_constants=[EquationConstant(name="a" * 65, value=1.0)],
+                calibration_points=[],
+            ),
+        }
+        with pytest.raises(ValueError, match="does not fit"):
+            MachineConfigWriter(cfg).write(tmp_path / "oversized_name.h5")
 
 
 class TestWithoutClearBox:

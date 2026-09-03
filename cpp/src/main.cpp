@@ -1,7 +1,6 @@
 // machine_config_cli — CLI entry point.
 // Sub-steps: §4.8 export-json; §4.14 write-hdf5; §4.15 copy-hdf5; §4.16 correction-hash.
-#include "machine_config/reader.hpp"
-#include "machine_config/writer.hpp"
+#include "machine_config/machine_config.hpp"
 
 #include <CLI/CLI.hpp>
 #include <picosha2.h>
@@ -23,6 +22,7 @@ int main(int argc, char* argv[]) {
 #endif
 
     CLI::App app{"Machine Config Library CLI"};
+    app.set_version_flag("--version", std::string(machine_config::kVersionString));
     app.require_subcommand(1);
 
     // §4.8: export-json <path>

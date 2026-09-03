@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Proto 1 — Read root-level string attributes from a real h5py-written file.
 //
 // Validates that scigolib/hdf5 can open fixtures/reference_config.h5 (written

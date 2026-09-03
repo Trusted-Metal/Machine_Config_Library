@@ -21,9 +21,32 @@ It has no system dependencies — `cargo build` compiles `libhdf5` from source o
 - [Quickstart example](#quickstart-example)
 - [Full workflow example](#full-workflow-example)
 - [Running the Rust test suite](#running-the-rust-test-suite)
+- [Validation results](#validation-results)
+- [Capability API (stable model facade)](#capability-api-stable-model-facade)
 
 > Use cases 3, 5, and 7 (`config_from_dict`, `ConfigEditor`, `YamlConfigBuilder`) are
 > Python-only conveniences with no Rust port.
+
+---
+
+## Capability API (stable model facade)
+
+Preferred for applications. Peeks root `File_Version`, dispatches to a version
+adapter, then index-based full-model get/set with `SetMode::Merge` / `Replace`.
+The v1.0 facade and layout live in `rust/src/capabilities/v1_0/`;
+`capabilities/mod.rs` only dispatches.
+
+```rust
+use machine_config::capabilities::{open_machine_config, SetMode};
+
+let mut file = open_machine_config("machine.h5")?;
+let mut scanner = file.get_scanner(0)?;
+scanner.working_distance = Some(680.0);
+file.set_scanner(0, scanner, SetMode::Merge)?;
+file.save(Some(std::path::Path::new("out.h5")))?;
+```
+
+See [USAGE.md](../USAGE.md) and `schema/capabilities/`.
 
 ---
 
@@ -282,9 +305,12 @@ Expected output:
 ```
 === Machine Config Quickstart ===
 
-Machine name   : TM-LPBF-02: AconityMIDI+_OG
+Machine name   : ExampleDummy-2Train
 Optical trains : 2
-Working dist   : 670 mm   (train 0)
+  Train 0  wd=Some(670.0) mm  offset x=Some(-87.5), y=Some(23.5)
+           clearbox: present
+  Train 1  wd=Some(670.0) mm  offset x=Some(87.5), y=Some(-23.5)
+           clearbox: present
 Correction grid: [257, 257, 2]   (train 0)
 
 Written to     : <tmp>.h5
@@ -313,13 +339,13 @@ Expected output:
 ```
 === Full Workflow: Calibration Adjustment ===
 
-Machine : TM-LPBF-02: AconityMIDI+_OG
+Machine : ExampleDummy-2Train
 Trains  : 2
 
 Before calibration:
   Train 1  offset x=Some(-87.5), y=Some(23.5)
            correction grid [257, 257, 2]
-  Train 2  offset x=Some(86.074), y=Some(-21.695)
+  Train 2  offset x=Some(87.5), y=Some(-23.5)
            correction grid [257, 257, 2]
 
 Written to : <tmp>.h5
@@ -340,8 +366,8 @@ Source: [rust/examples/full_workflow.rs](../rust/examples/full_workflow.rs)
 ```powershell
 # PowerShell — from repo root
 Push-Location rust
-cargo test --lib        # 46 unit tests (error, models, reader, builder, writer modules)
-cargo test              # 46 unit + 15 integration + 2 doc = 63 tests total
+cargo test --lib        # 74 unit tests (error, models, reader, builder, writer modules)
+cargo test              # 74 unit + 8 capabilities + 30 integration + 5 adapter-migration + 2 doc = 119 tests total
 cargo bench             # Criterion benchmarks: open_and_parse, to_json_pretty, parse_with_binary
 Pop-Location
 ```
@@ -356,7 +382,25 @@ cargo bench
 
 | Test binary | Count | Location |
 |---|---|---|
-| Library unit tests | 46 | `src/error.rs`, `src/models.rs`, `src/reader.rs`, `src/builder.rs`, `src/writer.rs` |
-| Integration tests | 15 | `tests/integration_test.rs` |
+| Library unit tests | 74 | `src/error.rs`, `src/models.rs`, `src/reader.rs`, `src/builder.rs`, `src/writer.rs` |
+| Capabilities tests | 8 | `tests/capabilities_test.rs` |
+| Integration tests | 30 | `tests/integration_test.rs` |
+| Adapter migration tests | 5 | `tests/adapter_migration_test.rs` — mock v1.1 adapter (AV-09–11) |
 | Doc tests | 2 | `src/models.rs` |
-| **Total** | **63** | |
+| **Total** | **119** | |
+
+---
+
+## Validation results
+
+20 / 20 scenarios pass on this SDK. See the full table in
+[docs/validation/rust/PASS_FAIL.md](../docs/validation/rust/PASS_FAIL.md) and verbatim
+output in [docs/validation/rust/results.md](../docs/validation/rust/results.md).
+
+No real library defects were found during this validation pass — the corrupt-scalar and
+missing-group scenarios (AV-04/AV-05) already returned typed errors (`MissingGroup`/`Parse`)
+from the start, and the mock v1.1 adapter's `meta.extra` handling was written correctly on
+the first pass, having already seen the equivalent bug surface in Node.js's implementation
+earlier in this validation effort.
+
+For the master cross-language matrix see [docs/validation/README.md](../docs/validation/README.md).

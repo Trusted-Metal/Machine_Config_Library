@@ -10,6 +10,9 @@ use ndarray::Array3;
 
 use crate::error::Result;
 use crate::models::*;
+use crate::power_characterization::{
+    forward_power_characterization_coefficients, forward_power_characterization_points,
+};
 use crate::writer::MachineConfigWriter;
 
 const SCHEMA_VERSION: &str = "v1";
@@ -57,6 +60,8 @@ impl MockConfigBuilder {
             file_version: "1.0".to_owned(),
             export_date: MOCK_EXPORT_DATE.to_owned(),
             configuration_hash: "0".repeat(64),
+            facility_id: None,
+            config_author: None,
             extra: Default::default(),
         };
 
@@ -127,6 +132,10 @@ impl MockConfigBuilder {
             y_axis: mock_axis(),
             z_axis: Some(mock_axis()),
             focus: None,
+            invert_actual_x: false,
+            invert_actual_y: false,
+            invert_commanded_x: false,
+            invert_commanded_y: false,
         };
 
         let light_source = LightSource {
@@ -145,8 +154,15 @@ impl MockConfigBuilder {
             power_min_nominal_unit: Some("W".to_owned()),
             power_bit_resolution: None,
             power_bit_resolution_unit: Some("bits".to_owned()),
-            watts_to_volts_algorithm: Some("LINEAR".to_owned()),
-            watts_to_volts_params: Some("[1,100,10,1000]".to_owned()),
+            // Derived via the same function a real v1.0 read would use,
+            // rather than a hand-built PowerCharacterization literal — the
+            // mock can never drift from what parsing a real file with these
+            // same Watts_To_Volts_* values would actually produce.
+            power_characterization: forward_power_characterization_points(
+                Some("LINEAR"),
+                Some("[1,100,10,1000]"),
+            )
+            .expect("mock power characterization literals are always valid"),
         };
 
         let collimator = Collimator {
@@ -250,10 +266,22 @@ fn mock_clearbox(index: usize) -> ClearBox {
         video_output: Some("HDMI".to_owned()),
         show_console: Some(false),
         software_trigger_delay: Some(3000),
-        volts_to_watts_algorithm: Some("LINEAR".to_owned()),
-        volts_to_watts_params: Some("50.0,100.0".to_owned()),
         correction_grid_domain_shape: None,
         inverse_grid_domain_shape: None,
+        // Not populated by MockConfigBuilder, same as OPCUA — only the real
+        // fixtures (reference_config_synchronous_sensors.h5 and the combined
+        // OPCUA+sensors fixture) exercise this field today.
+        synchronous_sensors: indexmap::IndexMap::new(),
+        // Not populated by MockConfigBuilder, same reasoning as
+        // synchronous_sensors above; only real v1.1 fixtures exercise this.
+        firmware_version: None,
+        // Derived via the same function a real v1.0 read would use — see
+        // mock_train's LightSource for the identical reasoning.
+        power_characterization: forward_power_characterization_coefficients(
+            Some("LINEAR"),
+            Some("50.0,100.0"),
+        )
+        .expect("mock power characterization literals are always valid"),
     }
 }
 

@@ -15,8 +15,10 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -71,6 +73,58 @@ struct CorrectionData {
 };
 
 // ---------------------------------------------------------------------------
+// CorrectionData <-> Grid3D conversion helpers
+//
+// Live at the model layer rather than in a version-specific adapter: the
+// NaN<->nullopt convention is part of Grid3D's own shape, not an on-disk
+// detail of any particular File_Version, so every adapter can share it.
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+// Flat CorrectionData buffer -> nested Grid3D; NaN -> nullopt.
+inline Grid3D correctionDataToGrid3D(const CorrectionData& cd) {
+    auto d0 = cd.shape[0], d1 = cd.shape[1], d2 = cd.shape[2];
+    Grid3D grid(d0, std::vector<std::vector<GridCell>>(d1, std::vector<GridCell>(d2)));
+    for (std::size_t i = 0; i < d0; ++i)
+        for (std::size_t j = 0; j < d1; ++j)
+            for (std::size_t k = 0; k < d2; ++k) {
+                double v = cd.data[i * d1 * d2 + j * d2 + k];
+                grid[i][j][k] = std::isnan(v) ? GridCell{} : GridCell{v};
+            }
+    return grid;
+}
+
+// Grid3D -> flat row-major double buffer. nullopt cells become NaN.
+// Absent/empty Grid3D becomes a zero-filled default (257,257,2) array.
+inline std::vector<double> gridToFlat(const std::optional<Grid3D>& grid,
+                                       std::array<std::size_t, 3>& shape_out) {
+    constexpr std::size_t D0 = 257, D1 = 257, D2 = 2;
+    if (!grid || grid->empty()) {
+        shape_out = {D0, D1, D2};
+        return std::vector<double>(D0 * D1 * D2, 0.0);
+    }
+    const auto& g = *grid;
+    std::size_t d0 = g.size();
+    std::size_t d1 = d0 > 0 ? g[0].size() : 0;
+    std::size_t d2 = d1 > 0 ? g[0][0].size() : 0;
+    if (d0 == 0 || d1 == 0 || d2 == 0) {
+        shape_out = {D0, D1, D2};
+        return std::vector<double>(D0 * D1 * D2, 0.0);
+    }
+    shape_out = {d0, d1, d2};
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    std::vector<double> flat(d0 * d1 * d2, nan);
+    for (std::size_t i = 0; i < d0; ++i)
+        for (std::size_t j = 0; j < d1; ++j)
+            for (std::size_t k = 0; k < d2; ++k)
+                flat[i * d1 * d2 + j * d2 + k] = g[i][j][k].value_or(nan);
+    return flat;
+}
+
+} // namespace detail
+
+// ---------------------------------------------------------------------------
 // Structs — defined bottom-up (inner before outer)
 // ---------------------------------------------------------------------------
 
@@ -87,6 +141,72 @@ struct ScanFieldCorrectionFile {
     // raw_bytes: populated only when include_binary=true; base64-encoded in JSON.
     // Omitted from JSON entirely when absent.
     std::optional<std::vector<std::uint8_t>> raw_bytes;
+};
+
+// One named constant used to derive an equation (e.g. `a`/`b` for a
+// Log-Linear fit, `c0`..`cN` for a polynomial fit). Stored on disk as a
+// 64-byte fixed-length UTF-8 string (see SYNCHRONOUS_SENSOR_PLAN.md's
+// "Compound dataset string convention") — name here is a plain
+// std::string; the fixed-width conversion happens only at the HDF5 adapter
+// layer (capabilities::v1_0's EquationConstantRow).
+struct EquationConstant {
+    std::string name;
+    double value{0.0};
+};
+
+// One raw calibration pair. input_value is in whatever unit
+// SynchronousSensor::input_type implies; output_value is in whatever unit
+// SynchronousSensor::sensor_output_space implies (no per-row unit tag) —
+// see SYNCHRONOUS_SENSOR_PLAN.md's "Why compound datasets" for the
+// convention.
+struct CalibrationPoint {
+    double input_value{0.0};
+    double output_value{0.0};
+};
+
+// v1.1 addition (Changes 3/4): a structured algorithm + equation + constants
+// + characterization points describing a power conversion. Shared, identical
+// struct for both ClearBox::power_characterization (ClearBox's Volts->Watts
+// fit; migrated data has real derivation_equation_constants but zero
+// characterization_points) and LightSource::power_characterization
+// (Light_Source's Volts->Watts fit; migrated data is the inverse — zero
+// derivation_equation_constants, real characterization_points) — same kind
+// of thing at two different HDF5 paths, not the same instance. See
+// docs/migrations/v1_0_to_v1_1.md Changes 3/4 for the full derivation rules.
+struct PowerCharacterization {
+    std::optional<std::string> algorithm_type;
+    std::optional<std::string> algorithm_equation;
+    std::optional<std::string> input_type;
+    std::optional<std::string> units_derived_quantity;
+    std::vector<EquationConstant> derivation_equation_constants;
+    std::vector<CalibrationPoint> characterization_points;
+};
+
+// One Synchronous Sensor record. The map key (on ClearBox::synchronous_sensors)
+// is a free-form label chosen by the file's author — not required to equal
+// any attribute value inside the sensor's own group (same convention as
+// OpcuaConfig::triggers's keys).
+struct SynchronousSensor {
+    std::optional<bool>        enabled;
+    std::optional<std::string> sensor_name;
+    std::optional<double>      sensor_output_range_low;
+    std::optional<double>      sensor_output_range_high;
+    std::optional<std::string> sensor_output_space;
+    std::optional<std::string> sensor_model;
+    std::optional<std::string> sensor_manufacturer;
+    std::optional<std::string> sensor_scope;
+    std::optional<std::string> units_derived_quantity;
+    std::optional<std::int64_t> port_id;
+    std::optional<std::string> sensor_type;
+    std::optional<std::string> input_type;
+    std::optional<std::string> algorithm_type;
+    std::optional<std::string> algorithm_equation;
+    std::optional<std::string> calibration_source;
+    std::optional<bool>        calibration_verified;
+    std::optional<double>      sample_period;
+    std::optional<std::string> metadata;
+    std::vector<EquationConstant> derivation_equation_constants;
+    std::vector<CalibrationPoint> calibration_points;
 };
 
 // Optional ClearBox add-on.  HDF5: .../Optional_Components/ClearBox/.
@@ -109,10 +229,26 @@ struct ClearBox {
     std::optional<std::string>  video_output;
     std::optional<bool>         show_console; // HDF5 int 0/1
     std::optional<std::int64_t> software_trigger_delay;
-    std::optional<std::string>  volts_to_watts_algorithm;
-    std::optional<std::string>  volts_to_watts_params;
     std::optional<std::string>  correction_grid_domain_shape;
     std::optional<std::string>  inverse_grid_domain_shape;
+    // Omitted entirely (not "{}") when there are no sensors — matches
+    // Rust's skip_serializing_if and Python's _clearbox_to_dict choice to
+    // omit the key when empty, so every fixture that doesn't use this
+    // feature stays byte-for-byte identical in JSON shape to before it
+    // existed. Same optional-whole-feature shape as MachineConfig::opcua,
+    // not OpcuaConfig::triggers (which is always present, even as "{}") —
+    // deliberately different from that precedent (see the Node.js bug this
+    // exact mismatch caused, corrected before this language's Phase 1).
+    std::map<std::string, SynchronousSensor> synchronous_sensors;
+    // v1.1 addition (Change 1); nullopt for v1.0 files, no on-disk source
+    // there. Omitted from JSON when nullopt, same reasoning as
+    // synchronous_sensors above.
+    std::optional<std::string> firmware_version;
+    // The only representation of the volts<->watts conversion concept, for
+    // files of either version. v1.0's reader forward-derives this from the
+    // on-disk flat Algorithm/Params attrs; v1.0's writer backward-derives
+    // the flat attrs from this. v1.1 reads/writes it natively.
+    std::optional<PowerCharacterization> power_characterization;
 };
 
 // Optional add-on hardware present on an optical train.
@@ -178,6 +314,16 @@ struct Scanner {
     AxisConfig y_axis;
     std::optional<AxisConfig> z_axis;
     std::optional<AxisConfig> focus;
+    // Plain bool, not std::optional<bool> — deliberately different from
+    // every other bool field in this schema. Defaults to false whether the
+    // on-disk attribute is absent or explicitly 0 (user-confirmed,
+    // 2026-08-21). Never serialised (or written back to HDF5) unless
+    // true — a write->read round-trip is deliberately lossy for an
+    // explicit false, which becomes indistinguishable from "never set".
+    bool invert_actual_x{false};
+    bool invert_actual_y{false};
+    bool invert_commanded_x{false};
+    bool invert_commanded_y{false};
 };
 
 struct LightSource {
@@ -197,8 +343,11 @@ struct LightSource {
     // HDF5 stores this attribute as a string; the reader parses it to double.
     std::optional<double>      power_bit_resolution;
     std::optional<std::string> power_bit_resolution_unit;
-    std::optional<std::string> watts_to_volts_algorithm;
-    std::optional<std::string> watts_to_volts_params;
+    // The only representation of the watts<->volts conversion concept, for
+    // files of either version — same shift in responsibility described on
+    // ClearBox::power_characterization above. Omitted from JSON when
+    // nullopt, same reasoning as ClearBox::synchronous_sensors.
+    std::optional<PowerCharacterization> power_characterization;
 };
 
 struct OpticalTrain {
@@ -270,6 +419,12 @@ struct MachineConfigMeta {
     std::string file_version;
     std::string export_date;
     std::string configuration_hash;
+    // TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+    // Not real schema fields, never serialized — see to_json(MachineConfigMeta)
+    // below, which never lists them. Only the mock v1.1 reader/writer
+    // (test-only, not part of this header set) ever populates them.
+    std::optional<std::string> facility_id;
+    std::optional<std::string> config_author;
     ExtraAttrs extra; // non-typed root HDF5 attrs; empty object when none
 };
 
@@ -282,12 +437,28 @@ struct OpcuaClientConfig {
     std::int64_t publish_interval{0};
     std::int64_t sampling_interval{0};
     std::int64_t session_timeout{0};
+    std::optional<std::int64_t> keep_alive_count;
+    std::optional<std::int64_t> lifetime_count;
+    std::optional<std::string>  machine_profile;
+    std::optional<std::string>  queue_policy;
+    std::optional<std::int64_t> queue_size_data_change;
+    std::optional<std::int64_t> queue_size_events;
+    std::optional<std::int64_t> reconnect_interval;
+    std::optional<std::string>  root_node;
+    std::optional<std::int64_t> sync_loop_interval_initial;
+    std::optional<std::int64_t> sync_loop_interval_settled;
     ExtraAttrs extra;
 };
 
 struct OpcuaPipeConfig {
     bool         pipe_enabled{false}; // HDF5 int 0/1
     std::int64_t buffer_size{0};
+    std::optional<bool>         configure_client; // HDF5 int 0/1
+    std::optional<std::int64_t> inbound_rate_limit;
+    std::optional<std::int64_t> max_inbound_message_size;
+    std::optional<std::string>  min_integrity_level;
+    std::optional<std::string>  pipe_name;
+    std::optional<std::string>  user_access_level;
     ExtraAttrs extra;
 };
 
@@ -298,6 +469,12 @@ struct OpcuaTrigger {
     std::optional<bool>        rule_enabled; // HDF5 int 0/1
     std::optional<std::string> start_value;
     std::optional<std::string> stop_value;
+    std::optional<std::string>  case_sensitivity;
+    std::optional<std::string>  component;
+    std::optional<std::int64_t> cooldown_period;
+    std::optional<std::string>  event;
+    std::optional<std::int64_t> max_fires_per_job;
+    std::optional<std::string>  trigger_label;
     ExtraAttrs extra;
 };
 
@@ -309,6 +486,7 @@ struct OpcuaConfig {
     // Cross-check uses value comparison so ordering mismatch is benign.
     std::map<std::string, OpcuaTrigger> triggers;
     std::optional<bool> triggers_enabled; // HDF5 float 0.0/1.0 on OPCUA/Triggers group
+    std::optional<std::int64_t> trigger_stop_ceiling_layers; // on OPCUA/Triggers group
 };
 
 struct MachineConfig {
@@ -391,6 +569,98 @@ inline void from_json(const nlohmann::json& j, ScanFieldCorrectionFile& s) {
     // raw_bytes base64 decode implemented in the writer (§4.14).
 }
 
+// --- EquationConstant / CalibrationPoint / SynchronousSensor ---
+
+inline void to_json(nlohmann::json& j, const EquationConstant& c) {
+    j = {{"name", c.name}, {"value", c.value}};
+}
+
+inline void from_json(const nlohmann::json& j, EquationConstant& c) {
+    j.at("name").get_to(c.name);
+    j.at("value").get_to(c.value);
+}
+
+inline void to_json(nlohmann::json& j, const CalibrationPoint& c) {
+    j = {{"input_value", c.input_value}, {"output_value", c.output_value}};
+}
+
+inline void from_json(const nlohmann::json& j, CalibrationPoint& c) {
+    j.at("input_value").get_to(c.input_value);
+    j.at("output_value").get_to(c.output_value);
+}
+
+inline void to_json(nlohmann::json& j, const PowerCharacterization& p) {
+    j = {
+        {"algorithm_type",                detail::opt_to_j(p.algorithm_type)},
+        {"algorithm_equation",            detail::opt_to_j(p.algorithm_equation)},
+        {"input_type",                    detail::opt_to_j(p.input_type)},
+        {"units_derived_quantity",        detail::opt_to_j(p.units_derived_quantity)},
+        {"derivation_equation_constants", p.derivation_equation_constants},
+        {"characterization_points",       p.characterization_points},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, PowerCharacterization& p) {
+    p.algorithm_type         = detail::j_to_opt<std::string>(j, "algorithm_type");
+    p.algorithm_equation     = detail::j_to_opt<std::string>(j, "algorithm_equation");
+    p.input_type             = detail::j_to_opt<std::string>(j, "input_type");
+    p.units_derived_quantity = detail::j_to_opt<std::string>(j, "units_derived_quantity");
+    p.derivation_equation_constants.clear();
+    if (j.contains("derivation_equation_constants"))
+        j.at("derivation_equation_constants").get_to(p.derivation_equation_constants);
+    p.characterization_points.clear();
+    if (j.contains("characterization_points"))
+        j.at("characterization_points").get_to(p.characterization_points);
+}
+
+inline void to_json(nlohmann::json& j, const SynchronousSensor& s) {
+    j = {
+        {"enabled",                       detail::opt_to_j(s.enabled)},
+        {"sensor_name",                   detail::opt_to_j(s.sensor_name)},
+        {"sensor_output_range_low",       detail::opt_to_j(s.sensor_output_range_low)},
+        {"sensor_output_range_high",      detail::opt_to_j(s.sensor_output_range_high)},
+        {"sensor_output_space",           detail::opt_to_j(s.sensor_output_space)},
+        {"sensor_model",                  detail::opt_to_j(s.sensor_model)},
+        {"sensor_manufacturer",           detail::opt_to_j(s.sensor_manufacturer)},
+        {"sensor_scope",                  detail::opt_to_j(s.sensor_scope)},
+        {"units_derived_quantity",        detail::opt_to_j(s.units_derived_quantity)},
+        {"port_id",                       detail::opt_to_j(s.port_id)},
+        {"sensor_type",                   detail::opt_to_j(s.sensor_type)},
+        {"input_type",                    detail::opt_to_j(s.input_type)},
+        {"algorithm_type",                detail::opt_to_j(s.algorithm_type)},
+        {"algorithm_equation",            detail::opt_to_j(s.algorithm_equation)},
+        {"calibration_source",            detail::opt_to_j(s.calibration_source)},
+        {"calibration_verified",          detail::opt_to_j(s.calibration_verified)},
+        {"sample_period",                 detail::opt_to_j(s.sample_period)},
+        {"metadata",                      detail::opt_to_j(s.metadata)},
+        {"derivation_equation_constants", s.derivation_equation_constants},
+        {"calibration_points",            s.calibration_points},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, SynchronousSensor& s) {
+    s.enabled                  = detail::j_to_opt<bool>(j, "enabled");
+    s.sensor_name               = detail::j_to_opt<std::string>(j, "sensor_name");
+    s.sensor_output_range_low   = detail::j_to_opt<double>(j, "sensor_output_range_low");
+    s.sensor_output_range_high  = detail::j_to_opt<double>(j, "sensor_output_range_high");
+    s.sensor_output_space       = detail::j_to_opt<std::string>(j, "sensor_output_space");
+    s.sensor_model              = detail::j_to_opt<std::string>(j, "sensor_model");
+    s.sensor_manufacturer       = detail::j_to_opt<std::string>(j, "sensor_manufacturer");
+    s.sensor_scope              = detail::j_to_opt<std::string>(j, "sensor_scope");
+    s.units_derived_quantity    = detail::j_to_opt<std::string>(j, "units_derived_quantity");
+    s.port_id                   = detail::j_to_opt<std::int64_t>(j, "port_id");
+    s.sensor_type               = detail::j_to_opt<std::string>(j, "sensor_type");
+    s.input_type                = detail::j_to_opt<std::string>(j, "input_type");
+    s.algorithm_type            = detail::j_to_opt<std::string>(j, "algorithm_type");
+    s.algorithm_equation        = detail::j_to_opt<std::string>(j, "algorithm_equation");
+    s.calibration_source        = detail::j_to_opt<std::string>(j, "calibration_source");
+    s.calibration_verified      = detail::j_to_opt<bool>(j, "calibration_verified");
+    s.sample_period             = detail::j_to_opt<double>(j, "sample_period");
+    s.metadata                  = detail::j_to_opt<std::string>(j, "metadata");
+    j.at("derivation_equation_constants").get_to(s.derivation_equation_constants);
+    j.at("calibration_points").get_to(s.calibration_points);
+}
+
 // --- ClearBox ---
 
 inline void to_json(nlohmann::json& j, const ClearBox& c) {
@@ -411,14 +681,22 @@ inline void to_json(nlohmann::json& j, const ClearBox& c) {
         {"show_console",                 detail::opt_to_j(c.show_console)},
         {"software_trigger_delay",       detail::opt_to_j(c.software_trigger_delay)},
         {"video_output",                 detail::opt_to_j(c.video_output)},
-        {"volts_to_watts_algorithm",     detail::opt_to_j(c.volts_to_watts_algorithm)},
-        {"volts_to_watts_params",        detail::opt_to_j(c.volts_to_watts_params)},
     };
     // Correction grids: omitted when absent (include_binary=false).
     if (c.correction_data.has_value())
         j["correction_data"] = detail::grid3d_to_json(*c.correction_data);
     if (c.inverse_correction_data.has_value())
         j["inverse_correction_data"] = detail::grid3d_to_json(*c.inverse_correction_data);
+    // synchronous_sensors: omitted entirely when empty, not serialised as
+    // "{}" — see the field's doc comment on ClearBox above.
+    if (!c.synchronous_sensors.empty())
+        j["synchronous_sensors"] = c.synchronous_sensors;
+    // v1.1 additions — omitted entirely when absent, same byte-identical-
+    // v1.0-output reasoning as synchronous_sensors above.
+    if (c.firmware_version.has_value())
+        j["firmware_version"] = *c.firmware_version;
+    if (c.power_characterization.has_value())
+        j["power_characterization"] = *c.power_characterization;
 }
 
 inline void from_json(const nlohmann::json& j, ClearBox& c) {
@@ -436,14 +714,20 @@ inline void from_json(const nlohmann::json& j, ClearBox& c) {
     c.video_output            = detail::j_to_opt<std::string>(j, "video_output");
     c.show_console            = detail::j_to_opt<bool>(j, "show_console");
     c.software_trigger_delay  = detail::j_to_opt<std::int64_t>(j, "software_trigger_delay");
-    c.volts_to_watts_algorithm     = detail::j_to_opt<std::string>(j, "volts_to_watts_algorithm");
-    c.volts_to_watts_params        = detail::j_to_opt<std::string>(j, "volts_to_watts_params");
     c.correction_grid_domain_shape = detail::j_to_opt<std::string>(j, "correction_grid_domain_shape");
     c.inverse_grid_domain_shape    = detail::j_to_opt<std::string>(j, "inverse_grid_domain_shape");
     if (j.contains("correction_data") && !j.at("correction_data").is_null())
         c.correction_data = detail::grid3d_from_json(j.at("correction_data"));
     if (j.contains("inverse_correction_data") && !j.at("inverse_correction_data").is_null())
         c.inverse_correction_data = detail::grid3d_from_json(j.at("inverse_correction_data"));
+    c.synchronous_sensors.clear();
+    if (j.contains("synchronous_sensors"))
+        j.at("synchronous_sensors").get_to(c.synchronous_sensors);
+    c.firmware_version = detail::j_to_opt<std::string>(j, "firmware_version");
+    if (j.contains("power_characterization") && !j.at("power_characterization").is_null())
+        c.power_characterization = j.at("power_characterization").get<PowerCharacterization>();
+    else
+        c.power_characterization = std::nullopt;
 }
 
 // --- OptionalComponents ---
@@ -562,6 +846,13 @@ inline void to_json(nlohmann::json& j, const Scanner& s) {
         {"y_axis",                  s.y_axis},
         {"z_axis",                  detail::opt_to_j(s.z_axis)},
     };
+    // Omitted entirely (not serialised as false) unless true — deliberately
+    // different from every other bool field above (user-confirmed,
+    // 2026-08-21).
+    if (s.invert_actual_x) j["invert_actual_x"] = true;
+    if (s.invert_actual_y) j["invert_actual_y"] = true;
+    if (s.invert_commanded_x) j["invert_commanded_x"] = true;
+    if (s.invert_commanded_y) j["invert_commanded_y"] = true;
 }
 
 inline void from_json(const nlohmann::json& j, Scanner& s) {
@@ -591,6 +882,10 @@ inline void from_json(const nlohmann::json& j, Scanner& s) {
         s.z_axis = j.at("z_axis").get<AxisConfig>();
     if (j.contains("focus") && !j.at("focus").is_null())
         s.focus = j.at("focus").get<AxisConfig>();
+    s.invert_actual_x = j.value("invert_actual_x", false);
+    s.invert_actual_y = j.value("invert_actual_y", false);
+    s.invert_commanded_x = j.value("invert_commanded_x", false);
+    s.invert_commanded_y = j.value("invert_commanded_y", false);
 }
 
 // --- LightSource ---
@@ -610,11 +905,13 @@ inline void to_json(nlohmann::json& j, const LightSource& l) {
         {"power_min_nominal",         detail::opt_to_j(l.power_min_nominal)},
         {"power_min_nominal_unit",    detail::opt_to_j(l.power_min_nominal_unit)},
         {"serial_number",             l.serial_number},
-        {"watts_to_volts_algorithm",  detail::opt_to_j(l.watts_to_volts_algorithm)},
-        {"watts_to_volts_params",     detail::opt_to_j(l.watts_to_volts_params)},
         {"wavelength",                detail::opt_to_j(l.wavelength)},
         {"wavelength_unit",           detail::opt_to_j(l.wavelength_unit)},
     };
+    // v1.1 addition — omitted entirely when absent, same reasoning as
+    // ClearBox::power_characterization.
+    if (l.power_characterization.has_value())
+        j["power_characterization"] = *l.power_characterization;
 }
 
 inline void from_json(const nlohmann::json& j, LightSource& l) {
@@ -633,8 +930,10 @@ inline void from_json(const nlohmann::json& j, LightSource& l) {
     l.power_min_nominal_unit  = detail::j_to_opt<std::string>(j, "power_min_nominal_unit");
     l.power_bit_resolution    = detail::j_to_opt<double>(j, "power_bit_resolution");
     l.power_bit_resolution_unit= detail::j_to_opt<std::string>(j, "power_bit_resolution_unit");
-    l.watts_to_volts_algorithm= detail::j_to_opt<std::string>(j, "watts_to_volts_algorithm");
-    l.watts_to_volts_params   = detail::j_to_opt<std::string>(j, "watts_to_volts_params");
+    if (j.contains("power_characterization") && !j.at("power_characterization").is_null())
+        l.power_characterization = j.at("power_characterization").get<PowerCharacterization>();
+    else
+        l.power_characterization = std::nullopt;
 }
 
 // --- OpticalTrain ---
@@ -793,15 +1092,25 @@ inline void from_json(const nlohmann::json& j, MachineConfigMeta& m) {
 
 inline void to_json(nlohmann::json& j, const OpcuaClientConfig& o) {
     j = {
-        {"auth_mode",         o.auth_mode},
-        {"bfs_max_depth",     o.bfs_max_depth},
-        {"extra",             o.extra},
-        {"publish_interval",  o.publish_interval},
-        {"sampling_interval", o.sampling_interval},
-        {"security_mode",     o.security_mode},
-        {"security_policy",   o.security_policy},
-        {"server_url",        o.server_url},
-        {"session_timeout",   o.session_timeout},
+        {"auth_mode",                    o.auth_mode},
+        {"bfs_max_depth",                o.bfs_max_depth},
+        {"extra",                        o.extra},
+        {"keep_alive_count",             detail::opt_to_j(o.keep_alive_count)},
+        {"lifetime_count",               detail::opt_to_j(o.lifetime_count)},
+        {"machine_profile",              detail::opt_to_j(o.machine_profile)},
+        {"publish_interval",             o.publish_interval},
+        {"queue_policy",                 detail::opt_to_j(o.queue_policy)},
+        {"queue_size_data_change",       detail::opt_to_j(o.queue_size_data_change)},
+        {"queue_size_events",            detail::opt_to_j(o.queue_size_events)},
+        {"reconnect_interval",           detail::opt_to_j(o.reconnect_interval)},
+        {"root_node",                    detail::opt_to_j(o.root_node)},
+        {"sampling_interval",            o.sampling_interval},
+        {"security_mode",                o.security_mode},
+        {"security_policy",              o.security_policy},
+        {"server_url",                   o.server_url},
+        {"session_timeout",              o.session_timeout},
+        {"sync_loop_interval_initial",   detail::opt_to_j(o.sync_loop_interval_initial)},
+        {"sync_loop_interval_settled",   detail::opt_to_j(o.sync_loop_interval_settled)},
     };
 }
 
@@ -814,6 +1123,16 @@ inline void from_json(const nlohmann::json& j, OpcuaClientConfig& o) {
     j.at("publish_interval").get_to(o.publish_interval);
     j.at("sampling_interval").get_to(o.sampling_interval);
     j.at("session_timeout").get_to(o.session_timeout);
+    o.keep_alive_count             = detail::j_to_opt<std::int64_t>(j, "keep_alive_count");
+    o.lifetime_count               = detail::j_to_opt<std::int64_t>(j, "lifetime_count");
+    o.machine_profile               = detail::j_to_opt<std::string>(j, "machine_profile");
+    o.queue_policy                  = detail::j_to_opt<std::string>(j, "queue_policy");
+    o.queue_size_data_change       = detail::j_to_opt<std::int64_t>(j, "queue_size_data_change");
+    o.queue_size_events             = detail::j_to_opt<std::int64_t>(j, "queue_size_events");
+    o.reconnect_interval             = detail::j_to_opt<std::int64_t>(j, "reconnect_interval");
+    o.root_node                     = detail::j_to_opt<std::string>(j, "root_node");
+    o.sync_loop_interval_initial   = detail::j_to_opt<std::int64_t>(j, "sync_loop_interval_initial");
+    o.sync_loop_interval_settled   = detail::j_to_opt<std::int64_t>(j, "sync_loop_interval_settled");
     o.extra = (j.contains("extra") && j.at("extra").is_object())
               ? j.at("extra") : nlohmann::json::object();
 }
@@ -822,15 +1141,27 @@ inline void from_json(const nlohmann::json& j, OpcuaClientConfig& o) {
 
 inline void to_json(nlohmann::json& j, const OpcuaPipeConfig& o) {
     j = {
-        {"buffer_size",  o.buffer_size},
-        {"extra",        o.extra},
-        {"pipe_enabled", o.pipe_enabled},
+        {"buffer_size",              o.buffer_size},
+        {"configure_client",         detail::opt_to_j(o.configure_client)},
+        {"extra",                    o.extra},
+        {"inbound_rate_limit",       detail::opt_to_j(o.inbound_rate_limit)},
+        {"max_inbound_message_size", detail::opt_to_j(o.max_inbound_message_size)},
+        {"min_integrity_level",      detail::opt_to_j(o.min_integrity_level)},
+        {"pipe_enabled",             o.pipe_enabled},
+        {"pipe_name",                detail::opt_to_j(o.pipe_name)},
+        {"user_access_level",        detail::opt_to_j(o.user_access_level)},
     };
 }
 
 inline void from_json(const nlohmann::json& j, OpcuaPipeConfig& o) {
     j.at("pipe_enabled").get_to(o.pipe_enabled);
     j.at("buffer_size").get_to(o.buffer_size);
+    o.configure_client         = detail::j_to_opt<bool>(j, "configure_client");
+    o.inbound_rate_limit       = detail::j_to_opt<std::int64_t>(j, "inbound_rate_limit");
+    o.max_inbound_message_size = detail::j_to_opt<std::int64_t>(j, "max_inbound_message_size");
+    o.min_integrity_level      = detail::j_to_opt<std::string>(j, "min_integrity_level");
+    o.pipe_name                = detail::j_to_opt<std::string>(j, "pipe_name");
+    o.user_access_level        = detail::j_to_opt<std::string>(j, "user_access_level");
     o.extra = (j.contains("extra") && j.at("extra").is_object())
               ? j.at("extra") : nlohmann::json::object();
 }
@@ -839,13 +1170,19 @@ inline void from_json(const nlohmann::json& j, OpcuaPipeConfig& o) {
 
 inline void to_json(nlohmann::json& j, const OpcuaTrigger& o) {
     j = {
-        {"extra",        o.extra},
-        {"id",           detail::opt_to_j(o.id)},
-        {"rule_enabled", detail::opt_to_j(o.rule_enabled)},
-        {"signal",       detail::opt_to_j(o.signal)},
-        {"start_value",  detail::opt_to_j(o.start_value)},
-        {"stop_value",   detail::opt_to_j(o.stop_value)},
-        {"subsystem",    detail::opt_to_j(o.subsystem)},
+        {"case_sensitivity", detail::opt_to_j(o.case_sensitivity)},
+        {"component",        detail::opt_to_j(o.component)},
+        {"cooldown_period",  detail::opt_to_j(o.cooldown_period)},
+        {"event",            detail::opt_to_j(o.event)},
+        {"extra",            o.extra},
+        {"id",               detail::opt_to_j(o.id)},
+        {"max_fires_per_job", detail::opt_to_j(o.max_fires_per_job)},
+        {"rule_enabled",     detail::opt_to_j(o.rule_enabled)},
+        {"signal",           detail::opt_to_j(o.signal)},
+        {"start_value",      detail::opt_to_j(o.start_value)},
+        {"stop_value",       detail::opt_to_j(o.stop_value)},
+        {"subsystem",        detail::opt_to_j(o.subsystem)},
+        {"trigger_label",    detail::opt_to_j(o.trigger_label)},
     };
 }
 
@@ -856,6 +1193,12 @@ inline void from_json(const nlohmann::json& j, OpcuaTrigger& o) {
     o.rule_enabled = detail::j_to_opt<bool>(j, "rule_enabled");
     o.start_value  = detail::j_to_opt<std::string>(j, "start_value");
     o.stop_value   = detail::j_to_opt<std::string>(j, "stop_value");
+    o.case_sensitivity = detail::j_to_opt<std::string>(j, "case_sensitivity");
+    o.component        = detail::j_to_opt<std::string>(j, "component");
+    o.cooldown_period   = detail::j_to_opt<std::int64_t>(j, "cooldown_period");
+    o.event             = detail::j_to_opt<std::string>(j, "event");
+    o.max_fires_per_job = detail::j_to_opt<std::int64_t>(j, "max_fires_per_job");
+    o.trigger_label     = detail::j_to_opt<std::string>(j, "trigger_label");
     o.extra = (j.contains("extra") && j.at("extra").is_object())
               ? j.at("extra") : nlohmann::json::object();
 }
@@ -864,10 +1207,11 @@ inline void from_json(const nlohmann::json& j, OpcuaTrigger& o) {
 
 inline void to_json(nlohmann::json& j, const OpcuaConfig& o) {
     j = {
-        {"client",           o.client},
-        {"pipe",             o.pipe},
-        {"triggers",         o.triggers},
-        {"triggers_enabled", detail::opt_to_j(o.triggers_enabled)},
+        {"client",                       o.client},
+        {"pipe",                         o.pipe},
+        {"trigger_stop_ceiling_layers",  detail::opt_to_j(o.trigger_stop_ceiling_layers)},
+        {"triggers",                     o.triggers},
+        {"triggers_enabled",             detail::opt_to_j(o.triggers_enabled)},
     };
 }
 
@@ -876,6 +1220,7 @@ inline void from_json(const nlohmann::json& j, OpcuaConfig& o) {
     j.at("pipe").get_to(o.pipe);
     j.at("triggers").get_to(o.triggers);
     o.triggers_enabled = detail::j_to_opt<bool>(j, "triggers_enabled");
+    o.trigger_stop_ceiling_layers = detail::j_to_opt<std::int64_t>(j, "trigger_stop_ceiling_layers");
 }
 
 // --- MachineConfig ---

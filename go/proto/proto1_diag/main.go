@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Proto 1 Diagnostic — Raw HDF5 byte inspection to pinpoint root attr failure.
 //
 // Reads the root group object header address from the superblock, checks

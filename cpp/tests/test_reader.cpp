@@ -4,9 +4,14 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
+#include <highfive/H5File.hpp>
 
 #include <cmath>
+#include <filesystem>
+#include <stdexcept>
+#include <string>
 
+#include "machine_config/capabilities.hpp"
 #include "machine_config/reader.hpp"
 
 #ifndef FIXTURES_DIR
@@ -18,6 +23,10 @@ using namespace machine_config;
 static const std::string REF       = std::string(FIXTURES_DIR) + "/reference_config.h5";
 static const std::string OPCUA_REF = std::string(FIXTURES_DIR) + "/reference_config_opcua.h5";
 static const std::string SYNTHETIC = std::string(FIXTURES_DIR) + "/synthetic_2laser.h5";
+static const std::string SENSORS_REF =
+    std::string(FIXTURES_DIR) + "/reference_config_synchronous_sensors.h5";
+static const std::string OPCUA_SENSORS_REF =
+    std::string(FIXTURES_DIR) + "/reference_config_opcua_synchronous_sensors.h5";
 
 // §4.8: ParsesMeta
 TEST_CASE("ParsesMeta") {
@@ -100,10 +109,87 @@ TEST_CASE("ClearBoxScalars") {
     REQUIRE(cb.commanded_timing_offset == std::optional<int64_t>{50});
     REQUIRE(cb.show_console      == std::optional<bool>{false});
     REQUIRE(cb.software_trigger_delay == std::optional<int64_t>{3000});
-    REQUIRE(cb.volts_to_watts_algorithm == std::optional<std::string>{"LINEAR"});
+    REQUIRE(cb.power_characterization.has_value());
+    REQUIRE(cb.power_characterization->algorithm_type == std::optional<std::string>{"LINEAR"});
     // correction_data and inverse_correction_data deferred to §4.11
     REQUIRE_FALSE(cb.correction_data.has_value());
     REQUIRE_FALSE(cb.inverse_correction_data.has_value());
+}
+
+// ---------------------------------------------------------------------------
+// SynchronousSensor
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SynchronousSensorsEmptyWhenFixtureHasNone") {
+    MachineConfigReader reader{REF};
+    auto cfg = reader.parse();
+    const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
+    REQUIRE(cb.synchronous_sensors.empty());
+}
+
+// reference_config_synchronous_sensors.h5, not reference_config.h5, which
+// deliberately has no sensors (see SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
+TEST_CASE("SynchronousSensorFixtureHasRealValues") {
+    MachineConfigReader reader{SENSORS_REF};
+    auto cfg = reader.parse();
+    const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
+    REQUIRE(cb.synchronous_sensors.size() == 1);
+    REQUIRE(cb.synchronous_sensors.count("Oxygen Sensor") == 1);
+    const auto& s = cb.synchronous_sensors.at("Oxygen Sensor");
+
+    REQUIRE(s.enabled == std::optional<bool>{true});
+    REQUIRE(s.sensor_name == std::optional<std::string>{"ZR800 Oxygen Analyzer"});
+    REQUIRE(s.sensor_output_range_low == std::optional<double>{-1.0});
+    REQUIRE(s.sensor_output_range_high == std::optional<double>{6.0});
+    REQUIRE(s.sensor_output_space == std::optional<std::string>{"log10(ppm)"});
+    REQUIRE(s.sensor_model == std::optional<std::string>{"ZR810"});
+    REQUIRE(s.sensor_manufacturer == std::optional<std::string>{"Industrial Physics"});
+    REQUIRE(s.sensor_scope == std::optional<std::string>{"Global"});
+    REQUIRE(s.units_derived_quantity == std::optional<std::string>{"ppm"});
+    REQUIRE(s.port_id == std::optional<int64_t>{5});
+    REQUIRE(s.sensor_type == std::optional<std::string>{"Oxygen Sensor"});
+    REQUIRE(s.input_type == std::optional<std::string>{"4-20 mA"});
+    REQUIRE(s.algorithm_type == std::optional<std::string>{"Log-Linear"});
+    REQUIRE(s.algorithm_equation == std::optional<std::string>{"log(ppm) = a*mA + b"});
+    REQUIRE(s.calibration_source == std::optional<std::string>{"Datasheet"});
+    REQUIRE(s.calibration_verified == std::optional<bool>{false});
+    REQUIRE(s.sample_period == std::optional<double>{5.0});
+    REQUIRE(s.metadata.has_value());
+    REQUIRE(s.metadata->find("Synchronous Sensor because Clearbox is responsible") !=
+            std::string::npos);
+
+    REQUIRE(s.derivation_equation_constants.size() == 2);
+    REQUIRE(s.derivation_equation_constants[0].name == "a");
+    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
+    REQUIRE(s.derivation_equation_constants[1].name == "b");
+    REQUIRE(s.derivation_equation_constants[1].value == -2.75);
+
+    REQUIRE(s.calibration_points.size() == 2);
+    REQUIRE(s.calibration_points[0].input_value == 4.0);
+    REQUIRE(s.calibration_points[0].output_value == -1.0);
+    REQUIRE(s.calibration_points[1].input_value == 20.0);
+    REQUIRE(s.calibration_points[1].output_value == 6.0);
+
+    // log(ppm) = a*mA + b, per algorithm_equation — proves the points are
+    // recorded in Sensor_Output_Space (log10(ppm)) units, not the linear
+    // Units_Derived_Quantity (ppm) units of the same underlying quantity.
+    double a = s.derivation_equation_constants[0].value;
+    double b = s.derivation_equation_constants[1].value;
+    for (const auto& p : s.calibration_points) {
+        REQUIRE(std::abs(a * p.input_value + b - p.output_value) < 1e-10);
+    }
+}
+
+TEST_CASE("CombinedOpcuaAndSynchronousSensorsFixtureHasBoth") {
+    MachineConfigReader reader{OPCUA_SENSORS_REF};
+    auto cfg = reader.parse();
+    REQUIRE(cfg.opcua.has_value());
+    const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
+    REQUIRE(cb.synchronous_sensors.count("Oxygen Sensor") == 1);
+    const auto& s = cb.synchronous_sensors.at("Oxygen Sensor");
+    REQUIRE(s.derivation_equation_constants.size() == 2);
+    REQUIRE(s.derivation_equation_constants[0].name == "a");
+    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
 }
 
 // §4.9: AxisConfig3DNoFocus — reference fixture is Axis_Configuration='3D':
@@ -118,6 +204,27 @@ TEST_CASE("AxisConfig3DNoFocus") {
     REQUIRE(s.z_axis.has_value());
     REQUIRE(s.z_axis->actual_bit_resolution == std::optional<int64_t>{20});
     REQUIRE_FALSE(s.focus.has_value());
+}
+
+TEST_CASE("ScannerInvertFlagsAbsentFromFixtureReadAsFalse") {
+    // reference_config.h5 has none of the four Invert_* attributes at all.
+    MachineConfigReader reader{REF};
+    auto cfg = reader.parse();
+    const auto& s = cfg.optical_trains[0].scanner;
+    REQUIRE_FALSE(s.invert_actual_x);
+    REQUIRE_FALSE(s.invert_actual_y);
+    REQUIRE_FALSE(s.invert_commanded_x);
+    REQUIRE_FALSE(s.invert_commanded_y);
+}
+
+TEST_CASE("ScannerInvertFlagsOmittedFromJSONWhenFalse") {
+    MachineConfigReader reader{REF};
+    auto cfg = reader.parse();
+    nlohmann::json j = cfg.optical_trains[0].scanner;
+    REQUIRE_FALSE(j.contains("invert_actual_x"));
+    REQUIRE_FALSE(j.contains("invert_actual_y"));
+    REQUIRE_FALSE(j.contains("invert_commanded_x"));
+    REQUIRE_FALSE(j.contains("invert_commanded_y"));
 }
 
 // §4.11: CorrectionDataShape — 3-D grid for train 0 has the canonical dimensions.
@@ -460,6 +567,89 @@ TEST_CASE("OpcuaLaserEmissionInterlockTrigger") {
     REQUIRE(t.rule_enabled == std::optional<bool>{true});
 }
 
+// Promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — every one of the
+// 22 promoted fields checked against reference_config_opcua.h5's real values
+// (verified via h5py before writing this test), plus trigger_stop_ceiling_layers,
+// plus confirmation none of them land in extra.
+TEST_CASE("OpcuaPromotedFieldsHaveRealValues") {
+    MachineConfigReader reader{OPCUA_REF};
+    auto cfg = reader.parse();
+    const auto& c = cfg.opcua->client;
+    REQUIRE(c.keep_alive_count           == std::optional<std::int64_t>{240});
+    REQUIRE(c.lifetime_count             == std::optional<std::int64_t>{2400});
+    REQUIRE(c.machine_profile            == std::optional<std::string>{"Aconity"});
+    REQUIRE(c.queue_policy               == std::optional<std::string>{"DropOldest"});
+    REQUIRE(c.queue_size_data_change     == std::optional<std::int64_t>{100});
+    REQUIRE(c.queue_size_events          == std::optional<std::int64_t>{7200});
+    REQUIRE(c.reconnect_interval         == std::optional<std::int64_t>{10000});
+    REQUIRE(c.root_node                  == std::optional<std::string>{"MachineFleet"});
+    REQUIRE(c.sync_loop_interval_initial == std::optional<std::int64_t>{1000});
+    REQUIRE(c.sync_loop_interval_settled == std::optional<std::int64_t>{30000});
+    REQUIRE(c.extra.empty());
+
+    const auto& p = cfg.opcua->pipe;
+    REQUIRE(p.configure_client         == std::optional<bool>{true});
+    REQUIRE(p.inbound_rate_limit       == std::optional<std::int64_t>{-1});
+    REQUIRE(p.max_inbound_message_size == std::optional<std::int64_t>{65536});
+    REQUIRE(p.min_integrity_level      == std::optional<std::string>{"0x2000"});
+    REQUIRE(p.pipe_name                == std::optional<std::string>{"\\\\.\\pipe\\opc_ua_client_pipe"});
+    REQUIRE(p.user_access_level        == std::optional<std::string>{"AnyLocalUser"});
+    REQUIRE(p.extra.empty());
+
+    REQUIRE(cfg.opcua->trigger_stop_ceiling_layers == std::optional<std::int64_t>{3});
+
+    const auto& lei = cfg.opcua->triggers.at("Laser Emission Interlock");
+    REQUIRE(lei.case_sensitivity  == std::optional<std::string>{"Exact"});
+    REQUIRE(lei.component         == std::optional<std::string>{"machine_state_indicator"});
+    REQUIRE(lei.cooldown_period   == std::optional<std::int64_t>{0});
+    REQUIRE(lei.event             == std::optional<std::string>{"SensorEvents"});
+    REQUIRE(lei.max_fires_per_job == std::optional<std::int64_t>{0});
+    REQUIRE(lei.trigger_label     == std::optional<std::string>{"Laser Emission Interlock"});
+    REQUIRE(lei.extra.empty());
+
+    const auto& col = cfg.opcua->triggers.at("Chamber Oxygen Level");
+    REQUIRE(col.component     == std::optional<std::string>{"process_chamber::gas_management::oxygen_sensor::1"});
+    REQUIRE(col.event         == std::optional<std::string>{"SensorEvents"});
+    REQUIRE(col.trigger_label == std::optional<std::string>{"Chamber Oxygen Level"});
+    REQUIRE(col.extra.empty());
+}
+
+#ifndef VALIDATION_FIXTURES_DIR
+#  error "VALIDATION_FIXTURES_DIR must be defined by tests/CMakeLists.txt"
+#endif
+
+// opcua_missing_required.h5 (Phase 0) removes all seven Phase-2-required
+// attributes. The reader must stay permissive (facade-only enforcement — see
+// OPCUA_FIELD_PROMOTION_PLAN.md): parsing succeeds, the removed fields read
+// back nullopt, and the per-trigger Event asymmetry is exactly as the
+// fixture intends.
+TEST_CASE("OpcuaMissingRequiredFixtureParsesGracefully") {
+    static const std::string path =
+        std::string(VALIDATION_FIXTURES_DIR) + "/opcua_missing_required.h5";
+    MachineConfigReader reader{path};
+    auto cfg = reader.parse();
+    REQUIRE(cfg.opcua.has_value());
+    const auto& o = *cfg.opcua;
+
+    REQUIRE_FALSE(o.client.machine_profile.has_value());
+    REQUIRE_FALSE(o.client.root_node.has_value());
+    REQUIRE_FALSE(o.pipe.configure_client.has_value());
+    REQUIRE_FALSE(o.pipe.pipe_name.has_value());
+    REQUIRE_FALSE(o.triggers_enabled.has_value());
+    REQUIRE_FALSE(o.trigger_stop_ceiling_layers.has_value());
+
+    const auto& lei = o.triggers.at("Laser Emission Interlock");
+    REQUIRE_FALSE(lei.event.has_value());
+    const auto& col = o.triggers.at("Chamber Oxygen Level");
+    REQUIRE(col.event == std::optional<std::string>{"SensorEvents"});
+
+    // Untouched fields elsewhere confirm the rest of the file is unaffected.
+    REQUIRE_FALSE(o.client.server_url.empty());
+    REQUIRE(o.client.keep_alive_count == std::optional<std::int64_t>{240});
+    REQUIRE(o.pipe.buffer_size == 65536);
+    REQUIRE(lei.trigger_label == std::optional<std::string>{"Laser Emission Interlock"});
+}
+
 // toJson must include the "opcua" key when the fixture has an OPCUA group.
 TEST_CASE("ToJsonOpcuaKeyPresent") {
     MachineConfigReader reader{OPCUA_REF};
@@ -505,4 +695,30 @@ TEST_CASE("GetRawGroupOpcuaClient") {
     REQUIRE(client.is_object());
     REQUIRE(client.contains("Server_URL"));
     REQUIRE_FALSE(client["Server_URL"].get<std::string>().empty());
+}
+
+static void writeFutureFileVersion(const std::filesystem::path& path) {
+    HighFive::File f(path.string(), HighFive::File::Truncate);
+    f.createAttribute<std::string>("File_Version", HighFive::DataSpace::Scalar())
+        .write(std::string("2.0"));
+}
+
+TEST_CASE("UnknownFileVersionDoesNotUseV1Layout") {
+    auto out = std::filesystem::temp_directory_path() / "mc_reader_future_2_0.h5";
+    writeFutureFileVersion(out);
+
+    MachineConfigReader reader{out};
+    try {
+        reader.parse();
+        FAIL("expected parse() to throw for File_Version 2.0");
+    } catch (const std::runtime_error& e) {
+        REQUIRE(std::string(e.what()).find("2.0") != std::string::npos);
+    }
+
+    auto opened = machine_config::capabilities::openMachineConfig(out);
+    REQUIRE_FALSE(opened.ok());
+    REQUIRE(opened.errorCode() == "UnsupportedVersion");
+    REQUIRE(opened.errorMessage().find("2.0") != std::string::npos);
+
+    std::filesystem::remove(out);
 }

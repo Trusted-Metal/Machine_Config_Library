@@ -62,11 +62,33 @@ function main() {
   writeFile(nodePkgPath, JSON.stringify(nodePkg, null, 2) + "\n");
   console.log(`  ✓ nodejs/package.json: ${oldNodeVersion} → ${version}`);
 
-  // --- cpp/CMakeLists.txt (add when C++ lands) ---
-  // const cmakePath = join(rootDir, "cpp", "CMakeLists.txt");
-  // const cmake = readFile(cmakePath);
-  // writeFile(cmakePath, cmake.replace(/^(project\([^)]+VERSION\s+)[^\s)]+/m, `$1${version}`));
-  // console.log(`  ✓ cpp/CMakeLists.txt → ${version}`);
+  // --- cpp/CMakeLists.txt (project() VERSION — numeric-only, truncated) ---
+  // CMake's project(... VERSION ...) field is NOT semver — it only accepts
+  // numeric dotted components (major[.minor[.patch[.tweak]]]), verified
+  // directly: `project(x VERSION 0.2.0-rc.4)` hard-errors with
+  // 'VERSION "0.2.0-rc.4" format invalid.' A prerelease/build suffix would
+  // break every future `cmake` configure the moment this ran, so it's
+  // stripped here. The FULL version (including any suffix) still goes to
+  // cpp/cmake/Version.cmake below — nothing is lost, it just can't live in
+  // this specific CMake field.
+  const cmakePath = join(rootDir, "cpp", "CMakeLists.txt");
+  const cmake = readFile(cmakePath);
+  const cmakeVersion = version.split(/[-+]/)[0];
+  const oldCmakeVersion = cmake.match(/^project\([^)]+VERSION\s+([^\s)]+)/m)?.[1] ?? "?";
+  writeFile(cmakePath, cmake.replace(/^(project\([^)]+VERSION\s+)[^\s)]+/m, `$1${cmakeVersion}`));
+  console.log(`  ✓ cpp/CMakeLists.txt (project VERSION): ${oldCmakeVersion} → ${cmakeVersion}`);
+
+  // --- cpp/cmake/Version.cmake (full, untruncated version) ---
+  // Feeds include/machine_config/version.hpp.in via configure_file() — see
+  // that file for why this exists separately from PROJECT_VERSION.
+  const cppVersionCmakePath = join(rootDir, "cpp", "cmake", "Version.cmake");
+  const cppVersionCmake = readFile(cppVersionCmakePath);
+  const oldFullVersion = cppVersionCmake.match(/MACHINE_CONFIG_FULL_VERSION\s+"([^"]+)"/)?.[1] ?? "?";
+  writeFile(
+    cppVersionCmakePath,
+    cppVersionCmake.replace(/(MACHINE_CONFIG_FULL_VERSION\s+)"[^"]+"/, `$1"${version}"`)
+  );
+  console.log(`  ✓ cpp/cmake/Version.cmake (full version): ${oldFullVersion} → ${version}`);
 
   console.log(`✅ All versions synced to ${version}`);
 }

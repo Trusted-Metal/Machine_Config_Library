@@ -39,10 +39,30 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          # "." not "rust": the real workspace root (and its Cargo.lock) is
+          # the repo root (Cargo.toml's [workspace] members = ["rust"]),
+          # not the rust/ member directory — pointing this at "rust" hashed
+          # a stale, unused duplicate lockfile for the cache key instead of
+          # the one Cargo actually resolves against. Target dir is
+          # overridden explicitly since .cargo/config.toml redirects it to
+          # rust/target (kept there for CI/tools/cross_check.py paths).
+          workspaces: ". -> rust/target"
 
       - name: Run unit and integration tests
         run: cargo test
+        working-directory: rust
+
+      # Verification only — not a distribution step. A bare .crate file isn't
+      # cargo-installable the way a wheel/tgz is pip/npm-installable (it only
+      # means something inside a registry index); this exists purely to
+      # catch real packaging-manifest problems early (file inclusion rules,
+      # metadata), the same way `cargo publish` itself would, without
+      # actually publishing anywhere. The real "how to depend on this" story
+      # for Rust is the git-tag dependency already documented in
+      # docs/rust.md's Installation section — see VALIDATION_PLAN.md and the
+      # conversation this was scoped in for the full reasoning.
+      - name: Verify cargo package (packaging + isolated rebuild, not published)
+        run: cargo package
         working-directory: rust
 
       - name: Build release binary

@@ -36,6 +36,15 @@ pub enum MachineConfigError {
     /// A required HDF5 group or dataset was absent from the file.
     #[error("Required HDF5 path missing: {0}")]
     MissingGroup(String),
+
+    /// v1.1 Change 1 (Consolidate): a ClearBox-bearing train's `Output_Path`
+    /// or `Software_Trigger_Delay` disagreed with another train's during
+    /// write/migration. See docs/migrations/v1_0_to_v1_1.md's "Consolidate
+    /// conflict rule" — `field` is `"Output_Path"` or
+    /// `"Software_Trigger_Delay"`; `detail` is a formatted
+    /// `train_id=value, train_id=value, ...` breakdown.
+    #[error("Consolidate conflict on '{field}': trains disagree — {detail}")]
+    ConsolidateConflict { field: &'static str, detail: String },
 }
 
 /// Shorthand `Result` used throughout the crate.

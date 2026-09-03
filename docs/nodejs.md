@@ -11,6 +11,7 @@ so there is no native compilation step and no system HDF5 library required on an
 ## Contents
 
 - [Installation](#installation)
+- [Capability API (File_Version adapters)](#capability-api-file_version-adapters)
 - [TypeScript interfaces](#typescript-interfaces)
 - [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file)
 - [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json)
@@ -23,6 +24,7 @@ so there is no native compilation step and no system HDF5 library required on an
 - [Quickstart example](#quickstart-example)
 - [Full workflow example](#full-workflow-example)
 - [Running the Node.js test suite](#running-the-nodejs-test-suite)
+- [Validation results](#validation-results)
 
 > Use cases 3, 5, and 7 (reconstruct-from-JSON, `ConfigEditor`, `YamlConfigBuilder`) are
 > Python-only conveniences with no Node.js port.
@@ -54,6 +56,53 @@ Pin in `package.json` (after downloading tgz to your project):
 ```json
 "machine-config-library": "file:./machine-config-library-0.2.0-rc.1.tgz"
 ```
+
+---
+
+## Capability API (File_Version adapters)
+
+Preferred for application code. Authored in TypeScript; consumers get transpiled JS + `.d.ts`.
+
+Stable navigation + **full-model** get/set (`getScanner` / `setScanner`, …) with
+`SetMode.Merge` (default) or `SetMode.Replace`. Apps do not branch on `File_Version` for
+normal reads/writes.
+
+```typescript
+import {
+  openMachineConfig,
+  createMachineConfig,
+  SetMode,
+  isOk,
+  type MachineConfigFile,
+} from 'machine-config-library';
+
+const opened = await openMachineConfig('machine.h5');
+if (!opened.ok) throw new Error(opened.error.message);
+
+const file: MachineConfigFile = opened.value;
+console.log(file.fileVersion()); // "1.0"
+console.log(file.meta().getModel().machine_name);
+
+const train = file.opticalTrain(0);
+if (train.ok) {
+  const scanner = train.value.getScanner(); // snapshot
+  await train.value.setScanner(
+    { ...scanner, working_distance: 680 },
+    SetMode.Merge,
+  );
+}
+
+await file.save(); // or file.save('out.h5')
+file.close();
+
+// New file from scratch (version preserved on save):
+const created = createMachineConfig('1.0');
+```
+
+Adapters are keyed by HDF5 `File_Version`. Today only `1.0` is registered; unknown versions
+return `UnsupportedVersion`. The v1.0 facade and layout live in
+`nodejs/src/capabilities/v1_0/`; `capabilities/index.ts` only dispatches.
+See `schema/capabilities/` and [USAGE.md](../USAGE.md).
 
 ---
 
@@ -307,9 +356,12 @@ Expected output:
 ```
 === Machine Config Quickstart ===
 
-Machine name   : TM-LPBF-02: AconityMIDI+_OG
+Machine name   : ExampleDummy-2Train
 Optical trains : 2
-Working dist   : 670 mm   (train 0)
+  Train 0  wd=670 mm  offset x=-87.5, y=23.5
+           clearbox: present
+  Train 1  wd=670 mm  offset x=87.5, y=-23.5
+           clearbox: present
 Correction grid: [257, 257, 2]   (train 0)
 
 Written to     : <tmp>.h5
@@ -331,13 +383,13 @@ Expected output:
 ```
 === Full Workflow: Calibration Adjustment ===
 
-Machine : TM-LPBF-02: AconityMIDI+_OG
+Machine : ExampleDummy-2Train
 Trains  : 2
 
 Before calibration:
   Train 1  offset x=-87.5, y=23.5
            correction grid [257, 257, 2]
-  Train 2  offset x=86.074, y=-21.695
+  Train 2  offset x=87.5, y=-23.5
            correction grid [257, 257, 2]
 
 Written to : <tmp>.h5
@@ -358,7 +410,7 @@ Source: [examples/full_workflow/nodejs/main.mjs](../examples/full_workflow/nodej
 ```bash
 # From the nodejs/ directory
 cd nodejs
-npm test           # 130 tests: 82 reader + 6 schema + 24 writer + 18 builder
+npm test           # 151 tests: 84 reader + 6 schema + 27 writer + 18 builder + 8 capabilities + 8 adapterMigration
 ```
 
 ```powershell
@@ -368,7 +420,23 @@ Push-Location nodejs ; npm test ; Pop-Location
 
 | Suite | Tests | What it covers |
 |---|---|---|
-| `reader.test.ts` | 82 | All 3 fixtures; meta, machine geometry, optical trains, scanner, ClearBox, SFCF, correction data shape/NaN, OPCUA (13 tests), JSON serialisation, Ajv schema validation |
+| `reader.test.ts` | 84 | All 3 fixtures; meta, machine geometry, optical trains, scanner, ClearBox, SFCF, correction data shape/NaN, OPCUA (13 tests), JSON serialisation, Ajv schema validation |
 | `schema.test.ts` | 6 | Schema loads; `validate()` rejects empty/invalid; accepts minimal valid document |
-| `writer.test.ts` | 24 | Reference fixture roundtrip; OPCUA roundtrip incl. trigger field values; synthetic 2-laser roundtrip |
+| `writer.test.ts` | 27 | Reference fixture roundtrip; OPCUA roundtrip incl. trigger field values; synthetic 2-laser roundtrip |
 | `builder.test.ts` | 18 | `build()` in-memory; `save()` + read-back; correction grid shape/peak; no-clearbox path; schema validity |
+| `capabilities.test.ts` | 8 | Capability API: `openMachineConfig`, `createMachineConfig`, `SetMode`, `fileVersion`, `save` |
+| `adapterMigration.test.ts` | 8 | Mock v1.1 adapter isolation (AV-09), forward migration v1.0→v1.1 (AV-10), backward migration v1.1→v1.0 (AV-11) |
+
+---
+
+## Validation results
+
+20 / 20 scenarios pass on this SDK. See the full table in
+[docs/validation/nodejs/PASS_FAIL.md](../docs/validation/nodejs/PASS_FAIL.md) and verbatim
+output in [docs/validation/nodejs/results.md](../docs/validation/nodejs/results.md).
+
+Two real defects were found and fixed during the validation pass:
+- **AV-05** — `attrFloat()` silently returned `null` for a corrupt attribute instead of throwing; fixed to throw `TypeError`.
+- **AV-10/11** — `meta.extra` accumulated typed addition fields (`facility_id`/`config_author`) because the v1.0 base parser's `KNOWN_ROOT` set didn't know they were typed; fixed by stripping those keys from `extra` before assigning the typed fields.
+
+For the master cross-language matrix see [docs/validation/README.md](../docs/validation/README.md).

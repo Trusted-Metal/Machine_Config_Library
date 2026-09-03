@@ -2,6 +2,37 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import numpy as np
+
+
+def nan_array_to_nested(arr: np.ndarray) -> list:
+    """Convert a float64 ndarray to a nested Python list, mapping NaN -> None.
+
+    Lives at the model layer rather than in a version-specific adapter: the
+    NaN<->None convention is part of ClearBox's own field shape
+    (``list[list[list[float | None]]] | None``), not an on-disk detail of any
+    particular File_Version, so every adapter can share it.
+    """
+    obj = arr.astype(object)
+    obj[np.isnan(arr)] = None
+    return obj.tolist()
+
+
+def nested_to_array(data: Optional[list], shape: tuple = (257, 257, 2)) -> np.ndarray:
+    """Convert a nested Python list (None = NaN) back to a float64 ndarray.
+
+    Mirrors :func:`nan_array_to_nested` above; a ``None`` (or absent) grid
+    produces a zero-filled array of ``shape``.
+    """
+    if data is None:
+        return np.zeros(shape, dtype=np.float64)
+    obj = np.array(data, dtype=object)
+    result = np.empty(obj.shape, dtype=np.float64)
+    result.flat[:] = [
+        float("nan") if v is None else float(v) for v in obj.flat
+    ]
+    return result
+
 
 @dataclass
 class ScanFieldCorrectionFile:
@@ -13,6 +44,84 @@ class ScanFieldCorrectionFile:
     document_type: Optional[str]
     original_uri: Optional[str]
     raw_bytes: Optional[bytes] = None  # raw .fc3 binary content
+
+
+@dataclass
+class EquationConstant:
+    """One named equation constant for a SynchronousSensor's algorithm_equation
+    (e.g. a/b for a Log-Linear fit: log(ppm) = a*mA + b). HDF5 source: one row
+    of the Derivation_Equation_Constants compound dataset. A named row rather
+    than a positional array so a reader never has to infer which index means
+    what from algorithm_type alone, and so adding a constant is an additive
+    row rather than an ordering hazard.
+    """
+    name: str
+    value: float
+
+
+@dataclass
+class CalibrationPoint:
+    """One calibration sample pair for a SynchronousSensor. HDF5 source: one
+    row of the Calibration_Points compound dataset.
+
+    ``input_value`` is in the sensor's input_type unit; ``output_value`` is in
+    the sensor's sensor_output_space unit (**not** units_derived_quantity) —
+    every row of a given sensor's calibration curve is in the same units by
+    construction. Confirmed against the ZR800 reference example: both points
+    satisfy algorithm_equation exactly in log-space
+    (0.4375 * 4 - 2.75 == -1.0, 0.4375 * 20 - 2.75 == 6.0), not linear ppm.
+    """
+    input_value: float
+    output_value: float
+
+
+@dataclass
+class PowerCharacterization:
+    """v1.1 addition (Changes 3/4): a structured algorithm + equation +
+    constants + characterization points describing a power conversion.
+    Shared, identical dataclass for both ``ClearBox.power_characterization``
+    (ClearBox's Volts->Watts fit; migrated data has real
+    ``derivation_equation_constants`` but zero ``characterization_points``)
+    and ``LightSource.power_characterization`` (Light_Source's Volts->Watts
+    fit; migrated data is the inverse — zero ``derivation_equation_constants``,
+    real ``characterization_points``) — same *kind* of thing at two different
+    HDF5 paths, not the same instance. See ``docs/migrations/v1_0_to_v1_1.md``
+    Changes 3/4 for the full derivation rules.
+    """
+    algorithm_type: Optional[str]
+    algorithm_equation: Optional[str]
+    input_type: Optional[str]
+    units_derived_quantity: Optional[str]
+    derivation_equation_constants: list[EquationConstant]
+    characterization_points: list[CalibrationPoint]
+
+
+@dataclass
+class SynchronousSensor:
+    """A synchronous sensor attached to a ClearBox. HDF5 source: one
+    sub-group under .../ClearBox/Synchronous_Sensors/<key>/ — see
+    ClearBox.synchronous_sensors for what <key> means.
+    """
+    enabled: Optional[bool]                              # HDF5 int 0/1
+    sensor_name: Optional[str]
+    sensor_output_range_low: Optional[float]
+    sensor_output_range_high: Optional[float]
+    sensor_output_space: Optional[str]
+    sensor_model: Optional[str]
+    sensor_manufacturer: Optional[str]
+    sensor_scope: Optional[str]
+    units_derived_quantity: Optional[str]
+    port_id: Optional[int]
+    sensor_type: Optional[str]
+    input_type: Optional[str]
+    algorithm_type: Optional[str]
+    algorithm_equation: Optional[str]
+    calibration_source: Optional[str]
+    calibration_verified: Optional[bool]                 # HDF5 int 0/1
+    sample_period: Optional[float]
+    metadata: Optional[str]
+    derivation_equation_constants: list[EquationConstant]
+    calibration_points: list[CalibrationPoint]
 
 
 @dataclass
@@ -33,10 +142,23 @@ class ClearBox:
     video_output: Optional[str]
     show_console: Optional[bool]                         # HDF5 int 0/1
     software_trigger_delay: Optional[int]
-    volts_to_watts_algorithm: Optional[str]
-    volts_to_watts_params: Optional[str]
     correction_grid_domain_shape: Optional[str]
     inverse_grid_domain_shape: Optional[str]
+    # Key = free-form sensor label (HDF5 sub-group name under
+    # ClearBox/Synchronous_Sensors/) — an arbitrary value chosen by the
+    # file's author, not required to match any attribute inside that
+    # sensor's own group (e.g. "Oxygen Sensor", "O2_Port5", anything). No
+    # Synchronous_Sensors group on disk is represented identically to an
+    # empty dict here — there is no separate "absent" state to track.
+    synchronous_sensors: dict[str, SynchronousSensor]
+    # v1.1 addition (Change 1); None for v1.0 files, no on-disk source there.
+    firmware_version: Optional[str] = None
+    # The only representation of this concept, for files of either version.
+    # v1.0's Volts_To_Watts_Algorithm/Params is a lossless flat encoding of
+    # the same data (see power_characterization.py's forward/backward
+    # functions) — the StableModel no longer carries that flat shape as a
+    # separate field (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md).
+    power_characterization: Optional[PowerCharacterization] = None
 
 
 @dataclass
@@ -110,6 +232,17 @@ class Scanner:
     y_axis: AxisConfig
     z_axis: Optional[AxisConfig] = None
     focus: Optional[AxisConfig] = None
+    # Plain bool, not Optional[bool] — deliberately different from every
+    # other bool field in this schema. Defaults to False whether the on-disk
+    # attribute is absent or explicitly 0; the API never distinguishes those
+    # two cases (user-confirmed, 2026-08-21). Read faithfully, but never
+    # appears in any output (MCF or JSON) unless True — a write→read
+    # round-trip is deliberately lossy for an explicit False, which becomes
+    # indistinguishable from "never set".
+    invert_actual_x: bool = False
+    invert_actual_y: bool = False
+    invert_commanded_x: bool = False
+    invert_commanded_y: bool = False
 
     def __post_init__(self) -> None:
         cfg = self.axis_configuration
@@ -151,8 +284,9 @@ class LightSource:
     power_min_nominal_unit: Optional[str]
     power_bit_resolution: Optional[float]                # HDF5 stores as string; parsed via _read_float
     power_bit_resolution_unit: Optional[str]
-    watts_to_volts_algorithm: Optional[str]
-    watts_to_volts_params: Optional[str]
+    # The only representation of this concept, for files of either version —
+    # see ClearBox.power_characterization's comment.
+    power_characterization: Optional[PowerCharacterization] = None
 
 
 @dataclass
@@ -229,6 +363,11 @@ class MachineConfigMeta:
     file_version: str
     export_date: str
     configuration_hash: str
+    # TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+    # Not a real schema field and not part of any planned version — exercises the
+    # ADDITION category only. Never wired into _config_to_dict() or the JSON schema.
+    facility_id: Optional[str] = None
+    config_author: Optional[str] = None
     extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed root HDF5 attrs
 
 
@@ -242,6 +381,16 @@ class OpcuaClientConfig:
     publish_interval: int
     sampling_interval: int
     session_timeout: int
+    keep_alive_count: Optional[int] = None
+    lifetime_count: Optional[int] = None
+    machine_profile: Optional[str] = None
+    queue_policy: Optional[str] = None
+    queue_size_data_change: Optional[int] = None
+    queue_size_events: Optional[int] = None
+    reconnect_interval: Optional[int] = None
+    root_node: Optional[str] = None
+    sync_loop_interval_initial: Optional[int] = None
+    sync_loop_interval_settled: Optional[int] = None
     extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed HDF5 attrs
 
 
@@ -249,6 +398,12 @@ class OpcuaClientConfig:
 class OpcuaPipeConfig:
     pipe_enabled: bool                   # HDF5 int 0/1
     buffer_size: int
+    configure_client: Optional[bool] = None      # HDF5 int 0/1
+    inbound_rate_limit: Optional[int] = None
+    max_inbound_message_size: Optional[int] = None
+    min_integrity_level: Optional[str] = None
+    pipe_name: Optional[str] = None
+    user_access_level: Optional[str] = None
     extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed HDF5 attrs
 
 
@@ -260,6 +415,12 @@ class OpcuaTrigger:
     rule_enabled: Optional[bool] = None  # HDF5 int 0/1
     start_value: Optional[str] = None
     stop_value: Optional[str] = None
+    case_sensitivity: Optional[str] = None
+    component: Optional[str] = None
+    cooldown_period: Optional[int] = None
+    event: Optional[str] = None
+    max_fires_per_job: Optional[int] = None
+    trigger_label: Optional[str] = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -269,6 +430,7 @@ class OpcuaConfig:
     pipe: OpcuaPipeConfig
     triggers: dict[str, OpcuaTrigger]
     triggers_enabled: Optional[bool] = None  # HDF5 float 0.0/1.0 on OPCUA/Triggers group
+    trigger_stop_ceiling_layers: Optional[int] = None  # HDF5 int on OPCUA/Triggers group
 
 
 @dataclass

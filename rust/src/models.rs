@@ -15,6 +15,7 @@
 // the reader's `validate()` step (Phase 3.5), not in these plain data structs.
 
 use indexmap::IndexMap;
+use ndarray::Array3;
 use serde::{Deserialize, Serialize};
 
 /// Raw correction grid read directly from a ClearBox HDF5 dataset.
@@ -63,6 +64,61 @@ pub struct CorrectionData {
     pub shape: [usize; 3],
 }
 
+/// Converts a `(D0, D1, D2)` float64 grid to nested `Vec`s, mapping IEEE 754
+/// NaN cells to `None` (Rule: NaN in float64 dataset → JSON `null`).
+///
+/// Lives at the model layer rather than in a version-specific adapter: the
+/// NaN↔`None` convention is part of the stable model's `ClearBox` field
+/// shape (`Option<Vec<Vec<Vec<Option<f64>>>>>`), not an on-disk detail of any
+/// particular `File_Version`, so every adapter can share it.
+pub(crate) fn nan_array3_to_nested(arr: &Array3<f64>) -> Vec<Vec<Vec<Option<f64>>>> {
+    let shape = arr.shape();
+    let (d0, d1, d2) = (shape[0], shape[1], shape[2]);
+    (0..d0)
+        .map(|i| {
+            (0..d1)
+                .map(|j| {
+                    (0..d2)
+                        .map(|k| {
+                            let v = arr[[i, j, k]];
+                            if v.is_nan() { None } else { Some(v) }
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Converts `Option<Vec<Vec<Vec<Option<f64>>>>>` back to an `Array3<f64>`.
+/// `None` list cells become NaN; a `None` outer value produces a zero-filled
+/// `(257, 257, 2)` array — required when the model was parsed without binary
+/// data (see §3.12 writer rules). Mirrors [`nan_array3_to_nested`] above.
+pub(crate) fn nested_to_array3(data: &Option<Vec<Vec<Vec<Option<f64>>>>>) -> Array3<f64> {
+    const SHAPE: (usize, usize, usize) = (257, 257, 2);
+    let zero = || Array3::<f64>::zeros(SHAPE);
+    let outer = match data {
+        None => return zero(),
+        Some(v) if v.is_empty() => return zero(),
+        Some(v) => v,
+    };
+    let d0 = outer.len();
+    let d1 = outer[0].len();
+    let d2 = if d1 > 0 { outer[0][0].len() } else { 0 };
+    if d0 == 0 || d1 == 0 || d2 == 0 {
+        return zero();
+    }
+    let mut arr = Array3::<f64>::from_elem((d0, d1, d2), f64::NAN);
+    for (i, row) in outer.iter().enumerate() {
+        for (j, col) in row.iter().enumerate() {
+            for (k, &v) in col.iter().enumerate() {
+                arr[[i, j, k]] = v.unwrap_or(f64::NAN);
+            }
+        }
+    }
+    arr
+}
+
 /// Arbitrary, non-schema HDF5 attributes preserved verbatim.
 /// `IndexMap` (not `HashMap`) to preserve HDF5 attribute enumeration order,
 /// matching Python's `dict` insertion-order semantics for JSON parity.
@@ -109,10 +165,107 @@ pub struct ClearBox {
     /// HDF5 int 0/1.
     pub show_console: Option<bool>,
     pub software_trigger_delay: Option<i64>,
-    pub volts_to_watts_algorithm: Option<String>,
-    pub volts_to_watts_params: Option<String>,
     pub correction_grid_domain_shape: Option<String>,
     pub inverse_grid_domain_shape: Option<String>,
+    /// Key = free-form sensor label (HDF5 sub-group name under
+    /// `ClearBox/Synchronous_Sensors/`) — an arbitrary value chosen by the
+    /// file's author, not required to match any attribute inside that
+    /// sensor's own group (e.g. `"Oxygen Sensor"`, `"O2_Port5"`, anything).
+    /// `IndexMap` preserves HDF5 group enumeration order, matching
+    /// `OpcuaConfig.triggers`'s existing choice. No `Synchronous_Sensors`
+    /// group on disk is represented identically to an empty map here — there
+    /// is no separate "absent" state to track. Omitted from JSON entirely
+    /// when empty (unlike `triggers`, which has no such gate) — keeps "no
+    /// group on disk" and "no key in JSON" symmetric, and keeps every
+    /// existing fixture's JSON output byte-identical to before this field
+    /// existed until a file actually uses it.
+    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
+    pub synchronous_sensors: IndexMap<String, SynchronousSensor>,
+    /// v1.1 addition (Change 1); `None` for v1.0 files, no on-disk source there.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub firmware_version: Option<String>,
+    /// The only representation of this concept, for files of either version.
+    /// v1.0's `Volts_To_Watts_Algorithm`/`Params` is a lossless flat encoding
+    /// of the same data (see `power_characterization.rs`'s forward/backward
+    /// functions) — the StableModel no longer carries that flat shape as a
+    /// separate field (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub power_characterization: Option<PowerCharacterization>,
+}
+
+/// One named equation constant for a `SynchronousSensor`'s `algorithm_equation`
+/// (e.g. `a`/`b` for a Log-Linear fit: `log(ppm) = a*mA + b`). HDF5 source:
+/// one row of the `Derivation_Equation_Constants` compound dataset. A named
+/// row rather than a positional array so a reader never has to infer which
+/// index means what from `algorithm_type` alone, and so adding a constant is
+/// an additive row rather than an ordering hazard.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EquationConstant {
+    pub name: String,
+    pub value: f64,
+}
+
+/// One calibration sample pair for a `SynchronousSensor`. HDF5 source: one row
+/// of the `Calibration_Points` compound dataset.
+///
+/// `input_value` is in the sensor's `input_type` unit; `output_value` is in
+/// the sensor's `sensor_output_space` unit (**not** `units_derived_quantity`)
+/// — every row of a given sensor's calibration curve is in the same units by
+/// construction. Confirmed against the ZR800 reference example: both points
+/// satisfy `algorithm_equation` exactly in log-space
+/// (`0.4375 * 4 - 2.75 == -1.0`, `0.4375 * 20 - 2.75 == 6.0`), not linear ppm.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalibrationPoint {
+    pub input_value: f64,
+    pub output_value: f64,
+}
+
+/// v1.1 addition (Changes 3/4): a structured algorithm + equation + constants
+/// + characterization points describing a power conversion. Shared, identical
+/// struct for both `ClearBox.power_characterization` (ClearBox's
+/// Volts→Watts fit; migrated data has real `derivation_equation_constants`
+/// but zero `characterization_points`) and `LightSource.power_characterization`
+/// (Light_Source's Volts→Watts fit; migrated data is the inverse — zero
+/// `derivation_equation_constants`, real `characterization_points`) — same
+/// *kind* of thing at two different HDF5 paths, not the same instance. See
+/// `docs/migrations/v1_0_to_v1_1.md` Changes 3/4 for the full derivation rules.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerCharacterization {
+    pub algorithm_type: Option<String>,
+    pub algorithm_equation: Option<String>,
+    pub input_type: Option<String>,
+    pub units_derived_quantity: Option<String>,
+    pub derivation_equation_constants: Vec<EquationConstant>,
+    pub characterization_points: Vec<CalibrationPoint>,
+}
+
+/// A synchronous sensor attached to a `ClearBox`. HDF5 source: one sub-group
+/// under `.../ClearBox/Synchronous_Sensors/<key>/` — see
+/// `ClearBox::synchronous_sensors` for what `<key>` means.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SynchronousSensor {
+    /// HDF5 int 0/1.
+    pub enabled: Option<bool>,
+    pub sensor_name: Option<String>,
+    pub sensor_output_range_low: Option<f64>,
+    pub sensor_output_range_high: Option<f64>,
+    pub sensor_output_space: Option<String>,
+    pub sensor_model: Option<String>,
+    pub sensor_manufacturer: Option<String>,
+    pub sensor_scope: Option<String>,
+    pub units_derived_quantity: Option<String>,
+    pub port_id: Option<i64>,
+    pub sensor_type: Option<String>,
+    pub input_type: Option<String>,
+    pub algorithm_type: Option<String>,
+    pub algorithm_equation: Option<String>,
+    pub calibration_source: Option<String>,
+    /// HDF5 int 0/1.
+    pub calibration_verified: Option<bool>,
+    pub sample_period: Option<f64>,
+    pub metadata: Option<String>,
+    pub derivation_equation_constants: Vec<EquationConstant>,
+    pub calibration_points: Vec<CalibrationPoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -178,6 +331,23 @@ pub struct Scanner {
     pub y_axis: AxisConfig,
     pub z_axis: Option<AxisConfig>,
     pub focus: Option<AxisConfig>,
+    /// Plain `bool`, not `Option<bool>` — deliberately different from every
+    /// other bool field in this schema. Defaults to `false` whether the
+    /// on-disk attribute is absent or explicitly `0`; the API never
+    /// distinguishes those two cases (user-confirmed, 2026-08-21). Read
+    /// faithfully (0/1/absent all map correctly on read), but serialised
+    /// AND written back to HDF5 only when `true` — `false` never appears in
+    /// any output, MCF or JSON, so a write→read round-trip is lossy for an
+    /// explicit `false` specifically (it becomes indistinguishable from
+    /// "never set"), by design.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_actual_x: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_actual_y: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_commanded_x: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_commanded_y: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -198,8 +368,10 @@ pub struct LightSource {
     /// HDF5 stores this attribute as a string; the reader parses it to `f64`.
     pub power_bit_resolution: Option<f64>,
     pub power_bit_resolution_unit: Option<String>,
-    pub watts_to_volts_algorithm: Option<String>,
-    pub watts_to_volts_params: Option<String>,
+    /// The only representation of this concept, for files of either
+    /// version — see `ClearBox.power_characterization`'s comment.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub power_characterization: Option<PowerCharacterization>,
 }
 
 /// Optional add-on hardware that may or may not be installed on an optical train.
@@ -287,6 +459,17 @@ pub struct MachineConfigMeta {
     pub file_version: String,
     pub export_date: String,
     pub configuration_hash: String,
+    /// TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+    /// Not a real schema field, never serialized for a v1.0 config — only the
+    /// mock v1.1 reader/writer (test-only, not part of this crate) ever
+    /// populates it. `skip_serializing_if` keeps it out of every real JSON
+    /// export unless explicitly set, matching Python's/Node's behavior for
+    /// the same fixture fields.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub facility_id: Option<String>,
+    /// TEST FIXTURE for the mock v1.1 adapter — see `facility_id` above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub config_author: Option<String>,
     /// Preserves any non-typed root HDF5 attrs.
     #[serde(default)]
     pub extra: ExtraAttrs,
@@ -302,6 +485,16 @@ pub struct OpcuaClientConfig {
     pub publish_interval: i64,
     pub sampling_interval: i64,
     pub session_timeout: i64,
+    pub keep_alive_count: Option<i64>,
+    pub lifetime_count: Option<i64>,
+    pub machine_profile: Option<String>,
+    pub queue_policy: Option<String>,
+    pub queue_size_data_change: Option<i64>,
+    pub queue_size_events: Option<i64>,
+    pub reconnect_interval: Option<i64>,
+    pub root_node: Option<String>,
+    pub sync_loop_interval_initial: Option<i64>,
+    pub sync_loop_interval_settled: Option<i64>,
     /// Preserves any non-typed HDF5 attrs.
     #[serde(default)]
     pub extra: ExtraAttrs,
@@ -312,6 +505,13 @@ pub struct OpcuaPipeConfig {
     /// HDF5 int 0/1.
     pub pipe_enabled: bool,
     pub buffer_size: i64,
+    /// HDF5 int 0/1.
+    pub configure_client: Option<bool>,
+    pub inbound_rate_limit: Option<i64>,
+    pub max_inbound_message_size: Option<i64>,
+    pub min_integrity_level: Option<String>,
+    pub pipe_name: Option<String>,
+    pub user_access_level: Option<String>,
     /// Preserves any non-typed HDF5 attrs.
     #[serde(default)]
     pub extra: ExtraAttrs,
@@ -326,6 +526,12 @@ pub struct OpcuaTrigger {
     pub rule_enabled: Option<bool>,
     pub start_value: Option<String>,
     pub stop_value: Option<String>,
+    pub case_sensitivity: Option<String>,
+    pub component: Option<String>,
+    pub cooldown_period: Option<i64>,
+    pub event: Option<String>,
+    pub max_fires_per_job: Option<i64>,
+    pub trigger_label: Option<String>,
     #[serde(default)]
     pub extra: ExtraAttrs,
 }
@@ -339,6 +545,7 @@ pub struct OpcuaConfig {
     pub triggers: IndexMap<String, OpcuaTrigger>,
     /// HDF5 float64 `0.0`/`1.0` on the `OPCUA/Triggers` group attrs — not an int.
     pub triggers_enabled: Option<bool>,
+    pub trigger_stop_ceiling_layers: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -429,6 +636,10 @@ mod tests {
                 y_axis: sample_axis(),
                 z_axis: Some(sample_axis()),
                 focus: None,
+                invert_actual_x: false,
+                invert_actual_y: false,
+                invert_commanded_x: false,
+                invert_commanded_y: false,
             },
             light_source: LightSource {
                 manufacturer: "IPG".into(),
@@ -446,8 +657,7 @@ mod tests {
                 power_min_nominal_unit: None,
                 power_bit_resolution: None,
                 power_bit_resolution_unit: None,
-                watts_to_volts_algorithm: None,
-                watts_to_volts_params: None,
+                power_characterization: None,
             },
             collimator: Collimator {
                 manufacturer: "Aconity3D".into(),
@@ -480,6 +690,8 @@ mod tests {
                 file_version: "1.0".into(),
                 export_date: "2026-06-09T19:01:02.123Z".into(),
                 configuration_hash: "9".repeat(64),
+                facility_id: None,
+                config_author: None,
                 extra: IndexMap::new(),
             },
             machine: Machine {
@@ -538,6 +750,12 @@ mod tests {
                 rule_enabled: Some(true),
                 start_value: None,
                 stop_value: None,
+                case_sensitivity: Some("Exact".into()),
+                component: Some("machine_state_indicator".into()),
+                cooldown_period: Some(0),
+                event: Some("SensorEvents".into()),
+                max_fires_per_job: Some(0),
+                trigger_label: Some("Laser Emission Interlock".into()),
                 extra: IndexMap::new(),
             },
         );
@@ -551,15 +769,32 @@ mod tests {
                 publish_interval: 100,
                 sampling_interval: 100,
                 session_timeout: 60000,
+                keep_alive_count: Some(240),
+                lifetime_count: Some(2400),
+                machine_profile: Some("Aconity".into()),
+                queue_policy: Some("DropOldest".into()),
+                queue_size_data_change: Some(100),
+                queue_size_events: Some(7200),
+                reconnect_interval: Some(10000),
+                root_node: Some("MachineFleet".into()),
+                sync_loop_interval_initial: Some(1000),
+                sync_loop_interval_settled: Some(30000),
                 extra: IndexMap::new(),
             },
             pipe: OpcuaPipeConfig {
                 pipe_enabled: true,
                 buffer_size: 4096,
+                configure_client: Some(true),
+                inbound_rate_limit: Some(-1),
+                max_inbound_message_size: Some(65536),
+                min_integrity_level: Some("0x2000".into()),
+                pipe_name: Some("\\\\.\\pipe\\opc_ua_client_pipe".into()),
+                user_access_level: Some("AnyLocalUser".into()),
                 extra: IndexMap::new(),
             },
             triggers,
             triggers_enabled: Some(true),
+            trigger_stop_ceiling_layers: Some(3),
         });
 
         let json = serde_json::to_string(&config).unwrap();
@@ -567,7 +802,12 @@ mod tests {
         assert_eq!(config, roundtripped);
         let opcua = roundtripped.opcua.unwrap();
         assert_eq!(opcua.triggers_enabled, Some(true));
+        assert_eq!(opcua.trigger_stop_ceiling_layers, Some(3));
         assert!(opcua.triggers.contains_key("Laser Emission Interlock"));
+        let trigger = &opcua.triggers["Laser Emission Interlock"];
+        assert_eq!(trigger.event, Some("SensorEvents".into()));
+        assert_eq!(opcua.client.machine_profile, Some("Aconity".into()));
+        assert_eq!(opcua.pipe.pipe_name, Some("\\\\.\\pipe\\opc_ua_client_pipe".into()));
     }
 
     #[test]
@@ -590,10 +830,11 @@ mod tests {
             video_output: None,
             show_console: None,
             software_trigger_delay: None,
-            volts_to_watts_algorithm: None,
-            volts_to_watts_params: None,
             correction_grid_domain_shape: None,
             inverse_grid_domain_shape: None,
+            synchronous_sensors: IndexMap::new(),
+            firmware_version: None,
+            power_characterization: None,
         });
         let mut config = sample_config();
         config.optical_trains = vec![train];

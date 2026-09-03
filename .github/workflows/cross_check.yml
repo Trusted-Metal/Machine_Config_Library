@@ -4,8 +4,8 @@ name: Cross-Language Check
 # implementations: Python source, Rust source, Node.js source, shared
 # fixtures, schema, or the cross-check script itself.
 #
-# Languages active now: python, rust, nodejs, cpp
-# All five phases run for all four languages.
+# Languages active now: python, rust, nodejs, cpp, go (all platforms)
+# Go participates in all phases (1, 2, 3, 3.5, 4).
 
 on:
   workflow_dispatch:
@@ -88,6 +88,56 @@ jobs:
         working-directory: nodejs
 
       # -----------------------------------------------------------------------
+      # Go  (CGo + libhdf5 — Linux via apt, Windows via MSYS2 MinGW64)
+      # libhdf5-dev is already installed for Rust on Linux.
+      # -----------------------------------------------------------------------
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache-dependency-path: go/go.sum
+
+      # MSYS2 MINGW64 provides MinGW-compatible HDF5 + pkg-config for CGo on Windows.
+      - name: Install MSYS2 MinGW64 HDF5 (Windows, Go CGo)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          path-type: inherit
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-hdf5
+            mingw-w64-x86_64-pkg-config
+
+      # Adds the actual MSYS2 mingw64/bin to Windows PATH for subsequent steps (HDF5 DLLs).
+      - name: Add MSYS2 MinGW64 bin to PATH (Windows, Go runtime DLLs)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: echo "$(cygpath -w /mingw64/bin)" >> "$GITHUB_PATH"
+
+      - name: Build Go CLI binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p bin
+          CGO_ENABLED=1 go build -o bin/machine-config-cli ./cmd/machine-config-cli/
+        working-directory: go
+
+      # go.exe is a native Windows binary; it can't resolve gcc from the POSIX-format PATH
+      # set by the MSYS2 shell.  cygpath -w converts the POSIX path to a Windows path that
+      # go.exe can exec directly, regardless of where setup-msys2 installed MSYS2.
+      - name: Build Go CLI binary (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          mkdir -p go/bin
+          export CGO_ENABLED=1
+          export CC=$(cygpath -w /mingw64/bin/gcc.exe)
+          export CXX=$(cygpath -w /mingw64/bin/g++.exe)
+          cd go
+          go build -o bin/machine-config-cli.exe ./cmd/machine-config-cli/
+
+      # -----------------------------------------------------------------------
       # C++
       # Ubuntu: HDF5 1.14.6 built from source (cached); Windows: vcpkg archives.
       # Only the CLI binary is needed here — Catch2 tests are run in cpp.yml.
@@ -98,24 +148,35 @@ jobs:
         id: hdf5-cache-cpp
         with:
           path: ${{ github.workspace }}/hdf5-install
-          key: hdf5-1.14.6-no-zlib-${{ matrix.os }}
+          # bump suffix if build flags change
+          key: hdf5-1.14.6-no-zlib-v2-${{ matrix.os }}
 
       - name: Set HDF5_INSTALL env var (Ubuntu, C++)
         if: runner.os == 'Linux'
         run: echo "HDF5_INSTALL=${{ github.workspace }}/hdf5-install" >> $GITHUB_ENV
 
+      # Ninja + the extra HDF5_BUILD_*/BUILD_TESTING=OFF flags below (added
+      # after the from-source build was observed taking ~50min on a cold
+      # cache) skip compiling HDF5's C++/Fortran/Java wrappers and its own
+      # test suite — none of which this project ever links against — and use
+      # a faster build system than the default Unix Makefiles.
       - name: Build and install HDF5 1.14.6 (Ubuntu, C++)
         if: runner.os == 'Linux' && steps.hdf5-cache-cpp.outputs.cache-hit != 'true'
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build
           git clone --depth 1 --branch hdf5_1.14.6 \
             https://github.com/HDFGroup/hdf5.git hdf5-src
-          cmake -S hdf5-src -B hdf5-build \
+          cmake -S hdf5-src -B hdf5-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/hdf5-install \
+            -DBUILD_TESTING=OFF \
             -DHDF5_BUILD_EXAMPLES=OFF \
             -DHDF5_BUILD_TOOLS=OFF \
             -DHDF5_BUILD_TESTS=OFF \
             -DHDF5_BUILD_HL_LIB=OFF \
+            -DHDF5_BUILD_CPP_LIB=OFF \
+            -DHDF5_BUILD_FORTRAN=OFF \
+            -DHDF5_BUILD_JAVA=OFF \
             -DHDF5_ENABLE_Z_LIB_SUPPORT=OFF
           cmake --build hdf5-build -j$(nproc)
           cmake --install hdf5-build
@@ -183,17 +244,26 @@ jobs:
       - name: Phase 1 — Schema validation (all languages)
         run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-read-parity --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
 
+      - name: Phase 1 — Schema validation (Go)
+        run: python tools/cross_check.py --langs go --skip-read-parity --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
+
       - name: Phase 2 — Read parity (all fixtures, all languages)
         run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
 
+      - name: Phase 2 — Read parity (Go vs Python)
+        run: python tools/cross_check.py --langs python,go --skip-schema --skip-write-interop --skip-binary-copy --skip-correction-hash --verbose
+
       - name: Phase 3 — Write interoperability (all languages)
-        run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-binary-copy --skip-correction-hash --verbose
+        run: python tools/cross_check.py --langs python,rust,nodejs,cpp,go --skip-schema --skip-read-parity --skip-binary-copy --skip-correction-hash --verbose
 
       - name: Phase 3.5 — Binary copy round-trip (all languages)
-        run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-write-interop --skip-correction-hash --verbose
+        run: python tools/cross_check.py --langs python,rust,nodejs,cpp,go --skip-schema --skip-read-parity --skip-write-interop --skip-correction-hash --verbose
 
       - name: Phase 4 — Correction data hash parity (all languages)
         run: python tools/cross_check.py --langs python,rust,nodejs,cpp --skip-schema --skip-read-parity --skip-write-interop --skip-binary-copy --verbose
+
+      - name: Phase 4 — Correction data hash parity (Go vs Python)
+        run: python tools/cross_check.py --langs python,go --skip-schema --skip-read-parity --skip-write-interop --skip-binary-copy --verbose
 
       # Upload both outputs so developers can diff them manually if a check fails.
       - name: Export Python JSON artifact
@@ -224,6 +294,14 @@ jobs:
           [[ "$RUNNER_OS" == "Windows" ]] && bin="cpp/build/Release/machine_config_cli.exe"
           "$bin" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/cpp_output_xcheck.json"
 
+      - name: Export Go JSON artifact
+        if: always()
+        shell: bash
+        run: |
+          bin="go/bin/machine-config-cli"
+          [[ "$RUNNER_OS" == "Windows" ]] && bin="go/bin/machine-config-cli.exe"
+          "$bin" export-json fixtures/reference_config.h5 > "$RUNNER_TEMP/go_output_xcheck.json"
+
       - name: Upload language outputs for manual inspection
         if: always()
         uses: actions/upload-artifact@v4
@@ -234,4 +312,5 @@ jobs:
             ${{ runner.temp }}/rust_output_xcheck.json
             ${{ runner.temp }}/nodejs_output_xcheck.json
             ${{ runner.temp }}/cpp_output_xcheck.json
+            ${{ runner.temp }}/go_output_xcheck.json
           retention-days: 14

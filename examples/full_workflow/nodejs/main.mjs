@@ -5,10 +5,7 @@
 //   cd nodejs && npm run build && cd ..
 //   node examples/full_workflow/nodejs/main.mjs
 //
-// Scenario: a field calibration measured new scanner-head positions for both
-// optical trains.  Load the current machine config, apply the updated offsets,
-// write the modified config to a new file, and verify the changes persisted
-// alongside the binary correction data.
+// Load examples/dummy_2train.h5, apply new scanner offsets via setScanner(Merge).
 
 import { existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,11 +15,11 @@ import { randomUUID } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
-const FIXTURE   = join(REPO_ROOT, 'fixtures', 'reference_config.h5');
+const DUMMY = join(REPO_ROOT, 'examples', 'dummy_2train.h5');
 
-if (!existsSync(FIXTURE)) {
-  console.error(`Fixture not found: ${FIXTURE}`);
-  console.error('Run from the repo root or ensure fixtures/ is present.');
+if (!existsSync(DUMMY)) {
+  console.error(`Dummy file not found: ${DUMMY}`);
+  console.error('Run: python examples/generate_dummy.py');
   process.exit(1);
 }
 
@@ -32,71 +29,102 @@ if (!existsSync(distIndex)) {
   console.error('Run "npm run build" inside nodejs/ first.');
   process.exit(1);
 }
-const { MachineConfigReader, MachineConfigWriter } = await import(pathToFileURL(distIndex).href);
+const {
+  openMachineConfig,
+  MachineConfigReader,
+  SetMode,
+} = await import(pathToFileURL(distIndex).href);
 
 async function run() {
-  // -------------------------------------------------------------------------
-  // 1. Print pre-calibration summary
-  // -------------------------------------------------------------------------
-  const reader = new MachineConfigReader(FIXTURE);
-  const config = await reader.parse();
+  const opened = await openMachineConfig(DUMMY);
+  if (!opened.ok) {
+    console.error(`open failed: ${opened.error.message}`);
+    process.exit(1);
+  }
+  const file = opened.value;
 
   console.log('=== Full Workflow: Calibration Adjustment ===\n');
-  console.log(`Machine : ${config.meta.machine_name}`);
-  console.log(`Trains  : ${config.optical_trains.length}`);
+  console.log(`Machine : ${file.meta().getModel().machine_name}`);
+  console.log(`Trains  : ${file.opticalTrains().length}`);
   console.log();
   console.log('Before calibration:');
-  for (let i = 0; i < config.optical_trains.length; i++) {
-    const s  = config.optical_trains[i].scanner;
+  const reader = new MachineConfigReader(DUMMY);
+  let i = 0;
+  for (const train of file.opticalTrains()) {
+    const s = train.getScanner();
     const cd = await reader.getCorrectionData(i);
     console.log(`  Train ${i + 1}  offset x=${s.scan_head_offset_x}, y=${s.scan_head_offset_y}`);
     console.log(`           correction grid [${cd.shape.join(', ')}]`);
+    i += 1;
   }
   console.log();
 
-  // -------------------------------------------------------------------------
-  // 2. Apply new scanner offsets (post-calibration values)
-  // -------------------------------------------------------------------------
   const newOffsets = [[-91.5, 24.0], [91.5, -24.0]];
-  for (let i = 0; i < newOffsets.length; i++) {
-    config.optical_trains[i].scanner.scan_head_offset_x = newOffsets[i][0];
-    config.optical_trains[i].scanner.scan_head_offset_y = newOffsets[i][1];
-  }
-
-  // -------------------------------------------------------------------------
-  // 3. Write updated config
-  // -------------------------------------------------------------------------
-  const outPath = join(tmpdir(), `machine_config_full_workflow_${randomUUID()}.h5`);
-  await new MachineConfigWriter(config).write(outPath);
-  console.log(`Written to : ${basename(outPath)}\n`);
-
-  // -------------------------------------------------------------------------
-  // 4. Read back and verify
-  // -------------------------------------------------------------------------
-  const reader2 = new MachineConfigReader(outPath);
-  const updated = await reader2.parse();
-  const failures = [];
-
-  for (let i = 0; i < newOffsets.length; i++) {
-    const [ex, ey] = newOffsets[i];
-    const got_x    = updated.optical_trains[i].scanner.scan_head_offset_x;
-    const got_y    = updated.optical_trains[i].scanner.scan_head_offset_y;
-    if (got_x !== ex) failures.push(`  train${i + 1} offset_x: expected ${ex}, got ${got_x}`);
-    if (got_y !== ey) failures.push(`  train${i + 1} offset_y: expected ${ey}, got ${got_y}`);
-    const cd = await reader2.getCorrectionData(i);
-    if (cd.shape[0] !== 257 || cd.shape[1] !== 257 || cd.shape[2] !== 2) {
-      failures.push(`  train${i + 1} correction shape: expected [257,257,2], got [${cd.shape}]`);
+  for (let t = 0; t < newOffsets.length; t++) {
+    const train = file.opticalTrain(t);
+    if (!train.ok) {
+      console.error(train.error.message);
+      process.exit(1);
+    }
+    const scanner = train.value.getScanner();
+    scanner.scan_head_offset_x = newOffsets[t][0];
+    scanner.scan_head_offset_y = newOffsets[t][1];
+    const setR = train.value.setScanner(scanner, SetMode.Merge);
+    if (!setR.ok) {
+      console.error(setR.error.message);
+      process.exit(1);
     }
   }
 
-  if (existsSync(outPath)) unlinkSync(outPath);
+  const outPath = join(tmpdir(), `machine_config_full_workflow_${randomUUID()}.h5`);
+  const saved = await file.save(outPath);
+  if (!saved.ok) {
+    console.error(`save failed: ${saved.error.message}`);
+    process.exit(1);
+  }
+  file.close();
+  console.log(`Written to : ${basename(outPath)}\n`);
+
+  const again = await openMachineConfig(outPath);
+  if (!again.ok) {
+    console.error(again.error.message);
+    process.exit(1);
+  }
+  const updated = again.value;
+  const reader2 = new MachineConfigReader(outPath);
+  const failures = [];
+
+  for (let t = 0; t < newOffsets.length; t++) {
+    const [ex, ey] = newOffsets[t];
+    const train = updated.opticalTrain(t);
+    if (!train.ok) {
+      failures.push(`  train${t + 1}: ${train.error.message}`);
+      continue;
+    }
+    const s = train.value.getScanner();
+    if (s.scan_head_offset_x !== ex) {
+      failures.push(`  train${t + 1} offset_x: expected ${ex}, got ${s.scan_head_offset_x}`);
+    }
+    if (s.scan_head_offset_y !== ey) {
+      failures.push(`  train${t + 1} offset_y: expected ${ey}, got ${s.scan_head_offset_y}`);
+    }
+    const cd = await reader2.getCorrectionData(t);
+    if (cd.shape[0] !== 257 || cd.shape[1] !== 257 || cd.shape[2] !== 2) {
+      failures.push(`  train${t + 1} correction shape: expected [257,257,2], got [${cd.shape}]`);
+    }
+  }
 
   console.log('After calibration:');
-  for (let i = 0; i < updated.optical_trains.length; i++) {
-    const s = updated.optical_trains[i].scanner;
+  i = 0;
+  for (const train of updated.opticalTrains()) {
+    const s = train.getScanner();
     console.log(`  Train ${i + 1}  offset x=${s.scan_head_offset_x}, y=${s.scan_head_offset_y}`);
+    i += 1;
   }
   console.log();
+
+  updated.close();
+  if (existsSync(outPath)) unlinkSync(outPath);
 
   if (failures.length > 0) {
     console.log('FAIL');

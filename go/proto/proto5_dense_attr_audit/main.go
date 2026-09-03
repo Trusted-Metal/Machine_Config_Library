@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Proto 5 — Dense attribute storage audit.
 //
 // Walks the full reference_config.h5 hierarchy via scigolib and reports

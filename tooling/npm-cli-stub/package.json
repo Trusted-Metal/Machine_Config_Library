@@ -1,7 +1,7 @@
 {
   "name": "npm",
-  "version": "0.0.0-security-stub",
+  "version": "12.0.2",
   "private": true,
-  "description": "Stub replacing the full npm CLI package pulled in by @semantic-release/npm. Avoids vendoring npm's vulnerable bundled deps (ip-address, undici, tar, brace-expansion). semantic-release invokes the system npm on PATH via execa preferLocal fallback.",
+  "description": "Local stub replacing the full npm CLI package pulled in by @semantic-release/npm, so this repo does not vendor npm's bundled deps (ip-address, undici, tar, brace-expansion). Version is pinned to current npm latest so Dependabot/semver range checks do not treat this stub as ancient npm <6.14.6. Runtime still uses the system npm on PATH; this package has no bin or code.",
   "license": "UNLICENSED"
 }

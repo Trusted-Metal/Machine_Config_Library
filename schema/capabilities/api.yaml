@@ -1,0 +1,50 @@
+# Stable facade API — navigation and lifecycle (not per-field getters).
+api_version: 1
+set_modes: [Merge, Replace]
+default_set_mode: Merge
+
+lifecycle:
+  - { name: open, args: [path], returns: File, result: true }
+  - { name: create, args: [version], returns: File, result: true }
+
+file:
+  methods:
+    - { name: fileVersion, returns: string }
+    - { name: meta, returns: MetaHandle }
+    - { name: machine, returns: MachineHandle }
+    - { name: opticalTrains, returns: TrainCollection }
+    - { name: opticalTrain, args: [index], returns: TrainHandle, result: true }
+    - { name: opcua, returns: OpcuaHandle, result: true }
+    - { name: save, args: [path], path_optional: true, returns: void, result: true }
+    - { name: close, returns: void }
+
+handles:
+  MetaHandle:
+    - { name: getModel, returns: Meta }
+    - { name: setModel, args: [Meta, SetMode], mode_optional: true, returns: void, result: true }
+  MachineHandle:
+    - { name: getModel, returns: Machine }
+    - { name: setModel, args: [Machine, SetMode], mode_optional: true, returns: void, result: true }
+  TrainHandle:
+    - { name: getModel, returns: OpticalTrain }
+    - { name: setModel, args: [OpticalTrain, SetMode], mode_optional: true, returns: void, result: true }
+    - { name: getScanner, returns: Scanner }
+    - { name: setScanner, args: [Scanner, SetMode], mode_optional: true, returns: void, result: true }
+    - { name: getLightSource, returns: LightSource }
+    - { name: setLightSource, args: [LightSource, SetMode], mode_optional: true, returns: void, result: true }
+    - { name: getCollimator, returns: Collimator }
+    - { name: setCollimator, args: [Collimator, SetMode], mode_optional: true, returns: void, result: true }
+    - { name: getScannerCard, returns: ScannerCard }
+    - { name: setScannerCard, args: [ScannerCard, SetMode], mode_optional: true, returns: void, result: true }
+    - { name: optionalComponents, returns: OptionalComponentsHandle, nullable: true }
+  OptionalComponentsHandle:
+    - { name: clearbox, returns: ClearBoxHandle, result: true }
+  ClearBoxHandle:
+    - { name: getModel, returns: ClearBox }
+    - { name: setModel, args: [ClearBox, SetMode], mode_optional: true, returns: void, result: true }
+  OpcuaHandle:
+    - { name: getModel, returns: Opcua }
+    - { name: setModel, args: [Opcua, SetMode], mode_optional: true, returns: void, result: true }
+  TrainCollection:
+    - { name: length, returns: number }
+    - { name: get, args: [index], returns: TrainHandle, result: true }

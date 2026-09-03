@@ -1,7 +1,14 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as h5wasm from 'h5wasm/node';
 import { MachineConfigReader } from '../src/index.js';
+import {
+  openMachineConfig,
+  UnsupportedFileVersion,
+} from '../src/capabilities/index.js';
 import { validate } from '../src/schema.js';
 import type { MachineConfig } from '../src/models.js';
 
@@ -13,6 +20,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SYNTHETIC       = join(__dirname, '../../fixtures/synthetic_2laser.h5');
 const REFERENCE       = join(__dirname, '../../fixtures/reference_config.h5');
 const REFERENCE_OPCUA = join(__dirname, '../../fixtures/reference_config_opcua.h5');
+const REFERENCE_SENSORS = join(__dirname, '../../fixtures/reference_config_synchronous_sensors.h5');
+const REFERENCE_OPCUA_SENSORS = join(
+  __dirname, '../../fixtures/reference_config_opcua_synchronous_sensors.h5'
+);
+const OPCUA_MISSING_REQUIRED = join(
+  __dirname, '../../docs/validation/fixtures/opcua_missing_required.h5'
+);
 
 // ---------------------------------------------------------------------------
 // Shared parsed configs — each fixture opened once for the whole suite
@@ -21,13 +35,20 @@ const REFERENCE_OPCUA = join(__dirname, '../../fixtures/reference_config_opcua.h
 let synthetic: MachineConfig;
 let reference: MachineConfig;
 let referenceOpcua: MachineConfig;
+let referenceSensors: MachineConfig;
+let referenceOpcuaSensors: MachineConfig;
+let opcuaMissingRequired: MachineConfig;
 
 beforeAll(async () => {
-  [synthetic, reference, referenceOpcua] = await Promise.all([
-    new MachineConfigReader(SYNTHETIC).parse(),
-    new MachineConfigReader(REFERENCE).parse(),
-    new MachineConfigReader(REFERENCE_OPCUA).parse(),
-  ]);
+  [synthetic, reference, referenceOpcua, referenceSensors, referenceOpcuaSensors, opcuaMissingRequired] =
+    await Promise.all([
+      new MachineConfigReader(SYNTHETIC).parse(),
+      new MachineConfigReader(REFERENCE).parse(),
+      new MachineConfigReader(REFERENCE_OPCUA).parse(),
+      new MachineConfigReader(REFERENCE_SENSORS).parse(),
+      new MachineConfigReader(REFERENCE_OPCUA_SENSORS).parse(),
+      new MachineConfigReader(OPCUA_MISSING_REQUIRED).parse(),
+    ]);
 }, 60_000);   // generous timeout to cover h5wasm WASM init on a cold run
 
 // ===========================================================================
@@ -173,6 +194,23 @@ describe('MachineConfigReader — scanner', () => {
       expect(train.scanner.serial_number).toBeTruthy();
     }
   });
+
+  it('invert_* flags default to false when absent from the fixture (reference)', () => {
+    const s = reference.optical_trains[0].scanner;
+    expect(s.invert_actual_x).toBe(false);
+    expect(s.invert_actual_y).toBe(false);
+    expect(s.invert_commanded_x).toBe(false);
+    expect(s.invert_commanded_y).toBe(false);
+  });
+
+  it('invert_* flags are omitted from JSON output when false (reference)', async () => {
+    const json = JSON.parse(await new MachineConfigReader(REFERENCE).toJson());
+    const scanner = json.optical_trains[0].scanner;
+    expect('invert_actual_x' in scanner).toBe(false);
+    expect('invert_actual_y' in scanner).toBe(false);
+    expect('invert_commanded_x' in scanner).toBe(false);
+    expect('invert_commanded_y' in scanner).toBe(false);
+  });
 });
 
 // ===========================================================================
@@ -256,6 +294,80 @@ describe('MachineConfigReader — ClearBox', () => {
   it('correction_data is absent by default (parse without includeBinary)', () => {
     const cd = reference.optical_trains[0].optional_components.clearbox?.correction_data;
     expect(cd).toBeUndefined();
+  });
+
+  it('synchronous_sensors is omitted (undefined) on the reference fixture, not {}', () => {
+    // Matches Rust's/Python's decision to omit the key entirely from JSON
+    // when there are no sensors — see ClearBox.synchronous_sensors's doc
+    // comment in models.ts.
+    expect(reference.optical_trains[0].optional_components.clearbox?.synchronous_sensors).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// SynchronousSensor — reference_config_synchronous_sensors.h5, not
+// reference_config.h5, which deliberately has no sensors (see
+// SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
+// ===========================================================================
+
+describe('MachineConfigReader — SynchronousSensor', () => {
+  it('the "Oxygen Sensor" entry is present under train 0', () => {
+    const sensors = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!;
+    expect(Object.keys(sensors)).toEqual(['Oxygen Sensor']);
+  });
+
+  it('all 18 scalar fields match the real ZR800 example', () => {
+    const s = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
+    expect(s.enabled).toBe(true);
+    expect(s.sensor_name).toBe('ZR800 Oxygen Analyzer');
+    expect(s.sensor_output_range_low).toBe(-1.0);
+    expect(s.sensor_output_range_high).toBe(6.0);
+    expect(s.sensor_output_space).toBe('log10(ppm)');
+    expect(s.sensor_model).toBe('ZR810');
+    expect(s.sensor_manufacturer).toBe('Industrial Physics');
+    expect(s.sensor_scope).toBe('Global');
+    expect(s.units_derived_quantity).toBe('ppm');
+    expect(s.port_id).toBe(5);
+    expect(s.sensor_type).toBe('Oxygen Sensor');
+    expect(s.input_type).toBe('4-20 mA');
+    expect(s.algorithm_type).toBe('Log-Linear');
+    expect(s.algorithm_equation).toBe('log(ppm) = a*mA + b');
+    expect(s.calibration_source).toBe('Datasheet');
+    expect(s.calibration_verified).toBe(false);
+    expect(s.sample_period).toBe(5.0);
+    expect(s.metadata).toContain('Synchronous Sensor because Clearbox is responsible');
+  });
+
+  it('derivation_equation_constants has both rows in order, matching the log-space fit', () => {
+    const s = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
+    expect(s.derivation_equation_constants).toEqual([
+      { name: 'a', value: 0.4375 },
+      { name: 'b', value: -2.75 },
+    ]);
+  });
+
+  it('calibration_points has both rows in order, both satisfying the log-space algorithm equation', () => {
+    const s = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
+    expect(s.calibration_points).toEqual([
+      { input_value: 4.0, output_value: -1.0 },
+      { input_value: 20.0, output_value: 6.0 },
+    ]);
+    // log(ppm) = a*mA + b, per algorithm_equation — proves the points are
+    // recorded in Sensor_Output_Space (log10(ppm)) units, not the linear
+    // Units_Derived_Quantity (ppm) units of the same underlying quantity.
+    const [a, b] = s.derivation_equation_constants.map((c) => c.value);
+    for (const p of s.calibration_points) {
+      expect(a * p.input_value + b).toBeCloseTo(p.output_value, 10);
+    }
+  });
+
+  it('the combined OPCUA+sensors fixture has both features present at once', () => {
+    expect(referenceOpcuaSensors.opcua).toBeDefined();
+    const sensors = referenceOpcuaSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!;
+    expect(sensors['Oxygen Sensor'].derivation_equation_constants).toEqual([
+      { name: 'a', value: 0.4375 },
+      { name: 'b', value: -2.75 },
+    ]);
   });
 });
 
@@ -377,6 +489,14 @@ describe('MachineConfigReader — getCorrectionData / getInverseCorrectionData',
     expect(bytesOf(cd0.data)).not.toEqual(bytesOf(icd0.data));
   });
 
+  it('getInverseCorrectionData first finite value differs from getCorrectionData', () => {
+    const firstFiniteFwd = Array.from(cd0.data).find(v => isFinite(v));
+    const firstFiniteInv = Array.from(icd0.data).find(v => isFinite(v));
+    expect(firstFiniteFwd).toBeDefined();
+    expect(firstFiniteInv).toBeDefined();
+    expect(Math.abs(firstFiniteInv! - firstFiniteFwd!)).toBeGreaterThan(0.0001);
+  });
+
   it('train 1 correction grid differs from train 0', () => {
     expect(bytesOf(cd0.data)).not.toEqual(bytesOf(cd1.data));
   });
@@ -456,6 +576,94 @@ describe('MachineConfigReader — OPCUA', () => {
     expect(t.start_value).toBe('700');
     expect(t.stop_value).toBe('1000');
   });
+
+  // -------------------------------------------------------------------------
+  // Promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — every one of
+  // the 22 promoted fields checked against reference_config_opcua.h5's real
+  // values (verified via h5py before writing this test), plus
+  // trigger_stop_ceiling_layers, plus confirmation none of them land in extra.
+  // -------------------------------------------------------------------------
+
+  it('client promoted fields have real values and are not in extra (reference_opcua)', () => {
+    const c = referenceOpcua.opcua!.client;
+    expect(c.keep_alive_count).toBe(240);
+    expect(c.lifetime_count).toBe(2400);
+    expect(c.machine_profile).toBe('Aconity');
+    expect(c.queue_policy).toBe('DropOldest');
+    expect(c.queue_size_data_change).toBe(100);
+    expect(c.queue_size_events).toBe(7200);
+    expect(c.reconnect_interval).toBe(10000);
+    expect(c.root_node).toBe('MachineFleet');
+    expect(c.sync_loop_interval_initial).toBe(1000);
+    expect(c.sync_loop_interval_settled).toBe(30000);
+    expect(c.extra).toEqual({});
+  });
+
+  it('pipe promoted fields have real values and are not in extra (reference_opcua)', () => {
+    const p = referenceOpcua.opcua!.pipe;
+    expect(p.configure_client).toBe(true);
+    expect(p.inbound_rate_limit).toBe(-1);
+    expect(p.max_inbound_message_size).toBe(65536);
+    expect(p.min_integrity_level).toBe('0x2000');
+    expect(p.pipe_name).toBe('\\\\.\\pipe\\opc_ua_client_pipe');
+    expect(p.user_access_level).toBe('AnyLocalUser');
+    expect(p.extra).toEqual({});
+  });
+
+  it('trigger_stop_ceiling_layers is 3 (reference_opcua)', () => {
+    expect(referenceOpcua.opcua!.trigger_stop_ceiling_layers).toBe(3);
+  });
+
+  it('"Laser Emission Interlock" trigger promoted fields have real values and are not in extra (reference_opcua)', () => {
+    const t = referenceOpcua.opcua!.triggers['Laser Emission Interlock'];
+    expect(t.case_sensitivity).toBe('Exact');
+    expect(t.component).toBe('machine_state_indicator');
+    expect(t.cooldown_period).toBe(0);
+    expect(t.event).toBe('SensorEvents');
+    expect(t.max_fires_per_job).toBe(0);
+    expect(t.trigger_label).toBe('Laser Emission Interlock');
+    expect(t.extra).toEqual({});
+  });
+
+  it('"Chamber Oxygen Level" trigger promoted fields have real values (reference_opcua)', () => {
+    const t = referenceOpcua.opcua!.triggers['Chamber Oxygen Level'];
+    expect(t.component).toBe('process_chamber::gas_management::oxygen_sensor::1');
+    expect(t.event).toBe('SensorEvents');
+    expect(t.trigger_label).toBe('Chamber Oxygen Level');
+    expect(t.extra).toEqual({});
+  });
+
+  // -------------------------------------------------------------------------
+  // opcua_missing_required.h5 (Phase 0) removes all seven Phase-2-required
+  // attributes. The reader must stay permissive (facade-only enforcement —
+  // see OPCUA_FIELD_PROMOTION_PLAN.md): parsing succeeds, the removed fields
+  // read back null, and the per-trigger Event asymmetry is exactly as the
+  // fixture intends.
+  // -------------------------------------------------------------------------
+
+  it('opcua_missing_required.h5 parses gracefully with removed fields null', () => {
+    const o = opcuaMissingRequired.opcua!;
+    expect(o.client.machine_profile).toBeNull();
+    expect(o.client.root_node).toBeNull();
+    expect(o.pipe.configure_client).toBeNull();
+    expect(o.pipe.pipe_name).toBeNull();
+    expect(o.triggers_enabled).toBeNull();
+    expect(o.trigger_stop_ceiling_layers).toBeNull();
+  });
+
+  it('opcua_missing_required.h5 removes Event from only one trigger', () => {
+    const o = opcuaMissingRequired.opcua!;
+    expect(o.triggers['Laser Emission Interlock'].event).toBeNull();
+    expect(o.triggers['Chamber Oxygen Level'].event).toBe('SensorEvents');
+  });
+
+  it('opcua_missing_required.h5 leaves unrelated fields untouched', () => {
+    const o = opcuaMissingRequired.opcua!;
+    expect(o.client.server_url).toBeTruthy();
+    expect(o.client.keep_alive_count).toBe(240);
+    expect(o.pipe.buffer_size).toBe(65536);
+    expect(o.triggers['Laser Emission Interlock'].trigger_label).toBe('Laser Emission Interlock');
+  });
 });
 
 // ===========================================================================
@@ -532,6 +740,36 @@ describe('MachineConfigReader — getRawGroup()', () => {
     expect(result).toHaveProperty('Server_URL');
     expect(typeof result['Server_URL']).toBe('string');
     expect((result['Server_URL'] as string).length).toBeGreaterThan(0);
+  });
+});
+
+// ===========================================================================
+// Unknown File_Version
+// ===========================================================================
+
+describe('MachineConfigReader — unknown File_Version', () => {
+  it('does not use the v1.0 layout for a 2.0 file with no Machine group', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcl-fv-'));
+    const out = join(dir, 'future.h5').replace(/\\/g, '/');
+    try {
+      await h5wasm.ready;
+      const f = new h5wasm.File(out, 'w');
+      f.create_attribute('File_Version', '2.0', [], 'S');
+      f.close();
+
+      await expect(new MachineConfigReader(out).parse()).rejects.toThrow(
+        UnsupportedFileVersion,
+      );
+      await expect(new MachineConfigReader(out).parse()).rejects.toThrow(/2\.0/);
+
+      const result = await openMachineConfig(out);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('UnsupportedVersion');
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1,14 +1,18 @@
 // Catch2 writer tests — §4.14 acceptance criteria.
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
 
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 
 #include "machine_config/reader.hpp"
 #include "machine_config/writer.hpp"
+
+#include <highfive/H5File.hpp>
 
 #ifndef FIXTURES_DIR
 #  error "FIXTURES_DIR must be defined by tests/CMakeLists.txt"
@@ -18,6 +22,8 @@ using namespace machine_config;
 
 static const std::string REF      = std::string(FIXTURES_DIR) + "/reference_config.h5";
 static const std::string OPCUA_REF= std::string(FIXTURES_DIR) + "/reference_config_opcua.h5";
+static const std::string SENSORS_REF =
+    std::string(FIXTURES_DIR) + "/reference_config_synchronous_sensors.h5";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -114,6 +120,9 @@ TEST_CASE("RoundtripAllScalarFields") {
     REQUIRE(rb0.scan_field_correction_file->file_size ==
             t0.scan_field_correction_file->file_size);
 
+    // synchronous_sensors: reference_config.h5 has none — stays empty, not absent.
+    REQUIRE(rb0.optional_components.clearbox->synchronous_sensors.empty());
+
     std::filesystem::remove(out);
 }
 
@@ -135,6 +144,186 @@ TEST_CASE("RoundtripWithoutClearBox") {
     REQUIRE_FALSE(rb.opcua.has_value());
 
     std::filesystem::remove(out);
+}
+
+// ---------------------------------------------------------------------------
+// Scanner invert_* flags
+// ---------------------------------------------------------------------------
+
+TEST_CASE("RoundtripInvertFlagsDefaultFalseAndOmittedFromJSON") {
+    auto out = tmpPath("invert_defaults");
+    MachineConfigReader src{REF};
+    auto orig = src.parse();
+    REQUIRE_NOTHROW(MachineConfigWriter{orig}.write(out));
+
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    const auto& s = rb.optical_trains[0].scanner;
+    REQUIRE_FALSE(s.invert_actual_x);
+    REQUIRE_FALSE(s.invert_actual_y);
+    REQUIRE_FALSE(s.invert_commanded_x);
+    REQUIRE_FALSE(s.invert_commanded_y);
+
+    nlohmann::json j = s;
+    REQUIRE_FALSE(j.contains("invert_actual_x"));
+    REQUIRE_FALSE(j.contains("invert_actual_y"));
+    REQUIRE_FALSE(j.contains("invert_commanded_x"));
+    REQUIRE_FALSE(j.contains("invert_commanded_y"));
+
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("OnlyTrueInvertFlagsSurviveAsRealHDF5Attributes") {
+    auto out = tmpPath("invert_mixed");
+    MachineConfigReader src{REF};
+    auto cfg = src.parse();
+    cfg.optical_trains[0].scanner.invert_actual_x = true;
+    cfg.optical_trains[0].scanner.invert_actual_y = false;
+    cfg.optical_trains[0].scanner.invert_commanded_x = true;
+    cfg.optical_trains[0].scanner.invert_commanded_y = false;
+
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
+
+    // Raw HDF5 inspection: only the two true-valued attributes exist at all.
+    {
+        HighFive::File f(out.string(), HighFive::File::ReadOnly);
+        auto scanner_grp = f.getGroup("Machine/Optical_Trains/Optical_Train_01/Scanner");
+        REQUIRE(scanner_grp.hasAttribute("Invert_Actual_X"));
+        REQUIRE(scanner_grp.hasAttribute("Invert_Commanded_X"));
+        REQUIRE_FALSE(scanner_grp.hasAttribute("Invert_Actual_Y"));
+        REQUIRE_FALSE(scanner_grp.hasAttribute("Invert_Commanded_Y"));
+    }
+
+    // Read path still returns the correct value either way.
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    const auto& s = rb.optical_trains[0].scanner;
+    REQUIRE(s.invert_actual_x);
+    REQUIRE_FALSE(s.invert_actual_y);
+    REQUIRE(s.invert_commanded_x);
+    REQUIRE_FALSE(s.invert_commanded_y);
+
+    std::filesystem::remove(out);
+}
+
+// ---------------------------------------------------------------------------
+// SynchronousSensor
+// ---------------------------------------------------------------------------
+
+TEST_CASE("RoundtripSynchronousSensorCompoundDatasetsExactValuesInOrder") {
+    auto out = tmpPath("sensor_roundtrip");
+    MachineConfigReader src{SENSORS_REF};
+    auto orig = src.parse();
+    REQUIRE_NOTHROW(MachineConfigWriter{orig}.write(out));
+
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    const auto& s = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors.at("Oxygen Sensor");
+    REQUIRE(s.sensor_name == std::optional<std::string>{"ZR800 Oxygen Analyzer"});
+    REQUIRE(s.derivation_equation_constants.size() == 2);
+    REQUIRE(s.derivation_equation_constants[0].name == "a");
+    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
+    REQUIRE(s.derivation_equation_constants[1].name == "b");
+    REQUIRE(s.derivation_equation_constants[1].value == -2.75);
+    REQUIRE(s.calibration_points.size() == 2);
+    REQUIRE(s.calibration_points[0].input_value == 4.0);
+    REQUIRE(s.calibration_points[0].output_value == -1.0);
+    REQUIRE(s.calibration_points[1].input_value == 20.0);
+    REQUIRE(s.calibration_points[1].output_value == 6.0);
+
+    std::filesystem::remove(out);
+}
+
+// Distinct from the empty-*map* case above: here the sensor itself exists
+// (its group is created), but both compound datasets have zero rows —
+// proving 0-length compound dataset creation/read genuinely works, not
+// assumed.
+TEST_CASE("RoundtripSynchronousSensorWithZeroRowCompoundDatasets") {
+    auto out = tmpPath("sensor_zero_row");
+    MachineConfigReader src{REF};
+    auto cfg = src.parse();
+    SynchronousSensor sensor;
+    sensor.enabled = false;
+    sensor.sensor_name = "Placeholder";
+    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["Untested Sensor"] = sensor;
+
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    const auto& s = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors.at("Untested Sensor");
+    REQUIRE(s.derivation_equation_constants.empty());
+    REQUIRE(s.calibration_points.empty());
+    REQUIRE(s.sensor_name == std::optional<std::string>{"Placeholder"});
+
+    std::filesystem::remove(out);
+}
+
+// The map key is a free-form label with no schema meaning — proves a key
+// unlike the fixture's own "Oxygen Sensor" (different style: underscore-
+// joined, all-caps) survives a write->read cycle verbatim.
+TEST_CASE("RoundtripSynchronousSensorArbitraryDifferentlyStyledKey") {
+    auto out = tmpPath("sensor_arbitrary_key");
+    MachineConfigReader src{REF};
+    auto cfg = src.parse();
+    SynchronousSensor sensor;
+    sensor.enabled = true;
+    sensor.port_id = 9;
+    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["HUMIDITY_SENSOR_2"] = sensor;
+
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    const auto& sensors = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors;
+    REQUIRE(sensors.count("HUMIDITY_SENSOR_2") == 1);
+    REQUIRE(sensors.at("HUMIDITY_SENSOR_2").port_id == std::optional<int64_t>{9});
+
+    std::filesystem::remove(out);
+}
+
+// Proves the Writer side of the cross-feature guarantee: parses a real
+// OPCUA-only fixture, adds a sensor purely in memory, writes, and confirms
+// both survive re-reading (mirrors Rust's/Python's/Node's/Go's equivalent
+// tests).
+TEST_CASE("RoundtripOpcuaAndSynchronousSensorCoexist") {
+    auto out = tmpPath("opcua_and_sensor");
+    MachineConfigReader src{OPCUA_REF};
+    auto cfg = src.parse();
+    REQUIRE(cfg.opcua.has_value());
+
+    SynchronousSensor sensor;
+    sensor.enabled = true;
+    sensor.sensor_name = "ZR800 Oxygen Analyzer";
+    sensor.calibration_verified = false;
+    sensor.sample_period = 5.0;
+    sensor.derivation_equation_constants = {{"a", 0.4375}, {"b", -2.75}};
+    sensor.calibration_points = {{4.0, -1.0}, {20.0, 6.0}};
+    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["Oxygen Sensor"] = sensor;
+
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
+    MachineConfigReader back{out};
+    auto rb = back.parse();
+    REQUIRE(rb.opcua.has_value());
+    const auto& s = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors.at("Oxygen Sensor");
+    REQUIRE(s.derivation_equation_constants.size() == 2);
+    REQUIRE(s.derivation_equation_constants[0].name == "a");
+    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
+
+    std::filesystem::remove(out);
+}
+
+// Derivation_Equation_Constants.name is a 64-byte fixed-length field (see
+// SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string convention"). A name
+// whose UTF-8 encoding exceeds 64 bytes must be rejected with a clear error
+// at write time, not silently truncated.
+TEST_CASE("WriterRejectsEquationConstantNameOver64Bytes") {
+    auto out = tmpPath("oversized_name");
+    MachineConfigReader src{REF};
+    auto cfg = src.parse();
+    SynchronousSensor sensor;
+    sensor.derivation_equation_constants = {{std::string(65, 'a'), 1.0}};
+    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["Oversized Name Sensor"] = sensor;
+
+    REQUIRE_THROWS_WITH(MachineConfigWriter{cfg}.write(out), Catch::Matchers::ContainsSubstring("does not fit"));
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +358,66 @@ TEST_CASE("RoundtripWithOpcua") {
     REQUIRE(rbT.start_value  == origT.start_value);
     REQUIRE(rbT.stop_value   == origT.stop_value);
 
+    // Promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — all 22
+    // promoted fields survive a real write→read cycle, not just parsing.
+    const auto& origC = orig.opcua->client;
+    const auto& rbC   = rb.opcua->client;
+    REQUIRE(rbC.keep_alive_count           == origC.keep_alive_count);
+    REQUIRE(rbC.lifetime_count             == origC.lifetime_count);
+    REQUIRE(rbC.machine_profile            == origC.machine_profile);
+    REQUIRE(rbC.queue_policy               == origC.queue_policy);
+    REQUIRE(rbC.queue_size_data_change     == origC.queue_size_data_change);
+    REQUIRE(rbC.queue_size_events          == origC.queue_size_events);
+    REQUIRE(rbC.reconnect_interval         == origC.reconnect_interval);
+    REQUIRE(rbC.root_node                  == origC.root_node);
+    REQUIRE(rbC.sync_loop_interval_initial == origC.sync_loop_interval_initial);
+    REQUIRE(rbC.sync_loop_interval_settled == origC.sync_loop_interval_settled);
+
+    const auto& origP = orig.opcua->pipe;
+    const auto& rbP   = rb.opcua->pipe;
+    REQUIRE(rbP.configure_client         == origP.configure_client);
+    REQUIRE(rbP.inbound_rate_limit       == origP.inbound_rate_limit);
+    REQUIRE(rbP.max_inbound_message_size == origP.max_inbound_message_size);
+    REQUIRE(rbP.min_integrity_level      == origP.min_integrity_level);
+    REQUIRE(rbP.pipe_name                == origP.pipe_name);
+    REQUIRE(rbP.user_access_level        == origP.user_access_level);
+
+    REQUIRE(rb.opcua->trigger_stop_ceiling_layers == orig.opcua->trigger_stop_ceiling_layers);
+    REQUIRE(orig.opcua->trigger_stop_ceiling_layers == std::optional<std::int64_t>{3});
+
+    REQUIRE(rbT.case_sensitivity  == origT.case_sensitivity);
+    REQUIRE(rbT.component         == origT.component);
+    REQUIRE(rbT.cooldown_period   == origT.cooldown_period);
+    REQUIRE(rbT.event             == origT.event);
+    REQUIRE(rbT.max_fires_per_job == origT.max_fires_per_job);
+    REQUIRE(rbT.trigger_label     == origT.trigger_label);
+
     std::filesystem::remove(out);
+}
+
+// ---------------------------------------------------------------------------
+// RoundtripTriggerStopCeilingLayersNilAndSome
+// The one field with no `extra` bucket to fall back on if the write/read
+// pairing were mismatched — both the real value (3) and the nullopt case.
+// ---------------------------------------------------------------------------
+TEST_CASE("RoundtripTriggerStopCeilingLayersNilAndSome") {
+    MachineConfigReader src{OPCUA_REF};
+    auto cfg = src.parse();
+
+    auto outSome = tmpPath("ceiling_some");
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(outSome));
+    MachineConfigReader backSome{outSome};
+    auto rtSome = backSome.parse();
+    REQUIRE(rtSome.opcua->trigger_stop_ceiling_layers == std::optional<std::int64_t>{3});
+    std::filesystem::remove(outSome);
+
+    cfg.opcua->trigger_stop_ceiling_layers = std::nullopt;
+    auto outNone = tmpPath("ceiling_none");
+    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(outNone));
+    MachineConfigReader backNone{outNone};
+    auto rtNone = backNone.parse();
+    REQUIRE_FALSE(rtNone.opcua->trigger_stop_ceiling_layers.has_value());
+    std::filesystem::remove(outNone);
 }
 
 // ---------------------------------------------------------------------------
@@ -304,5 +552,18 @@ TEST_CASE("BinaryRoundtripFc3Size") {
     auto copy_bytes = MachineConfigReader{out}.getScanFieldCorrectionBytes(0);
     REQUIRE(copy_bytes.size() == orig_bytes.size());
 
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("WriterRejectsUnknownFileVersion") {
+    auto cfg = makeMinimalConfig();
+    cfg.meta.file_version = "2.0";
+    auto out = tmpPath("unknown_version");
+    try {
+        MachineConfigWriter{cfg}.write(out);
+        FAIL("expected write() to throw for File_Version 2.0");
+    } catch (const std::runtime_error& e) {
+        REQUIRE(std::string(e.what()).find("2.0") != std::string::npos);
+    }
     std::filesystem::remove(out);
 }

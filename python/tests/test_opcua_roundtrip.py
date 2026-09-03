@@ -259,6 +259,60 @@ def test_roundtrip_full_opcua_fixture(tmp_path, opcua_reader):
     assert set(rt.opcua.triggers.keys()) == set(config.opcua.triggers.keys())
 
 
+def test_opcua_and_synchronous_sensor_coexist_through_writer(tmp_path, opcua_reader):
+    """Proves the Writer side of the cross-feature guarantee (the Reader
+    side is proved directly against the pre-built combined fixture in
+    test_reader.py's TestSynchronousSensor) — parses a real OPCUA-only
+    fixture, adds a sensor purely in memory, writes, and confirms both
+    survive re-reading. See SYNCHRONOUS_SENSOR_PLAN.md's Phase 0
+    fixture-layout decision for why both tests are kept.
+    """
+    from machine_config import CalibrationPoint, EquationConstant, SynchronousSensor
+
+    config = opcua_reader.parse()
+    assert config.opcua is not None, "fixture must already have OPCUA before the test adds a sensor"
+
+    cb = config.optical_trains[0].optional_components.clearbox
+    cb.synchronous_sensors["Oxygen Sensor"] = SynchronousSensor(
+        enabled=True,
+        sensor_name="ZR800 Oxygen Analyzer",
+        sensor_output_range_low=-1.0,
+        sensor_output_range_high=6.0,
+        sensor_output_space="log10(ppm)",
+        sensor_model="ZR810",
+        sensor_manufacturer="Industrial Physics",
+        sensor_scope="Global",
+        units_derived_quantity="ppm",
+        port_id=5,
+        sensor_type="Oxygen Sensor",
+        input_type="4-20 mA",
+        algorithm_type="Log-Linear",
+        algorithm_equation="log(ppm) = a*mA + b",
+        calibration_source="Datasheet",
+        calibration_verified=False,
+        sample_period=5.0,
+        metadata=None,
+        derivation_equation_constants=[
+            EquationConstant(name="a", value=0.4375),
+            EquationConstant(name="b", value=-2.75),
+        ],
+        calibration_points=[
+            CalibrationPoint(input_value=4.0, output_value=-1.0),
+            CalibrationPoint(input_value=20.0, output_value=6.0),
+        ],
+    )
+
+    out = tmp_path / "opcua_and_sensor.h5"
+    MachineConfigWriter(config).write(out)
+    rt = MachineConfigReader(out).parse()
+
+    assert rt.opcua is not None, "OPCUA must survive alongside the newly-added sensor"
+    rt_sensor = rt.optical_trains[0].optional_components.clearbox.synchronous_sensors["Oxygen Sensor"]
+    assert rt_sensor.sensor_name == "ZR800 Oxygen Analyzer"
+    assert len(rt_sensor.derivation_equation_constants) == 2
+    assert len(rt_sensor.calibration_points) == 2
+
+
 # ---------------------------------------------------------------------------
 # Test 10: JSON round-trip (to_json → config_from_dict) for OpcuaConfig
 # ---------------------------------------------------------------------------
@@ -280,7 +334,7 @@ def test_roundtrip_json_opcua(tmp_path, reference_reader):
                 rule_enabled=True,
                 start_value="false",
                 stop_value="true",
-                extra={"Event": "SensorEvents"},
+                event="SensorEvents",
             )
         },
         triggers_enabled=True,
@@ -301,4 +355,110 @@ def test_roundtrip_json_opcua(tmp_path, reference_reader):
     t = rt.opcua.triggers["Interlock"]
     assert t.id == "il1"
     assert t.rule_enabled is True
-    assert t.extra["Event"] == "SensorEvents"
+    # Event is now a typed field, not swept into extra.
+    assert t.event == "SensorEvents"
+    assert "Event" not in t.extra
+
+
+# ---------------------------------------------------------------------------
+# Test 11: every one of the 22 promoted fields (plus trigger_stop_ceiling_layers)
+# has its real value from reference_config_opcua.h5 — verified directly via
+# h5py before writing this test — and none of them land in `extra` anymore.
+# ---------------------------------------------------------------------------
+
+def test_promoted_fields_have_real_values(opcua_reader):
+    config = opcua_reader.parse()
+    opcua = config.opcua
+
+    c = opcua.client
+    assert c.keep_alive_count == 240
+    assert c.lifetime_count == 2400
+    assert c.machine_profile == "Aconity"
+    assert c.queue_policy == "DropOldest"
+    assert c.queue_size_data_change == 100
+    assert c.queue_size_events == 7200
+    assert c.reconnect_interval == 10000
+    assert c.root_node == "MachineFleet"
+    assert c.sync_loop_interval_initial == 1000
+    assert c.sync_loop_interval_settled == 30000
+    assert c.extra == {}
+
+    p = opcua.pipe
+    assert p.configure_client is True
+    assert p.inbound_rate_limit == -1
+    assert p.max_inbound_message_size == 65536
+    assert p.min_integrity_level == "0x2000"
+    assert p.pipe_name == "\\\\.\\pipe\\opc_ua_client_pipe"
+    assert p.user_access_level == "AnyLocalUser"
+    assert p.extra == {}
+
+    assert opcua.trigger_stop_ceiling_layers == 3
+
+    laser = opcua.triggers["Laser Emission Interlock"]
+    assert laser.case_sensitivity == "Exact"
+    assert laser.component == "machine_state_indicator"
+    assert laser.cooldown_period == 0
+    assert laser.event == "SensorEvents"
+    assert laser.max_fires_per_job == 0
+    assert laser.trigger_label == "Laser Emission Interlock"
+    assert laser.extra == {}
+
+    oxygen = opcua.triggers["Chamber Oxygen Level"]
+    assert oxygen.component == "process_chamber::gas_management::oxygen_sensor::1"
+    assert oxygen.event == "SensorEvents"
+    assert oxygen.trigger_label == "Chamber Oxygen Level"
+    assert oxygen.extra == {}
+
+
+# ---------------------------------------------------------------------------
+# Test 12: opcua_missing_required.h5 (Phase 0) removes all seven Phase-2-
+# required attributes. The reader must stay permissive (facade-only
+# enforcement — see OPCUA_FIELD_PROMOTION_PLAN.md): parsing succeeds, the
+# removed fields read back None, and the per-trigger Event asymmetry is
+# exactly as the fixture intends.
+# ---------------------------------------------------------------------------
+
+def test_missing_required_fixture_parses_gracefully(opcua_missing_required_reader):
+    config = opcua_missing_required_reader.parse()
+    opcua = config.opcua
+    assert opcua is not None
+
+    assert opcua.client.machine_profile is None
+    assert opcua.client.root_node is None
+    assert opcua.pipe.configure_client is None
+    assert opcua.pipe.pipe_name is None
+    assert opcua.triggers_enabled is None
+    assert opcua.trigger_stop_ceiling_layers is None
+
+    laser = opcua.triggers["Laser Emission Interlock"]
+    assert laser.event is None, "Event was deliberately removed from this trigger only"
+    oxygen = opcua.triggers["Chamber Oxygen Level"]
+    assert oxygen.event == "SensorEvents", "the other trigger must be unaffected"
+
+    # Untouched fields elsewhere confirm the rest of the file is unaffected.
+    assert opcua.client.server_url
+    assert opcua.client.keep_alive_count == 240
+    assert opcua.pipe.buffer_size == 65536
+    assert laser.trigger_label == "Laser Emission Interlock"
+
+
+# ---------------------------------------------------------------------------
+# Test 13: trigger_stop_ceiling_layers round-trips through a temp file, both
+# when populated and when None — the one field with no `extra` bucket to
+# fall back on if the write/read pairing were mismatched.
+# ---------------------------------------------------------------------------
+
+def test_roundtrip_trigger_stop_ceiling_layers_none_and_some(tmp_path, opcua_reader):
+    config = opcua_reader.parse()
+    assert config.opcua.trigger_stop_ceiling_layers == 3
+
+    out_some = tmp_path / "ceiling_some.h5"
+    MachineConfigWriter(config).write(out_some)
+    rt_some = MachineConfigReader(out_some).parse()
+    assert rt_some.opcua.trigger_stop_ceiling_layers == 3
+
+    config.opcua.trigger_stop_ceiling_layers = None
+    out_none = tmp_path / "ceiling_none.h5"
+    MachineConfigWriter(config).write(out_none)
+    rt_none = MachineConfigReader(out_none).parse()
+    assert rt_none.opcua.trigger_stop_ceiling_layers is None

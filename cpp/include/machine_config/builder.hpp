@@ -3,6 +3,7 @@
 // Mirrors Python MockConfigBuilder and Rust MockConfigBuilder field-for-field.
 
 #include "machine_config/models.hpp"
+#include "machine_config/power_characterization.hpp"
 #include "machine_config/writer.hpp"
 
 #include <cmath>
@@ -112,8 +113,7 @@ private:
         cb.video_output             = "HDMI";
         cb.show_console             = false;
         cb.software_trigger_delay   = 3000;
-        cb.volts_to_watts_algorithm = "LINEAR";
-        cb.volts_to_watts_params    = "50.0,100.0";
+        cb.power_characterization   = forwardPowerCharacterizationCoefficients("LINEAR", "50.0,100.0");
         cb.correction_data         = makeGaussianGrid(1.0);
         cb.inverse_correction_data = makeGaussianGrid(0.95);
         return cb;
@@ -169,8 +169,7 @@ private:
         ls.power_max_actual_unit  = "W";
         ls.power_min_actual       = 100.0;
         ls.power_min_actual_unit  = "W";
-        ls.watts_to_volts_algorithm = "LINEAR";
-        ls.watts_to_volts_params    = "[1,100,10,1000]";
+        ls.power_characterization = forwardPowerCharacterizationPoints("LINEAR", "[1,100,10,1000]");
 
         Collimator col;
         col.manufacturer      = "MockOptics";

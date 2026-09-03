@@ -61,9 +61,11 @@ REPO = Path(__file__).resolve().parent.parent
 SCHEMA_FILE = REPO / "schema" / "machine_config_v1.schema.json"
 
 FIXTURES: dict[str, Path] = {
-    "reference":       REPO / "fixtures" / "reference_config.h5",
-    "reference_opcua": REPO / "fixtures" / "reference_config_opcua.h5",
-    "synthetic":       REPO / "fixtures" / "synthetic_2laser.h5",
+    "reference":         REPO / "fixtures" / "reference_config.h5",
+    "reference_opcua":   REPO / "fixtures" / "reference_config_opcua.h5",
+    "synthetic":         REPO / "fixtures" / "synthetic_2laser.h5",
+    "v1_1":              REPO / "fixtures" / "reference_config_v1_1.h5",
+    "v1_1_migrated":     REPO / "fixtures" / "reference_config_v1_1_migrated.h5",
 }
 
 _EXT = ".exe" if platform.system() == "Windows" else ""
@@ -85,6 +87,10 @@ def _cpp_bin() -> Path:
     if debug.exists():
         return debug
     return flat
+
+
+def _go_bin() -> Path:
+    return REPO / "go" / "bin" / f"machine-config-cli{_EXT}"
 
 
 def _python_cli() -> str:
@@ -115,6 +121,9 @@ RUNNERS: dict[str, Callable[[Path], list[str]]] = {
     "rust":   lambda fix: [str(_rust_bin()), "export-json", str(fix)],
     "nodejs": lambda fix: ["node", str(REPO / "nodejs/dist/cli.js"), "export-json", str(fix)],
     "cpp":    lambda fix: [str(_cpp_bin()), "export-json", str(fix)],
+    # Go: CGo + libhdf5 (Linux via apt, Windows via MSYS2 MinGW64).
+    # Binary built by cross_check.yml before phases run.
+    "go":     lambda fix: [str(_go_bin()), "export-json", str(fix)],
 }
 
 # Argv *prefix* for subcommands other than export-json (e.g. correction-hash).
@@ -124,18 +133,20 @@ BINARIES: dict[str, Callable[[], list[str]]] = {
     "rust":   lambda: [str(_rust_bin())],
     "nodejs": lambda: ["node", str(REPO / "nodejs/dist/cli.js")],
     "cpp":    lambda: [str(_cpp_bin())],
+    # Go: CGo + libhdf5. Supports all subcommands including write-hdf5 and copy-hdf5.
+    "go":     lambda: [str(_go_bin())],
 }
 
 # Each entry is a callable(json_path: Path, h5_path: Path) -> list[str] that
 # returns the argv for the language's write-from-JSON CLI command.
 # Input:  canonical JSON file (output of `export-json` on the reference fixture)
 # Output: .h5 file verified by all reader languages in phase_write_interop().
-# Add nodejs/cpp here when their writers land.
 WRITERS: dict[str, Callable[[Path, Path], list[str]]] = {
     "python": lambda j, h: [_python_cli(), "write", str(j), "--output", str(h)],
     "rust":   lambda j, h: [str(_rust_bin()), "write-hdf5", str(j), str(h)],
     "nodejs": lambda j, h: ["node", str(REPO / "nodejs/dist/cli.js"), "write-hdf5", str(j), str(h)],
     "cpp":    lambda j, h: [str(_cpp_bin()), "write-hdf5", str(j), str(h)],
+    "go":     lambda j, h: [str(_go_bin()), "write-hdf5", str(j), str(h)],
 }
 
 # Each entry is a callable(input: Path, output: Path) -> list[str] that returns
@@ -146,7 +157,7 @@ COPIERS: dict[str, Callable[[Path, Path], list[str]]] = {
     "rust":   lambda i, o: [str(_rust_bin()), "copy-hdf5", str(i), str(o)],
     "nodejs": lambda i, o: ["node", str(REPO / "nodejs/dist/cli.js"), "copy-hdf5", str(i), str(o)],
     "cpp":    lambda i, o: [str(_cpp_bin()), "copy-hdf5", str(i), str(o)],
-    # "go":     lambda i, o: [str(REPO / f"go/machine-config-cli{_EXT}"), "copy-hdf5", str(i), str(o)],
+    "go":     lambda i, o: [str(_go_bin()), "copy-hdf5", str(i), str(o)],
 }
 
 # ---------------------------------------------------------------------------

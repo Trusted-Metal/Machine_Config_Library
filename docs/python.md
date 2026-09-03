@@ -24,6 +24,34 @@ Python is the source of truth for fixture generation, the golden file, and schem
 - [Quickstart example](#quickstart-example)
 - [Full workflow example](#full-workflow-example)
 - [Running the Python test suite](#running-the-python-test-suite)
+- [External validation status](#external-validation-status)
+- [Capability API (stable model facade)](#capability-api-stable-model-facade)
+
+---
+
+## Capability API (stable model facade)
+
+Preferred for applications. The library peeks root `File_Version`, dispatches
+to that version's adapter, and returns stable models. On-disk paths, HDF5
+parse/write, and the `MachineConfigFileV1_0` facade live in
+`python/src/machine_config/capabilities/v1_0/`. Shared dispatch is
+`capabilities/__init__.py`. Full-model get/set with `SetMode.MERGE` /
+`SetMode.REPLACE`:
+
+```python
+from machine_config import open_machine_config, create_machine_config, SetMode
+
+opened = open_machine_config("machine.h5")
+file = opened.value
+scanner = file.optical_train(0).value.get_scanner()
+file.optical_train(0).value.set_scanner(
+    {**scanner, "working_distance": 680}, SetMode.MERGE
+)
+file.save("out.h5")
+file.close()
+```
+
+See [USAGE.md](../USAGE.md) and `schema/capabilities/`.
 
 ---
 
@@ -387,9 +415,13 @@ Expected output:
 ```
 === Machine Config Quickstart ===
 
-Machine name   : TM-LPBF-02: AconityMIDI+_OG
+File version   : 1.0
+Machine name   : ExampleDummy-2Train
 Optical trains : 2
-Working dist   : 670.0 mm   (train 0)
+  Train 0  wd=670.0 mm  offset x=-87.5, y=23.5
+           clearbox: present
+  Train 1  wd=670.0 mm  offset x=87.5, y=-23.5
+           clearbox: present
 Correction grid: (257, 257, 2)   (train 0)
 
 Written to     : <tmp>.h5
@@ -420,13 +452,13 @@ Expected output:
 ```
 === Full Workflow: Calibration Adjustment ===
 
-Machine : TM-LPBF-02: AconityMIDI+_OG
+Machine : ExampleDummy-2Train
 Trains  : 2
 
 Before calibration:
   Train 1  offset x=-87.5, y=23.5
            correction grid 257×257×2
-  Train 2  offset x=86.074, y=-21.695
+  Train 2  offset x=87.5, y=-23.5
            correction grid 257×257×2
 
 Written to : <tmp>.h5
@@ -472,3 +504,17 @@ Source: [examples/full_workflow/python/main.py](../examples/full_workflow/python
 | `test_builder.py` | — | `MockConfigBuilder`; `YamlConfigBuilder` roundtrip; `ConfigEditor` offset mutation |
 | `test_cli.py` | — | `inspect`, `validate`, `export-json`, `write`, `build --mock`, `build --from-yaml`, `demo` |
 | `test_schema.py` | — | Schema parses as JSON; draft 2020-12 meta-validation; all `required` constraints; golden file validation |
+
+### External validation status
+
+Separate from the pytest suite above: this branch also ran the full external
+"validation app" checklist — installing the packaged wheel into a standalone
+project outside this repo and exercising it as a real consumer would,
+including every version-dispatch edge case and the mock v1.1 adapter migration
+tests.
+
+**Result:** ✅ 20/20 scenarios passing. See
+[docs/validation/python/PASS_FAIL.md](../docs/validation/python/PASS_FAIL.md) for
+the full verdict list and
+[docs/validation/python/results.md](../docs/validation/python/results.md) for
+verbatim output.

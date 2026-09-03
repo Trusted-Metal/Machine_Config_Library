@@ -14,6 +14,10 @@ import type {
 } from './models.js';
 import { SCHEMA_VERSION } from './schema.js';
 import { MachineConfigWriter } from './writer.js';
+import {
+  forwardPowerCharacterizationCoefficients,
+  forwardPowerCharacterizationPoints,
+} from './powerCharacterization.js';
 
 export interface MockConfigBuilderOptions {
   /** Number of optical trains (lasers) to generate. Default 2. */
@@ -127,10 +131,12 @@ function mockClearBox(index: number): ClearBox {
     video_output: 'HDMI',
     show_console: false,
     software_trigger_delay: 3000,
-    volts_to_watts_algorithm: 'LINEAR',
-    volts_to_watts_params: '50.0,100.0',
+    power_characterization: forwardPowerCharacterizationCoefficients('LINEAR', '50.0,100.0') ?? undefined,
     correction_grid_domain_shape: null,
     inverse_grid_domain_shape: null,
+    // firmware_version intentionally omitted — not populated by the mock
+    // builder, same reasoning as synchronous_sensors; only real v1.1
+    // fixtures exercise it.
   };
 }
 
@@ -181,6 +187,10 @@ function mockTrain(
     y_axis: mockAxis(),
     z_axis: mockAxis(),
     focus: null,
+    invert_actual_x: false,
+    invert_actual_y: false,
+    invert_commanded_x: false,
+    invert_commanded_y: false,
   };
 
   const lightSource: LightSource = {
@@ -199,8 +209,7 @@ function mockTrain(
     power_min_nominal_unit: 'W',
     power_bit_resolution: null,
     power_bit_resolution_unit: 'bits',
-    watts_to_volts_algorithm: 'LINEAR',
-    watts_to_volts_params: '[1,100,10,1000]',
+    power_characterization: forwardPowerCharacterizationPoints('LINEAR', '[1,100,10,1000]') ?? undefined,
   };
 
   const collimator: Collimator = {

@@ -21,11 +21,19 @@ nodejs/node_modules/
 nodejs/dist/
 nodejs/schema/
 nodejs/*.tgz
+cpp/*.tar.gz
 rust/target/
+go/bin/
 cpp/build/
+cpp/pkg-build/
+cpp/pkg-install/
+docs/validation/cpp/app/build/
+docs/validation/cpp/tarball/consumer/build/
 python/dist/
 python/build/
 
 # Editor
 .vscode/
 *.egg-info/
+
+file_testing/

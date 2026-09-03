@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Proto 4 — Write and read back string, int64, and float64 dataset attributes.
 //
 // Validates attribute-type fidelity for the three Go primitives the machine

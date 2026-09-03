@@ -1,0 +1,21 @@
+@PACKAGE_INIT@
+# MachineConfigConfig.cmake — what a consumer's find_package(MachineConfig)
+# actually loads. Deliberately "thin": this package installs only its own
+# headers and does NOT bundle copies of HighFive's, nlohmann_json's, or
+# HDF5's files. Instead it asks CMake to go find_package() them separately,
+# the same way it's finding MachineConfig itself right now.
+#
+# This mirrors how a real vcpkg port works — each port (highfive,
+# nlohmann-json, hdf5 all already exist as vcpkg ports) is built once into
+# the shared triplet install tree, and vcpkg's toolchain file makes
+# find_package() resolve all of them automatically. A "thick" package that
+# bundled its own private copies of those headers would fight that model
+# (duplicate/conflicting copies of the same library) rather than prepare
+# for it. See VALIDATION_PLAN.md §10 for the full reasoning and how this
+# differs from that section's original wording.
+
+include(CMakeFindDependencyMacro)
+find_dependency(HighFive)
+find_dependency(nlohmann_json)
+
+include("${CMAKE_CURRENT_LIST_DIR}/MachineConfigTargets.cmake")

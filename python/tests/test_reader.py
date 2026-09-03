@@ -1,6 +1,5 @@
 """Phase 1.3 / 1.6 — MachineConfigReader tests against real AconityMIDI fixtures."""
 import json
-import warnings
 
 import numpy as np
 import pytest
@@ -104,6 +103,23 @@ class TestScanner:
 
     def test_axis_configuration_is_3D(self, reference_config):
         assert reference_config.optical_trains[0].scanner.axis_configuration == "3D"
+
+    def test_invert_flags_absent_from_fixture_read_as_false(self, reference_config):
+        # reference_config.h5 has none of the four Invert_* attributes at all.
+        s = reference_config.optical_trains[0].scanner
+        assert s.invert_actual_x is False
+        assert s.invert_actual_y is False
+        assert s.invert_commanded_x is False
+        assert s.invert_commanded_y is False
+
+    def test_invert_flags_omitted_from_json_when_false(self, reference_reader):
+        import json
+        d = json.loads(reference_reader.to_json())
+        scanner_d = d["optical_trains"][0]["scanner"]
+        assert "invert_actual_x" not in scanner_d
+        assert "invert_actual_y" not in scanner_d
+        assert "invert_commanded_x" not in scanner_d
+        assert "invert_commanded_y" not in scanner_d
 
     def test_x_axis_smoothing_kernel(self, reference_config):
         assert reference_config.optical_trains[0].scanner.x_axis.smoothing_kernel == "GAUSSIAN"
@@ -223,6 +239,121 @@ class TestClearBox:
     def test_clearbox_data_port_is_int(self, reference_config):
         dp = reference_config.optical_trains[0].optional_components.clearbox.data_port
         assert dp is None or isinstance(dp, int)
+
+    def test_synchronous_sensors_empty_when_fixture_has_none(self, reference_config):
+        # reference_config.h5 deliberately has no Synchronous_Sensors group
+        # at all (SYNCHRONOUS_SENSOR_PLAN.md Phase 0) — must read back as an
+        # empty dict, not missing/absent, since there is no separate "absent"
+        # state.
+        cb = reference_config.optical_trains[0].optional_components.clearbox
+        assert cb.synchronous_sensors == {}
+
+
+# ===========================================================================
+# SynchronousSensor
+# ===========================================================================
+
+@pytest.fixture(scope="module")
+def sensor(sensors_reader):
+    """Module-level, not a class-instance-method fixture — avoids the
+    PytestRemovedIn10Warning already documented/avoided elsewhere in this
+    suite (see test_writer_roundtrip.py's and test_opcua_roundtrip.py's own
+    "module-level fixtures" notes).
+    """
+    cb = sensors_reader.parse().optical_trains[0].optional_components.clearbox
+    assert len(cb.synchronous_sensors) == 1
+    return cb.synchronous_sensors["Oxygen Sensor"]
+
+
+class TestSynchronousSensor:
+    """Every one of the 18 scalar fields plus both compound datasets, checked
+    against the real ZR800 example values in
+    fixtures/reference_config_synchronous_sensors.h5 — verified directly via
+    h5py before writing this test (SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
+    """
+
+    def test_enabled(self, sensor):
+        assert sensor.enabled is True
+
+    def test_sensor_name(self, sensor):
+        assert sensor.sensor_name == "ZR800 Oxygen Analyzer"
+
+    def test_sensor_output_range(self, sensor):
+        assert sensor.sensor_output_range_low == -1.0
+        assert sensor.sensor_output_range_high == 6.0
+
+    def test_sensor_output_space(self, sensor):
+        assert sensor.sensor_output_space == "log10(ppm)"
+
+    def test_sensor_model(self, sensor):
+        assert sensor.sensor_model == "ZR810"
+
+    def test_sensor_manufacturer(self, sensor):
+        assert sensor.sensor_manufacturer == "Industrial Physics"
+
+    def test_sensor_scope(self, sensor):
+        assert sensor.sensor_scope == "Global"
+
+    def test_units_derived_quantity(self, sensor):
+        assert sensor.units_derived_quantity == "ppm"
+
+    def test_port_id(self, sensor):
+        assert sensor.port_id == 5
+
+    def test_sensor_type(self, sensor):
+        assert sensor.sensor_type == "Oxygen Sensor"
+
+    def test_input_type(self, sensor):
+        assert sensor.input_type == "4-20 mA"
+
+    def test_algorithm_type(self, sensor):
+        assert sensor.algorithm_type == "Log-Linear"
+
+    def test_algorithm_equation(self, sensor):
+        assert sensor.algorithm_equation == "log(ppm) = a*mA + b"
+
+    def test_calibration_source(self, sensor):
+        assert sensor.calibration_source == "Datasheet"
+
+    def test_calibration_verified(self, sensor):
+        assert sensor.calibration_verified is False
+
+    def test_sample_period(self, sensor):
+        assert sensor.sample_period == 5.0
+
+    def test_metadata_mentions_100khz(self, sensor):
+        assert "100KHz" in sensor.metadata
+
+    def test_derivation_equation_constants_exact_values_in_order(self, sensor):
+        assert len(sensor.derivation_equation_constants) == 2
+        assert sensor.derivation_equation_constants[0].name == "a"
+        assert sensor.derivation_equation_constants[0].value == 0.4375
+        assert sensor.derivation_equation_constants[1].name == "b"
+        assert sensor.derivation_equation_constants[1].value == -2.75
+
+    def test_calibration_points_exact_values_in_order(self, sensor):
+        assert len(sensor.calibration_points) == 2
+        assert sensor.calibration_points[0].input_value == 4.0
+        assert sensor.calibration_points[0].output_value == -1.0
+        assert sensor.calibration_points[1].input_value == 20.0
+        assert sensor.calibration_points[1].output_value == 6.0
+
+    def test_calibration_points_are_in_log_space_not_linear_ppm(self, sensor):
+        """Confirms the calibration points satisfy algorithm_equation in
+        Sensor_Output_Space (log-space), not Units_Derived_Quantity (linear
+        ppm) — the exact proof from SYNCHRONOUS_SENSOR_PLAN.md's
+        unit-convention discussion.
+        """
+        a = sensor.derivation_equation_constants[0].value
+        b = sensor.derivation_equation_constants[1].value
+        for point in sensor.calibration_points:
+            assert abs(a * point.input_value + b - point.output_value) < 1e-9
+
+    def test_combined_opcua_and_sensors_fixture_has_both(self, opcua_sensors_reader):
+        config = opcua_sensors_reader.parse()
+        assert config.opcua is not None
+        cb = config.optical_trains[0].optional_components.clearbox
+        assert cb.synchronous_sensors["Oxygen Sensor"].sensor_name == "ZR800 Oxygen Analyzer"
 
 
 # ===========================================================================
@@ -477,14 +608,25 @@ def test_absent_clearbox_is_none(tmp_path):
     assert config.optical_trains[0].optional_components.clearbox is None
 
 
-def test_file_version_warning(tmp_path):
-    builder = MockConfigBuilder(n_lasers=1, file_version="2.0")
+def test_unknown_file_version_does_not_use_v1_layout(tmp_path):
+    """Peek File_Version before walking groups — a v2 file with no Machine
+    group must not be parsed by the v1.0 adapter."""
+    import h5py
+
+    from machine_config.capabilities import open_machine_config
+    from machine_config.capabilities.file_version import UnsupportedFileVersion
+
     out = tmp_path / "future.h5"
-    builder.save(out)
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        MachineConfigReader(out).parse()
-    assert any("File_Version" in str(warning.message) for warning in w)
+    with h5py.File(out, "w") as f:
+        f.attrs["File_Version"] = "2.0"
+
+    with pytest.raises(UnsupportedFileVersion, match="2.0"):
+        MachineConfigReader(out)
+
+    result = open_machine_config(out)
+    assert not result.ok
+    assert result.error.code == "UnsupportedVersion"
+
 
 
 # ===========================================================================

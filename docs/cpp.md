@@ -22,9 +22,38 @@ headers directly with no compilation step. All types live in the `machine_config
 - [Quickstart example](#quickstart-example)
 - [Full workflow example](#full-workflow-example)
 - [Running the C++ test suite](#running-the-c-test-suite)
+- [Validation results](#validation-results)
+- [Capability API (stable model facade)](#capability-api-stable-model-facade)
 
 > Use cases 3, 5, and 7 (`config_from_dict`, `ConfigEditor`, `YamlConfigBuilder`) are
 > Python-only conveniences with no C++ port.
+
+---
+
+## Capability API (stable model facade)
+
+Preferred for applications. Include `machine_config/capabilities/file.hpp`
+(dispatch). The v1.0 adapter lives in `capabilities/v1_0/`. Full-model
+get/set with `SetMode::Merge` (default) / `SetMode::Replace`:
+
+```cpp
+#include "machine_config/capabilities/file.hpp"
+
+using machine_config::capabilities::openMachineConfig;
+using machine_config::capabilities::SetMode;
+
+auto opened = openMachineConfig("machine.h5");
+auto file = std::static_pointer_cast<machine_config::capabilities::MachineConfigFileV1_0>(
+    opened.value());
+auto scanner = file->getScanner(0).value();
+scanner.working_distance = 680.0;
+file->setScanner(0, scanner);  // SetMode::Merge by default
+std::string out = "out.h5";
+file->save(&out);
+file->close();
+```
+
+See [USAGE.md](../USAGE.md) and `schema/capabilities/`.
 
 ---
 
@@ -352,9 +381,12 @@ Expected output:
 ```
 === Machine Config Quickstart ===
 
-Machine name   : TM-LPBF-02: AconityMIDI+_OG
+Machine name   : ExampleDummy-2Train
 Optical trains : 2
-Working dist   : 670 mm   (train 0)
+  Train 0  wd=670 mm  offset x=-87.5, y=23.5
+           clearbox: present
+  Train 1  wd=670 mm  offset x=87.5, y=-23.5
+           clearbox: present
 Correction grid: [257, 257, 2]   (train 0)
 
 Written to     : mc_quickstart_tmp.h5
@@ -386,13 +418,13 @@ Expected output:
 ```
 === Full Workflow: Calibration Adjustment ===
 
-Machine : TM-LPBF-02: AconityMIDI+_OG
+Machine : ExampleDummy-2Train
 Trains  : 2
 
 Before calibration:
   Train 1  offset x=-87.5, y=23.5
            correction grid 257x257x2
-  Train 2  offset x=86.074, y=-21.695
+  Train 2  offset x=87.5, y=-23.5
            correction grid 257x257x2
 
 Written to : mc_full_workflow_tmp.h5
@@ -426,12 +458,43 @@ cmake --build cpp/build --config Debug
 ctest --test-dir cpp/build -C Debug --output-on-failure
 ```
 
-Expected: `100% tests passed, 0 tests failed out of 64`
+Expected: `100% tests passed, 0 tests failed out of 79`
 
 | File | Tests | Coverage |
 |---|---|---|
 | `test_models.cpp` | 6 | JSON serialisation, nlohmann ADL round-trips |
-| `test_reader.cpp` | 44 | Root attrs, machine, optical trains, scanner, ClearBox scalars, binary data, OPCUA (absent + all fields), synthetic fixture, `getRawGroup()` |
-| `test_writer.cpp` | 7 | Scalar roundtrip, OPCUA roundtrip (field values + trigger content), OPCUA from-scratch construction, schema spot-check |
+| `test_reader.cpp` | 43 | Root attrs, machine, optical trains, scanner, ClearBox scalars, binary data, OPCUA (absent + all fields), synthetic fixture, `getRawGroup()` |
+| `test_writer.cpp` | 8 | Scalar roundtrip, OPCUA roundtrip (field values + trigger content), OPCUA from-scratch construction, schema spot-check |
 | `test_builder.cpp` | 6 | 1/2-laser roundtrip, plate dims, correction grid shape + value, no-clearbox |
 | `test_schema.cpp` | 3 | Reference fixture validates, MockBuilder output validates, empty object fails |
+| `test_capabilities.cpp` | 8 | Stable model facade: open/create, `SetMode`, `fileVersion`, `save` |
+| `test_adapter_migration.cpp` | 5 | Mock v1.1 adapter (AV-09–11): isolation, roundtrip, forward/backward migration |
+
+---
+
+## Validation results
+
+20 / 20 scenarios pass on this SDK. See the full table in
+[docs/validation/cpp/PASS_FAIL.md](../docs/validation/cpp/PASS_FAIL.md) and verbatim output
+in [docs/validation/cpp/results.md](../docs/validation/cpp/results.md).
+
+Two real, pre-existing library gaps were found and fixed during this validation pass — both
+in the build/packaging surface, not runtime behavior:
+- **No umbrella public header existed.** `#include <machine_config/machine_config.hpp>` — the
+  single include the static tarball and S-09 both require — never existed; every real
+  consumer used several separate includes. Created it (deliberately excluding `schema.hpp`,
+  which requires a consumer-supplied `SCHEMA_DIR` — schema validation stays opt-in).
+- **A `CMAKE_SOURCE_DIR`/`PROJECT_SOURCE_DIR` bug** broke the moment `cpp/` was consumed via
+  `add_subdirectory` from an external project — exactly what any real from-source install
+  does. Fixed; the main test suite (354 assertions, 79 test cases) reconfirmed green.
+
+**C++ packaging (§10 of `VALIDATION_PLAN.md`) is also done, but not as originally planned.**
+§10 originally described a fully self-contained static tarball bundling HDF5 itself; that was
+changed to a "thin", `find_package`-based package instead — the shape a future vcpkg port
+would actually need, since vcpkg ports declare dependencies rather than bundling them. Verified
+locally as a genuinely fresh external consumer (no reference to this repo's source tree). Full
+reasoning, the two real CMake errors hit while building it, and the verbatim consumer-run
+output are in [docs/validation/cpp/tarball/results.md](../docs/validation/cpp/tarball/results.md).
+The CI packaging step (§10 Step 5) is not yet added.
+
+For the master cross-language matrix see [docs/validation/README.md](../docs/validation/README.md).

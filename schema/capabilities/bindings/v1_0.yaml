@@ -1,0 +1,8 @@
+# HDF5 File_Version 1.0 adapter binding.
+file_version: "1.0"
+description: >
+  On-disk v1.0 layout (group paths, HDF5 attribute names, casting) lives in
+  the v1.0 adapter. The library peeks root File_Version, dispatches here, and
+  returns stable snake_case models from schema/capabilities/models.yaml.
+layout: capabilities/v1_0/layout
+default_supported: true

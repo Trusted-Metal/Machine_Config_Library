@@ -104,6 +104,10 @@
               "scan_head_rotation":      { "type": ["number", "null"] },
               "scan_head_rotation_unit": { "type": ["string", "null"] },
               "axis_configuration":      { "type": ["string", "null"] },
+              "invert_actual_x":         { "type": "boolean", "description": "Omitted entirely (not present as false) unless true." },
+              "invert_actual_y":         { "type": "boolean", "description": "Omitted entirely (not present as false) unless true." },
+              "invert_commanded_x":      { "type": "boolean", "description": "Omitted entirely (not present as false) unless true." },
+              "invert_commanded_y":      { "type": "boolean", "description": "Omitted entirely (not present as false) unless true." },
               "x_axis": {
                 "type": ["object", "null"],
                 "properties": {
@@ -211,8 +215,36 @@
               "power_min_nominal_unit":   { "type": ["string", "null"] },
               "power_bit_resolution":     { "type": ["number", "null"] },
               "power_bit_resolution_unit":{ "type": ["string", "null"] },
-              "watts_to_volts_algorithm": { "type": ["string", "null"] },
-              "watts_to_volts_params":    { "type": ["string", "null"] }
+              "power_characterization": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                  "algorithm_type":         { "type": ["string", "null"] },
+                  "algorithm_equation":     { "type": ["string", "null"] },
+                  "input_type":             { "type": ["string", "null"] },
+                  "units_derived_quantity": { "type": ["string", "null"] },
+                  "derivation_equation_constants": {
+                    "type": ["array", "null"],
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name":  { "type": "string" },
+                        "value": { "type": "number" }
+                      }
+                    }
+                  },
+                  "characterization_points": {
+                    "type": ["array", "null"],
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "input_value":  { "type": "number" },
+                        "output_value": { "type": "number" }
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "collimator": {
@@ -278,10 +310,87 @@
                   "video_output":                  { "type": ["string", "null"] },
                   "show_console":                  { "type": ["boolean", "null"] },
                   "software_trigger_delay":        { "type": ["integer", "null"] },
-                  "volts_to_watts_algorithm":      { "type": ["string", "null"] },
-                  "volts_to_watts_params":         { "type": ["string", "null"] },
                   "correction_grid_domain_shape":  { "type": ["string", "null"] },
-                  "inverse_grid_domain_shape":     { "type": ["string", "null"] }
+                  "inverse_grid_domain_shape":     { "type": ["string", "null"] },
+                  "firmware_version":              { "type": ["string", "null"] },
+                  "power_characterization": {
+                    "type": ["object", "null"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "algorithm_type":         { "type": ["string", "null"] },
+                      "algorithm_equation":     { "type": ["string", "null"] },
+                      "input_type":             { "type": ["string", "null"] },
+                      "units_derived_quantity": { "type": ["string", "null"] },
+                      "derivation_equation_constants": {
+                        "type": ["array", "null"],
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name":  { "type": "string" },
+                            "value": { "type": "number" }
+                          }
+                        }
+                      },
+                      "characterization_points": {
+                        "type": ["array", "null"],
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "input_value":  { "type": "number" },
+                            "output_value": { "type": "number" }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "synchronous_sensors": {
+                    "type": "object",
+                    "description": "Name-keyed collection of synchronous sensors attached to this ClearBox. The key is a free-form label chosen by the file's author (e.g. \"Oxygen Sensor\") and carries no schema meaning of its own.",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "enabled":                  { "type": ["boolean", "null"] },
+                        "sensor_name":              { "type": ["string", "null"] },
+                        "sensor_output_range_low":  { "type": ["number", "null"] },
+                        "sensor_output_range_high": { "type": ["number", "null"] },
+                        "sensor_output_space":      { "type": ["string", "null"] },
+                        "sensor_model":             { "type": ["string", "null"] },
+                        "sensor_manufacturer":      { "type": ["string", "null"] },
+                        "sensor_scope":             { "type": ["string", "null"] },
+                        "units_derived_quantity":   { "type": ["string", "null"] },
+                        "port_id":                  { "type": ["integer", "null"] },
+                        "sensor_type":              { "type": ["string", "null"] },
+                        "input_type":               { "type": ["string", "null"] },
+                        "algorithm_type":           { "type": ["string", "null"] },
+                        "algorithm_equation":       { "type": ["string", "null"] },
+                        "calibration_source":       { "type": ["string", "null"] },
+                        "calibration_verified":     { "type": ["boolean", "null"] },
+                        "sample_period":            { "type": ["number", "null"] },
+                        "metadata":                 { "type": ["string", "null"] },
+                        "derivation_equation_constants": {
+                          "type": ["array", "null"],
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name":  { "type": "string" },
+                              "value": { "type": "number" }
+                            }
+                          }
+                        },
+                        "calibration_points": {
+                          "type": ["array", "null"],
+                          "description": "input_value is in this sensor's Input_Type unit; output_value is in this sensor's Sensor_Output_Space unit (not Units_Derived_Quantity) — every row of a given sensor's calibration curve is in the same units by construction.",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "input_value":  { "type": "number" },
+                              "output_value": { "type": "number" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -318,6 +427,16 @@
             "publish_interval":  { "type": "integer" },
             "sampling_interval": { "type": "integer" },
             "session_timeout":   { "type": "integer" },
+            "keep_alive_count":            { "type": ["integer", "null"] },
+            "lifetime_count":              { "type": ["integer", "null"] },
+            "machine_profile":             { "type": ["string", "null"] },
+            "queue_policy":                { "type": ["string", "null"] },
+            "queue_size_data_change":      { "type": ["integer", "null"] },
+            "queue_size_events":           { "type": ["integer", "null"] },
+            "reconnect_interval":          { "type": ["integer", "null"] },
+            "root_node":                   { "type": ["string", "null"] },
+            "sync_loop_interval_initial":  { "type": ["integer", "null"] },
+            "sync_loop_interval_settled":  { "type": ["integer", "null"] },
             "extra": {
               "type": "object",
               "additionalProperties": { "type": ["string", "integer", "number"] }
@@ -330,6 +449,12 @@
           "properties": {
             "pipe_enabled": { "type": "boolean" },
             "buffer_size":  { "type": "integer" },
+            "configure_client":         { "type": ["boolean", "null"] },
+            "inbound_rate_limit":       { "type": ["integer", "null"] },
+            "max_inbound_message_size": { "type": ["integer", "null"] },
+            "min_integrity_level":      { "type": ["string", "null"] },
+            "pipe_name":                { "type": ["string", "null"] },
+            "user_access_level":        { "type": ["string", "null"] },
             "extra": {
               "type": "object",
               "additionalProperties": { "type": ["string", "integer", "number"] }
@@ -337,6 +462,7 @@
           }
         },
         "triggers_enabled": { "type": ["boolean", "null"] },
+        "trigger_stop_ceiling_layers": { "type": ["integer", "null"] },
         "triggers": {
           "type": "object",
           "additionalProperties": {
@@ -348,6 +474,12 @@
               "rule_enabled": { "type": ["boolean", "null"] },
               "start_value":  { "type": ["string", "null"] },
               "stop_value":   { "type": ["string", "null"] },
+              "case_sensitivity":  { "type": ["string", "null"] },
+              "component":         { "type": ["string", "null"] },
+              "cooldown_period":   { "type": ["integer", "null"] },
+              "event":             { "type": ["string", "null"] },
+              "max_fires_per_job": { "type": ["integer", "null"] },
+              "trigger_label":     { "type": ["string", "null"] },
               "extra": {
                 "type": "object",
                 "additionalProperties": { "type": ["string", "integer", "number"] }
