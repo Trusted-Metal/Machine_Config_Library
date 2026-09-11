@@ -389,6 +389,7 @@ impl Hdf5AdapterV1_1 {
             build_plate_radius_unit: read_unit_locked(&m, "Build_Plate_Corner_Radius_unit", "mm")?,
             gas_flow_direction: read_str(&m, "Gas_Flow_Direction")?,
             recoat_direction: read_str(&m, "Recoat_Direction")?,
+            recoater_blade_type: read_str(&m, "Recoater_Blade_Type")?,
         };
 
         // ---- ClearBox: shared Output_Path/Software_Trigger_Delay (Consolidate, Change 1) ----

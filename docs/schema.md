@@ -81,6 +81,7 @@ All fields are **optional** (`string | null` or `number | null`).
 | `build_plate_radius_unit` | `string\|null` | |
 | `gas_flow_direction` | `string\|null` | e.g. `"Y+"` |
 | `recoat_direction` | `string\|null` | e.g. `"X+"` |
+| `recoater_blade_type` | `string\|null` | e.g. `"Standard"` |
 
 ---
 

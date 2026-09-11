@@ -143,6 +143,7 @@ func parseMachine(g *h5c.Group) (Machine, error) {
 		BuildPlateRadiusUnit: bru,
 		GasFlowDirection:     readStrAttr(g, "Gas_Flow_Direction"),
 		RecoatDirection:      readStrAttr(g, "Recoat_Direction"),
+		RecoaterBladeType:    readStrAttr(g, "Recoater_Blade_Type"),
 	}, nil
 }
 

@@ -281,6 +281,7 @@ function parseMachine(f: h5wasm.File): Machine {
     build_plate_radius_unit: attrStr(a, "Build_Plate_Corner_Radius_unit"),
     gas_flow_direction: attrStr(a, "Gas_Flow_Direction"),
     recoat_direction: attrStr(a, "Recoat_Direction"),
+    recoater_blade_type: attrStr(a, "Recoater_Blade_Type"),
   };
 }
 

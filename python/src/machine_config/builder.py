@@ -323,6 +323,7 @@ class MockConfigBuilder:
             build_plate=bp,
             gas_flow_direction="Y+",
             recoat_direction="X+",
+            recoater_blade_type="Standard",
         )
         meta = MachineConfigMeta(
             schema_version=SCHEMA_VERSION,
@@ -394,6 +395,7 @@ class YamlConfigBuilder:
             build_plate=bp,
             gas_flow_direction=sm.get("gas_flow_direction"),
             recoat_direction=sm.get("recoat_direction"),
+            recoater_blade_type=sm.get("recoater_blade_type"),
         )
         meta = MachineConfigMeta(
             schema_version=SCHEMA_VERSION,

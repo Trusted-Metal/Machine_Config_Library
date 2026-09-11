@@ -127,6 +127,7 @@ class Hdf5WriterV1_1:
         grp.attrs["Build_Plate_Corner_Radius_unit"] = bp.corner_radius_unit or "mm"
         grp.attrs["Gas_Flow_Direction"] = self._s(ma.gas_flow_direction)
         grp.attrs["Recoat_Direction"] = self._s(ma.recoat_direction)
+        grp.attrs["Recoater_Blade_Type"] = self._s(ma.recoater_blade_type)
         f.require_group(layout.ROOT_OPTICAL_TRAINS)
 
     # ------------------------------------------------------------------

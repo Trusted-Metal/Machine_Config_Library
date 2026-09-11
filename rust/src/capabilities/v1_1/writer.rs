@@ -196,6 +196,7 @@ impl<'a> Hdf5WriterV1_1<'a> {
         )?;
         ws(grp, "Gas_Flow_Direction", ma.gas_flow_direction.as_deref().unwrap_or(""))?;
         ws(grp, "Recoat_Direction", ma.recoat_direction.as_deref().unwrap_or(""))?;
+        ws(grp, "Recoater_Blade_Type", ma.recoater_blade_type.as_deref().unwrap_or(""))?;
         Ok(())
     }
 

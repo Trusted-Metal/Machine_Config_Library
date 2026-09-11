@@ -315,6 +315,7 @@ export class MockConfigBuilder {
       build_plate_radius_unit: null,
       gas_flow_direction: 'Y+',
       recoat_direction: 'X+',
+      recoater_blade_type: 'Standard',
     };
 
     const meta: MachineConfigMeta = {

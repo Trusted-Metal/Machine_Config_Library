@@ -505,6 +505,9 @@ impl MockV1_1Reader {
             // REMOVAL (x2): never read in the mock v1.1 layout.
             gas_flow_direction: None,
             recoat_direction: None,
+            // Not part of this mock's manifest; always None here, same as any
+            // other untouched Machine field.
+            recoater_blade_type: None,
         };
 
         let trains_grp = require_group(&m, "Optical_Trains")?;

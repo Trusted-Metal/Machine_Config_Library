@@ -167,6 +167,7 @@ mod tests {
         assert_eq!(orig.machine.build_plate_x_unit, rt.machine.build_plate_x_unit);
         assert_eq!(orig.machine.gas_flow_direction, rt.machine.gas_flow_direction);
         assert_eq!(orig.machine.recoat_direction, rt.machine.recoat_direction);
+        assert_eq!(orig.machine.recoater_blade_type, rt.machine.recoater_blade_type);
     }
 
     #[test]

@@ -354,6 +354,7 @@ export interface Machine {
   build_plate_radius_unit: string | null;
   gas_flow_direction: string | null;
   recoat_direction: string | null;
+  recoater_blade_type: string | null;
 }
 
 export interface OpticalTrain {

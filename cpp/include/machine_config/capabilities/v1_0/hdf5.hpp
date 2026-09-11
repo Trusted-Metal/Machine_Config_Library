@@ -331,6 +331,7 @@ private:
         m.build_plate_radius_unit = readUnitLocked(grp, "Build_Plate_Corner_Radius_unit", "mm");
         m.gas_flow_direction    = readStr(grp, "Gas_Flow_Direction");
         m.recoat_direction      = readStr(grp, "Recoat_Direction");
+        m.recoater_blade_type   = readStr(grp, "Recoater_Blade_Type");
         return m;
     }
 

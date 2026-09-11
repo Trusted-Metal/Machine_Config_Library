@@ -482,6 +482,7 @@ impl Hdf5AdapterV1_0 {
             )?,
             gas_flow_direction: read_str(&m, "Gas_Flow_Direction")?,
             recoat_direction: read_str(&m, "Recoat_Direction")?,
+            recoater_blade_type: read_str(&m, "Recoater_Blade_Type")?,
         };
 
         let trains_grp = require_group(&m, "Optical_Trains")?;

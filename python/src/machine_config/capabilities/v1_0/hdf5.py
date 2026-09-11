@@ -298,6 +298,7 @@ class Hdf5AdapterV1_0:
             build_plate=build_plate,
             gas_flow_direction=self._read_str(ma, "Gas_Flow_Direction"),
             recoat_direction=self._read_str(ma, "Recoat_Direction"),
+            recoater_blade_type=self._read_str(ma, "Recoater_Blade_Type"),
         )
 
         # ---- Optical trains -------------------------------------------------------
@@ -722,6 +723,7 @@ class Hdf5AdapterV1_0:
                 "build_plate_radius_unit": config.machine.build_plate.corner_radius_unit,
                 "gas_flow_direction": config.machine.gas_flow_direction,
                 "recoat_direction": config.machine.recoat_direction,
+                "recoater_blade_type": config.machine.recoater_blade_type,
             },
             "optical_trains": [
                 self._train_to_dict(t, include_binary=include_binary)
@@ -1122,6 +1124,7 @@ def config_from_dict(d: dict) -> MachineConfig:
         build_plate=build_plate,
         gas_flow_direction=m.get("gas_flow_direction"),
         recoat_direction=m.get("recoat_direction"),
+        recoater_blade_type=m.get("recoater_blade_type"),
     )
 
     optical_trains = [_train_from_dict(t) for t in d["optical_trains"]]

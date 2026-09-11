@@ -141,6 +141,10 @@ describe('MachineConfigWriter — reference roundtrip', () => {
     expect(rt.machine.build_plate_x).toBeCloseTo(reference.machine.build_plate_x!, 5);
   });
 
+  it('recoater_blade_type survives roundtrip', () => {
+    expect(rt.machine.recoater_blade_type).toBe(reference.machine.recoater_blade_type);
+  });
+
   it('working distance (train 0) survives roundtrip', () => {
     expect(rt.optical_trains[0].scanner.working_distance)
       .toBeCloseTo(reference.optical_trains[0].scanner.working_distance!, 5);

@@ -414,7 +414,10 @@ func writeMachine(g *h5c.Group, ma *Machine) error {
 	if err := ws(g, "Gas_Flow_Direction", strOrEmpty(ma.GasFlowDirection)); err != nil {
 		return err
 	}
-	return ws(g, "Recoat_Direction", strOrEmpty(ma.RecoatDirection))
+	if err := ws(g, "Recoat_Direction", strOrEmpty(ma.RecoatDirection)); err != nil {
+		return err
+	}
+	return ws(g, "Recoater_Blade_Type", strOrEmpty(ma.RecoaterBladeType))
 }
 
 // ---------------------------------------------------------------------------

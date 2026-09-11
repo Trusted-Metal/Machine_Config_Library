@@ -569,6 +569,7 @@ export class Hdf5WriterV1_1 {
       ws(machineGrp, "Build_Plate_Corner_Radius_unit", ma.build_plate_radius_unit ?? "mm");
       ws(machineGrp, "Gas_Flow_Direction", ma.gas_flow_direction);
       ws(machineGrp, "Recoat_Direction", ma.recoat_direction);
+      ws(machineGrp, "Recoater_Blade_Type", ma.recoater_blade_type);
 
       // Optical trains
       const trainsGrp = machineGrp.create_group("Optical_Trains");

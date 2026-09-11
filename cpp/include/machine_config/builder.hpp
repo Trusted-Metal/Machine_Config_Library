@@ -74,6 +74,7 @@ public:
         cfg.machine.build_plate_z_unit = "mm";
         cfg.machine.gas_flow_direction = "Y+";
         cfg.machine.recoat_direction   = "X+";
+        cfg.machine.recoater_blade_type = "Standard";
 
         for (size_t i = 0; i < laser_count; ++i)
             cfg.optical_trains.push_back(mockTrain(i));

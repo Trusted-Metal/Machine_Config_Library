@@ -214,6 +214,7 @@ impl<'a> Hdf5WriterV1_0<'a> {
         ws(grp, "Build_Plate_Corner_Radius_unit", ma.build_plate_radius_unit.as_deref().unwrap_or("mm"))?;
         ws(grp, "Gas_Flow_Direction", ma.gas_flow_direction.as_deref().unwrap_or(""))?;
         ws(grp, "Recoat_Direction", ma.recoat_direction.as_deref().unwrap_or(""))?;
+        ws(grp, "Recoater_Blade_Type", ma.recoater_blade_type.as_deref().unwrap_or(""))?;
         Ok(())
     }
 
@@ -634,6 +635,7 @@ mod tests {
         assert_eq!(orig.machine.build_plate_x_unit, rt.machine.build_plate_x_unit);
         assert_eq!(orig.machine.gas_flow_direction, rt.machine.gas_flow_direction);
         assert_eq!(orig.machine.recoat_direction, rt.machine.recoat_direction);
+        assert_eq!(orig.machine.recoater_blade_type, rt.machine.recoater_blade_type);
     }
 
     #[test]

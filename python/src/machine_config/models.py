@@ -351,6 +351,7 @@ class Machine:
     build_plate: BuildPlate
     gas_flow_direction: Optional[str]
     recoat_direction: Optional[str]
+    recoater_blade_type: Optional[str] = None
 
 
 @dataclass

@@ -263,6 +263,9 @@ function parseMachine(f: h5wasm.File): Machine {
     // REMOVAL (x2): no longer present on-disk in mock v1.1 — always null.
     gas_flow_direction: null,
     recoat_direction: null,
+    // Not part of this mock's manifest; always null here, same as any other
+    // untouched Machine field.
+    recoater_blade_type: null,
   };
 }
 
