@@ -288,6 +288,7 @@ def _config(axis_cfg: str = "3D", include_clearbox: bool = True) -> MachineConfi
             ),
             gas_flow_direction="Y+",
             recoat_direction="X+",
+            recoater_blade_type="Standard",
         ),
         optical_trains=[_train(axis_cfg, include_clearbox)],
     )
@@ -416,6 +417,9 @@ class TestScalarFieldRoundtrip:
 
     def test_machine_recoat_direction(self, scalar_rt: MachineConfig) -> None:
         assert scalar_rt.machine.recoat_direction == "X+"
+
+    def test_machine_recoater_blade_type(self, scalar_rt: MachineConfig) -> None:
+        assert scalar_rt.machine.recoater_blade_type == "Standard"
 
     def test_build_plate_x(self, scalar_rt: MachineConfig) -> None:
         assert scalar_rt.machine.build_plate.x == pytest.approx(250.0)

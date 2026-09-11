@@ -40,6 +40,7 @@ models:
       - { id: build_plate_radius_unit, type: string, nullable: true }
       - { id: gas_flow_direction, type: string, nullable: true }
       - { id: recoat_direction, type: string, nullable: true }
+      - { id: recoater_blade_type, type: string, nullable: true }
 
   AxisConfig:
     extra: true

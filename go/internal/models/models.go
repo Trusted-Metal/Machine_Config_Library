@@ -151,6 +151,7 @@ type Machine struct {
 	BuildPlateRadiusUnit *string  `json:"build_plate_radius_unit"`
 	GasFlowDirection     *string  `json:"gas_flow_direction"`
 	RecoatDirection      *string  `json:"recoat_direction"`
+	RecoaterBladeType    *string  `json:"recoater_blade_type"`
 }
 
 // OpticalTrain holds one optical train's configuration.

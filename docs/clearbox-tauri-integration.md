@@ -85,7 +85,7 @@ redundant `LaserConfig` / `SettingsConfig` types.
 | `video_output` | `train.optional_components.clearbox?.video_output` | |
 | `custom_video_format` | `train.optional_components.clearbox?.custom_video_format` | |
 | `show_console` | `train.optional_components.clearbox?.show_console` | `None` → `false` |
-| `recoater_blade_type` | *(not in library model — keep default `"Standard"`)* | |
+| `recoater_blade_type` | `config.machine.recoater_blade_type` | `None` → `"Standard"` |
 | `st_delay` | *(not in library model — keep default `0.5`)* | |
 | `double_file` | *(not in library model — keep default `false`)* | |
 
@@ -317,7 +317,7 @@ model — keep their existing defaults or derive them from other sources:
 
 - `LaserConfig::enabled` — clearbox-tauri business logic, not in HDF5 schema
 - `LaserConfig::invert_actual_x/y`, `invert_commanded_x/y` — not in schema
-- `SettingsConfig::recoater_blade_type`, `st_delay`, `double_file` — not in schema
+- `SettingsConfig::st_delay`, `double_file` — not in schema
 - `BuildConfig` — legacy group; the library does not parse `/Configuration/build_configuration`
 - `SensorConfig` — not in library model (different HDF5 group)
 - `SettingsConfig::is_3d_system` — derive from `scanner.axis_configuration`

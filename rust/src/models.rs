@@ -447,6 +447,7 @@ pub struct Machine {
     pub build_plate_radius_unit: Option<String>,
     pub gas_flow_direction: Option<String>,
     pub recoat_direction: Option<String>,
+    pub recoater_blade_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -710,6 +711,7 @@ mod tests {
                 build_plate_radius_unit: Some("mm".into()),
                 gas_flow_direction: Some("Y+".into()),
                 recoat_direction: Some("X+".into()),
+                recoater_blade_type: Some("Standard".into()),
             },
             optical_trains: vec![sample_train()],
             opcua: None,

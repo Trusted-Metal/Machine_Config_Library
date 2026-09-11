@@ -71,19 +71,20 @@ func (b *MockConfigBuilder) Build() *MachineConfig {
 
 	machineID := "00000000-0000-0000-0000-000000000001"
 	machine := Machine{
-		ID:              StrPtr(machineID),
-		MachineName:     b.MachineName,
-		Manufacturer:    "MockCo",
-		Model:           "MockMIDI+",
-		SerialNumber:    "MOCK-001",
-		BuildPlateX:     Float64Ptr(b.BuildPlateX),
-		BuildPlateXUnit: StrPtr("mm"),
-		BuildPlateY:     Float64Ptr(b.BuildPlateY),
-		BuildPlateYUnit: StrPtr("mm"),
-		BuildPlateZ:     Float64Ptr(20.0),
-		BuildPlateZUnit: StrPtr("mm"),
-		GasFlowDirection: StrPtr("Y+"),
-		RecoatDirection:  StrPtr("X+"),
+		ID:                StrPtr(machineID),
+		MachineName:       b.MachineName,
+		Manufacturer:      "MockCo",
+		Model:             "MockMIDI+",
+		SerialNumber:      "MOCK-001",
+		BuildPlateX:       Float64Ptr(b.BuildPlateX),
+		BuildPlateXUnit:   StrPtr("mm"),
+		BuildPlateY:       Float64Ptr(b.BuildPlateY),
+		BuildPlateYUnit:   StrPtr("mm"),
+		BuildPlateZ:       Float64Ptr(20.0),
+		BuildPlateZUnit:   StrPtr("mm"),
+		GasFlowDirection:  StrPtr("Y+"),
+		RecoatDirection:   StrPtr("X+"),
+		RecoaterBladeType: StrPtr("Standard"),
 	}
 
 	trains := make([]OpticalTrain, b.NLasers)

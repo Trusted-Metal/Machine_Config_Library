@@ -93,6 +93,7 @@ TEST_CASE("RoundtripAllScalarFields") {
     REQUIRE(rb.machine.build_plate_x.has_value());
     REQUIRE_THAT(*rb.machine.build_plate_x, Catch::Matchers::WithinRel(*orig.machine.build_plate_x));
     REQUIRE(rb.machine.build_plate_x_unit == orig.machine.build_plate_x_unit);
+    REQUIRE(rb.machine.recoater_blade_type == orig.machine.recoater_blade_type);
 
     // trains
     REQUIRE(rb.optical_trains.size() == orig.optical_trains.size());

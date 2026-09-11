@@ -28,7 +28,8 @@
     "build_plate_radius": 125.0,
     "build_plate_radius_unit": "mm",
     "gas_flow_direction": "Y+",
-    "recoat_direction": "X+"
+    "recoat_direction": "X+",
+    "recoater_blade_type": null
   },
   "optical_trains": [
     {

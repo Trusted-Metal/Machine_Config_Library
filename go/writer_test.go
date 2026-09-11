@@ -79,6 +79,9 @@ func TestWriterRoundtripMachineFields(t *testing.T) {
 	if (m.RecoatDirection == nil) != (mo.RecoatDirection == nil) || (mo.RecoatDirection != nil && *m.RecoatDirection != *mo.RecoatDirection) {
 		t.Errorf("recoat_direction: got %v want %v", m.RecoatDirection, mo.RecoatDirection)
 	}
+	if (m.RecoaterBladeType == nil) != (mo.RecoaterBladeType == nil) || (mo.RecoaterBladeType != nil && *m.RecoaterBladeType != *mo.RecoaterBladeType) {
+		t.Errorf("recoater_blade_type: got %v want %v", m.RecoaterBladeType, mo.RecoaterBladeType)
+	}
 }
 
 func TestWriterRoundtripTrainCount(t *testing.T) {

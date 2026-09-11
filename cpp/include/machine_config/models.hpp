@@ -408,6 +408,7 @@ struct Machine {
     std::optional<std::string> build_plate_radius_unit;
     std::optional<std::string> gas_flow_direction;
     std::optional<std::string> recoat_direction;
+    std::optional<std::string> recoater_blade_type;
 };
 
 struct MachineConfigMeta {
@@ -1037,6 +1038,7 @@ inline void to_json(nlohmann::json& j, const Machine& m) {
         {"manufacturer",            m.manufacturer},
         {"model",                   m.model},
         {"recoat_direction",        detail::opt_to_j(m.recoat_direction)},
+        {"recoater_blade_type",     detail::opt_to_j(m.recoater_blade_type)},
         {"serial_number",           m.serial_number},
     };
 }
@@ -1057,6 +1059,7 @@ inline void from_json(const nlohmann::json& j, Machine& m) {
     m.build_plate_radius_unit = detail::j_to_opt<std::string>(j, "build_plate_radius_unit");
     m.gas_flow_direction   = detail::j_to_opt<std::string>(j, "gas_flow_direction");
     m.recoat_direction     = detail::j_to_opt<std::string>(j, "recoat_direction");
+    m.recoater_blade_type  = detail::j_to_opt<std::string>(j, "recoater_blade_type");
 }
 
 // --- MachineConfigMeta ---

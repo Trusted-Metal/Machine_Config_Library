@@ -149,6 +149,7 @@ private:
         ws(grp, "Build_Plate_Corner_Radius_unit",ma.build_plate_radius_unit.value_or("mm"));
         ws(grp, "Gas_Flow_Direction",            ma.gas_flow_direction.value_or(""));
         ws(grp, "Recoat_Direction",              ma.recoat_direction.value_or(""));
+        ws(grp, "Recoater_Blade_Type",           ma.recoater_blade_type.value_or(""));
     }
 
     void writeTrain(HighFive::Group& grp, const OpticalTrain& t) const {

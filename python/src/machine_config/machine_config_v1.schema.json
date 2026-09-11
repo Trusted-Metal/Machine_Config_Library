@@ -40,7 +40,8 @@
         "build_plate_radius":      { "type": ["number", "null"] },
         "build_plate_radius_unit": { "type": ["string", "null"] },
         "gas_flow_direction":      { "type": ["string", "null"] },
-        "recoat_direction":        { "type": ["string", "null"] }
+        "recoat_direction":        { "type": ["string", "null"] },
+        "recoater_blade_type":     { "type": ["string", "null"] }
       }
     },
     "optical_trains": {

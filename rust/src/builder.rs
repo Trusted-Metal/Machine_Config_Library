@@ -81,6 +81,7 @@ impl MockConfigBuilder {
             build_plate_radius_unit: None,
             gas_flow_direction: Some("Y+".to_owned()),
             recoat_direction: Some("X+".to_owned()),
+            recoater_blade_type: Some("Standard".to_owned()),
         };
 
         let optical_trains = (0..self.laser_count)
