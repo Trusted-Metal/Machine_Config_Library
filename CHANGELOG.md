@@ -1,3 +1,8 @@
+## 0.2.0-rc.7 (2026-09-11)
+
+* Merge pull request #20 from Trusted-Metal/SD-1692 ([33d9251](https://github.com/Trusted-Metal/Machine_Config_Library/commit/33d9251)), closes [#20](https://github.com/Trusted-Metal/Machine_Config_Library/issues/20)
+* feat: Added Recoater_Blade_Type as optional attribute across all languages, updated testing ([e221148](https://github.com/Trusted-Metal/Machine_Config_Library/commit/e221148))
+
 ## 0.2.0-rc.6 (2026-09-03)
 
 * Merge pull request #19 from Trusted-Metal/SD-1684 ([6b9d667](https://github.com/Trusted-Metal/Machine_Config_Library/commit/6b9d667)), closes [#19](https://github.com/Trusted-Metal/Machine_Config_Library/issues/19)
