@@ -76,12 +76,25 @@ impl MachineConfigReader {
         Ok(Self { backend })
     }
 
+    /// Parses the file and recomputes `Configuration_Hash` from the content
+    /// just read, comparing it to the stored value to set
+    /// `meta.is_valid`. A mismatch is never an error — the config is always
+    /// returned; see `hash.rs`.
     pub fn parse(&self) -> Result<MachineConfig> {
-        self.backend.parse()
+        Ok(Self::with_validated_hash(self.backend.parse()?))
     }
 
+    /// Like [`Self::parse`], but also loads binary correction-grid data.
+    /// `is_valid` is computed identically either way — the hash itself
+    /// always excludes binary data (see `hash.rs`).
     pub fn parse_with_binary(&self) -> Result<MachineConfig> {
-        self.backend.parse_with_binary()
+        Ok(Self::with_validated_hash(self.backend.parse_with_binary()?))
+    }
+
+    fn with_validated_hash(mut config: MachineConfig) -> MachineConfig {
+        let recomputed = crate::hash::compute_configuration_hash(&config);
+        config.meta.is_valid = Some(recomputed == config.meta.configuration_hash);
+        config
     }
 
     pub fn get_correction_data(&self, train_index: usize) -> Result<CorrectionData> {

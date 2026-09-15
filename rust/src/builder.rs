@@ -62,6 +62,7 @@ impl MockConfigBuilder {
             configuration_hash: "0".repeat(64),
             facility_id: None,
             config_author: None,
+            is_valid: None,
             extra: Default::default(),
         };
 

@@ -3,6 +3,7 @@
 // On-disk group paths and HDF5 attribute names live in the matching adapter.
 
 #include "machine_config/adapters.hpp"
+#include "machine_config/hash.hpp"
 #include "machine_config/models.hpp"
 #include "machine_config/capabilities/v1_0/writer.hpp"
 #include "machine_config/capabilities/v1_1/writer.hpp"
@@ -61,6 +62,11 @@ public:
     MachineConfigWriter(const MachineConfig& cfg, std::string targetVersion)
         : cfg_(cfg), targetVersion_(std::move(targetVersion)) {}
 
+    // Always computes Configuration_Hash fresh from the content actually
+    // being written — a caller-supplied value is never trusted or passed
+    // through, since anything else goes stale the instant any other field
+    // changes. Computed once, up front; no re-read, no patch, no
+    // fallback-on-error (see hash.hpp).
     void write(std::filesystem::path path) const {
         std::string current = normalizeVersion(cfg_.meta.file_version);
         std::string fv = targetVersion_ ? *targetVersion_ : current;
@@ -68,15 +74,11 @@ public:
         // File_Version attribute — if targetVersion_ overrides the adapter
         // choice, the config handed to the adapter must reflect that too,
         // or the file would claim the wrong version on disk. A copy, not a
-        // mutation of the caller's config, and only made when actually
-        // needed (the common case — no override — never pays for it).
-        if (fv == current) {
-            resolveWriter(fv, cfg_, productionWriterRegistry())->write(std::move(path));
-        } else {
-            MachineConfig corrected = cfg_;
-            corrected.meta.file_version = fv;
-            resolveWriter(fv, corrected, productionWriterRegistry())->write(std::move(path));
-        }
+        // mutation of the caller's config.
+        MachineConfig corrected = cfg_;
+        corrected.meta.file_version = fv;
+        corrected.meta.configuration_hash = computeConfigurationHash(corrected);
+        resolveWriter(fv, corrected, productionWriterRegistry())->write(std::move(path));
     }
 
 private:

@@ -5,6 +5,7 @@ use crate::capabilities::errors::CapabilityError;
 use crate::capabilities::generated::SetMode;
 use crate::capabilities::merge::apply_set_mode;
 use crate::capabilities::result::Result;
+use crate::hash::compute_configuration_hash;
 use crate::models::{
     nested_to_array3, ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfig,
     MachineConfigMeta, OpcuaConfig, OpticalTrain, Scanner, ScannerCard,
@@ -357,6 +358,23 @@ impl MachineConfigFileV1_0 {
         Ok(())
     }
 
+    /// Recomputes the configuration hash from the session's *current*
+    /// content and compares it to the session's current
+    /// `meta.configuration_hash` — fresh, every call. Deliberately live, not
+    /// cached at `open()` time: this facade is a mutable session
+    /// (`set_meta`/`set_scanner`/etc. all mutate `self.config` in place), so
+    /// a value computed once at `open()` would silently go stale the
+    /// instant any `set_*` call ran. See
+    /// CAPABILITIES_HASH_INTEGRATION_PLAN.md's live-method design — in
+    /// particular, this reads `false` for the entire span between an edit
+    /// and the next `save()`, which is expected (an unsaved edit hasn't
+    /// been hashed yet), not a sign of corruption. Never errors: a mismatch
+    /// is informational, matching CONFIGURATION_HASH_PLAN.md's non-fatal
+    /// design throughout.
+    pub fn is_valid(&self) -> bool {
+        compute_configuration_hash(&self.config) == self.config.meta.configuration_hash
+    }
+
     pub fn save(&mut self, path: Option<&Path>) -> Result<(), CapabilityError> {
         self.assert_open()?;
         let out = path
@@ -365,6 +383,12 @@ impl MachineConfigFileV1_0 {
             .ok_or_else(|| {
                 CapabilityError::validation_error("save() requires a path for create()-d files")
             })?;
+        // Compute-and-stamp on the session's own config first (not just
+        // whatever MachineConfigWriter computes internally on its own
+        // clone) so is_valid() reads true immediately after save(), without
+        // requiring a fresh open() — see
+        // CAPABILITIES_HASH_INTEGRATION_PLAN.md's live-method design.
+        self.config.meta.configuration_hash = compute_configuration_hash(&self.config);
         MachineConfigWriter::new(&self.config)
             .write(&out)
             .map_err(|e| CapabilityError::IoError(e.to_string()))?;
@@ -487,6 +511,9 @@ impl crate::capabilities::generated::MachineConfigFile for MachineConfigFileV1_0
     }
     fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError> {
         self.set_opcua(model, mode)
+    }
+    fn is_valid(&self) -> bool {
+        self.is_valid()
     }
     fn save(&mut self, path: Option<&Path>) -> Result<(), CapabilityError> {
         self.save(path)

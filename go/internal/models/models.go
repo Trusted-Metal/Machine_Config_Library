@@ -116,8 +116,16 @@ type MachineConfigMeta struct {
 	// matching Python's/Rust's/Node's behavior for the same fixture fields.
 	FacilityID *string `json:"facility_id,omitempty"`
 	// TEST FIXTURE for the mock v1.1 adapter — see FacilityID above.
-	ConfigAuthor *string        `json:"config_author,omitempty"`
-	Extra        map[string]any `json:"extra"`
+	ConfigAuthor *string `json:"config_author,omitempty"`
+	// IsValid is reader-computed, in-memory only: non-nil once a
+	// MachineConfigReader has recomputed the configuration hash and compared
+	// it to the on-disk value; nil until then. Never set by a writer or by
+	// MockConfigBuilder. `json:"-"` unconditionally excludes it from
+	// serialization — never written to HDF5, never part of the interop
+	// contract. A mismatch is never an error: the file remains fully
+	// readable either way (see hash.go).
+	IsValid *bool          `json:"-"`
+	Extra   map[string]any `json:"extra"`
 }
 
 // BuildPlate holds build-plate dimensions from the Machine/Build_Plate/ HDF5 subgroup.

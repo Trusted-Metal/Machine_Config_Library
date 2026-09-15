@@ -61,5 +61,4 @@ and `results.md` for verbatim output.
 ## Merge gate
 
 SD-1684 is ready to merge when all cells in the matrix show ✅ and the C++ static
-tarball is verified. See [VALIDATION_PLAN.md](../../VALIDATION_PLAN.md) §2 for the
-full gate criteria.
+tarball is verified.

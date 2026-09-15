@@ -5,6 +5,7 @@ On-disk group paths and HDF5 attribute names live in the matching adapter
 """
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -14,6 +15,7 @@ from machine_config.capabilities.file_version import (
 )
 from machine_config.capabilities.v1_0.hdf5 import Hdf5AdapterV1_0, config_from_dict
 from machine_config.capabilities.v1_1.hdf5 import Hdf5AdapterV1_1
+from machine_config.hash import compute_configuration_hash
 from machine_config.models import MachineConfig
 
 
@@ -45,6 +47,20 @@ class MachineConfigReader:
             raise UnsupportedFileVersion(version)
         self._backend = adapter_cls(self.path)
         self.file_version = version
+
+    def parse(self) -> MachineConfig:
+        """Parse the file, then recompute the configuration hash and compare it
+        against the on-disk value, setting ``meta.is_valid`` accordingly.
+
+        A mismatch is never an error — the returned config is always fully
+        populated and usable either way (see :mod:`machine_config.hash`).
+        """
+        config = self._backend.parse()
+        recomputed = compute_configuration_hash(config)
+        is_valid = recomputed == config.meta.configuration_hash
+        return dataclasses.replace(
+            config, meta=dataclasses.replace(config.meta, is_valid=is_valid)
+        )
 
     def __getattr__(self, name: str):
         return getattr(self._backend, name)

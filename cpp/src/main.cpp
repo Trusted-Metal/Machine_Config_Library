@@ -51,6 +51,14 @@ int main(int argc, char* argv[]) {
     chash_cmd->add_option("--train", chash_train,  "Train index (default: 0)");
     chash_cmd->add_flag("--inverse", chash_inverse, "Hash the inverse correction grid");
 
+    // configuration-hash <path> [--quiet]
+    auto* confhash_cmd = app.add_subcommand(
+        "configuration-hash", "Recompute the configuration hash and compare it to the stored value");
+    std::string confhash_path;
+    bool        confhash_quiet = false;
+    confhash_cmd->add_option("path", confhash_path, "Path to .h5 file")->required();
+    confhash_cmd->add_flag("--quiet", confhash_quiet, "Print only the bare recomputed hex digest");
+
     CLI11_PARSE(app, argc, argv);
 
     try {
@@ -73,6 +81,20 @@ int main(int argc, char* argv[]) {
                 : reader.getCorrectionData(static_cast<size_t>(chash_train));
             const auto* p = reinterpret_cast<const uint8_t*>(cd.data.data());
             std::cout << picosha2::hash256_hex_string(p, p + cd.data.size() * sizeof(double)) << "\n";
+        } else if (app.got_subcommand(confhash_cmd)) {
+            machine_config::MachineConfigReader reader{confhash_path};
+            auto cfg = reader.parse();
+            std::string stored = cfg.meta.configuration_hash;
+            std::string recomputed = machine_config::computeConfigurationHash(cfg);
+            bool valid = cfg.meta.is_valid.has_value() && *cfg.meta.is_valid;
+            if (confhash_quiet) {
+                std::cout << recomputed << "\n";
+            } else {
+                std::cout << "stored: " << stored << "\n";
+                std::cout << "recomputed: " << recomputed << "\n";
+                std::cout << "valid: " << (valid ? "true" : "false") << "\n";
+                if (!valid) return 1;
+            }
         }
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";

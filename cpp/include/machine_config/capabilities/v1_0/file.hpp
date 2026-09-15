@@ -4,6 +4,7 @@
 #include "machine_config/capabilities/merge.hpp"
 #include "machine_config/capabilities/result.hpp"
 #include "machine_config/capabilities/v1_0/hdf5.hpp"
+#include "machine_config/hash.hpp"
 #include "machine_config/writer.hpp"
 
 #include <filesystem>
@@ -257,6 +258,22 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
     return Result<void>::Ok();
   }
 
+  // Recomputes the configuration hash from the session's *current* content
+  // and compares it to the session's current meta.configuration_hash --
+  // fresh, every call. Deliberately live, not cached at open() time: this
+  // facade is a mutable session (setMeta/setScanner/etc. all mutate
+  // config_ in place), so a value computed once at open() would silently
+  // go stale the instant any set* call ran. See
+  // CAPABILITIES_HASH_INTEGRATION_PLAN.md's live-method design -- in
+  // particular, this reads false for the entire span between an edit and
+  // the next save(), which is expected (an unsaved edit hasn't been hashed
+  // yet), not a sign of corruption. Never throws: a mismatch is
+  // informational, matching CONFIGURATION_HASH_PLAN.md's non-fatal design
+  // throughout.
+  bool isValid() const override {
+    return computeConfigurationHash(config_) == config_.meta.configuration_hash;
+  }
+
   Result<void> save(const std::string* path = nullptr) override {
     assertOpen();
     try {
@@ -265,6 +282,12 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
         return Result<void>::Err("ValidationError",
                                  "save() requires a path for create()-d files");
       }
+      // Compute-and-stamp on the session's own config first (not just
+      // whatever MachineConfigWriter computes internally on its own copy)
+      // so isValid() reads true immediately after save(), without
+      // requiring a fresh open() -- see
+      // CAPABILITIES_HASH_INTEGRATION_PLAN.md's live-method design.
+      config_.meta.configuration_hash = computeConfigurationHash(config_);
       MachineConfigWriter{config_}.write(out.string());
       path_ = out;
       return Result<void>::Ok();

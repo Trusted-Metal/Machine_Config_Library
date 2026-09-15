@@ -69,6 +69,19 @@ enum Command {
         /// Path to write the copied .h5 file (created or overwritten).
         output: PathBuf,
     },
+    /// Recompute the configuration hash and compare it to the stored value.
+    ///
+    /// Never errors on a mismatch (the file is always fully readable) unless
+    /// `--quiet` is *not* passed, in which case a mismatch exits 1 — a
+    /// CLI-only convenience for scripting; the library API itself never
+    /// raises.
+    ConfigurationHash {
+        /// Path to the .h5 file.
+        path: PathBuf,
+        /// Print only the bare recomputed hex digest (for scripting).
+        #[arg(long)]
+        quiet: bool,
+    },
 }
 
 fn main() {
@@ -111,6 +124,23 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let reader = MachineConfigReader::open(&input)?;
             let config = reader.parse_with_binary()?;
             MachineConfigWriter::new(&config).write(&output)?;
+        }
+        Command::ConfigurationHash { path, quiet } => {
+            let reader = MachineConfigReader::open(&path)?;
+            let config = reader.parse()?;
+            let stored = config.meta.configuration_hash.clone();
+            let recomputed = machine_config::hash::compute_configuration_hash(&config);
+            let valid = config.meta.is_valid.unwrap_or(false);
+            if quiet {
+                println!("{recomputed}");
+            } else {
+                println!("stored: {stored}");
+                println!("recomputed: {recomputed}");
+                println!("valid: {valid}");
+                if !valid {
+                    process::exit(1);
+                }
+            }
         }
     }
     Ok(())

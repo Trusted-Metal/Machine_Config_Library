@@ -60,11 +60,7 @@ func (w *MachineConfigWriter) Write(cfg *MachineConfig, path string) error {
 	if fv == "" {
 		fv = "1.0"
 	}
-	adapter, err := ResolveWriter(fv, productionWriterRegistry)
-	if err != nil {
-		return err
-	}
-	return adapter.Write(cfg, path)
+	return w.writeResolved(cfg, path, fv)
 }
 
 // WriteAs is like Write, but writes as targetVersion regardless of
@@ -77,24 +73,26 @@ func (w *MachineConfigWriter) WriteAs(cfg *MachineConfig, path string, targetVer
 	if fv == "" {
 		fv = "1.0"
 	}
+	return w.writeResolved(cfg, path, fv)
+}
+
+// writeResolved always builds a copy of cfg (never mutates the caller's
+// value): sets Meta.FileVersion to fv, then computes and stamps
+// Configuration_Hash fresh from that copy's content — a caller-supplied
+// value is never trusted or passed through, since anything else goes stale
+// the instant any other field changes. Computed once, up front; no
+// re-read, no patch, no fallback-on-error (see hash.go).
+func (w *MachineConfigWriter) writeResolved(cfg *MachineConfig, path string, fv string) error {
 	adapter, err := ResolveWriter(fv, productionWriterRegistry)
 	if err != nil {
 		return err
 	}
-	current := strings.TrimSpace(cfg.Meta.FileVersion)
-	if current == "" {
-		current = "1.0"
-	}
-	if fv == current {
-		return adapter.Write(cfg, path)
-	}
-	// Every adapter stamps cfg.Meta.FileVersion verbatim as the on-disk
-	// File_Version attribute — if targetVersion overrides the adapter
-	// choice, the config handed to the adapter must reflect that too, or
-	// the file would claim the wrong version on disk. A copy, not a
-	// mutation of the caller's cfg: OpticalTrains/Machine/Opcua are shared
-	// by reference (unmodified), only the copy's Meta.FileVersion differs.
 	corrected := *cfg
 	corrected.Meta.FileVersion = fv
+	hash, err := ComputeConfigurationHash(&corrected)
+	if err != nil {
+		return err
+	}
+	corrected.Meta.ConfigurationHash = hash
 	return adapter.Write(&corrected, path)
 }

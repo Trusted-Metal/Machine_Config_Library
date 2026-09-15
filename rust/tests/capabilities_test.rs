@@ -297,3 +297,129 @@ fn create_set_meta_save_reopen() {
     assert_eq!(again.file_version(), "1.0");
     assert_eq!(again.get_meta().unwrap().machine_name, "CreatedMachine");
 }
+
+// ---------------------------------------------------------------------------
+// is_valid() — CAPABILITIES_HASH_INTEGRATION_PLAN.md
+// ---------------------------------------------------------------------------
+
+static REFERENCE_V1_1: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../fixtures/reference_config_v1_1.h5"
+);
+
+#[test]
+fn is_valid_false_for_externally_authored_reference_fixture() {
+    // Permanent regression guard, mirroring CONFIGURATION_HASH_PLAN.md's own
+    // equivalent at the MachineConfigReader layer: reference_config.h5 was
+    // authored externally, so MCF's recomputed hash will never match its
+    // stored value. Expected and correct, not a defect.
+    let file = open_machine_config(REFERENCE).unwrap();
+    assert!(!file.is_valid());
+}
+
+#[test]
+fn is_valid_true_for_self_written_file() {
+    let mut file = create_machine_config("1.0").unwrap();
+    let tmp = NamedTempFile::new().unwrap();
+    file.save(Some(tmp.path())).unwrap();
+    assert!(file.is_valid());
+
+    let reopened = open_machine_config(tmp.path()).unwrap();
+    assert!(reopened.is_valid());
+}
+
+#[test]
+fn is_valid_flips_live_across_an_unsaved_edit_then_a_save() {
+    // The test this whole live-method design exists to satisfy: a cached,
+    // computed-once-at-open() value could never distinguish these states.
+    let mut file = create_machine_config("1.0").unwrap();
+    let tmp = NamedTempFile::new().unwrap();
+    file.save(Some(tmp.path())).unwrap();
+    assert!(file.is_valid(), "freshly saved content must be valid");
+
+    let stored_before = file.get_meta().unwrap().configuration_hash;
+    let mut scanner = file.get_scanner(0).unwrap();
+    scanner.working_distance = Some(999.5);
+    file.set_scanner(0, scanner, SetMode::Merge).unwrap();
+
+    // Live-ness: an unsaved edit must be reflected immediately, with no
+    // save()/reopen in between. This is expected, not a corruption signal
+    // (see CAPABILITIES_HASH_INTEGRATION_PLAN.md's documented caveat).
+    assert!(
+        !file.is_valid(),
+        "an unsaved edit must read as not-yet-hashed, live, without saving"
+    );
+
+    // The save→live round trip: is_valid() must flip back to true from the
+    // *same session*, without reopening — this is what catches a save()
+    // that forgets to update its own session state, which a test that only
+    // reopens fresh could never distinguish from a save() that does it
+    // correctly.
+    file.save(Some(tmp.path())).unwrap();
+    assert!(
+        file.is_valid(),
+        "save() must update session state so is_valid() is true without reopening"
+    );
+    assert_ne!(
+        file.get_meta().unwrap().configuration_hash,
+        stored_before,
+        "the edit must have produced a different hash"
+    );
+
+    // And a completely fresh session on the same path agrees.
+    let reopened = open_machine_config(tmp.path()).unwrap();
+    assert!(reopened.is_valid());
+    assert_eq!(
+        reopened.get_meta().unwrap().configuration_hash,
+        file.get_meta().unwrap().configuration_hash
+    );
+}
+
+#[test]
+fn v1_0_save_still_routes_through_real_hash_computation() {
+    // Regression guard for the one language/version combination that was
+    // already correct before this plan (v1.0's save() already used
+    // MachineConfigWriter) — a future refactor must not silently
+    // reintroduce a bypass back to a raw per-version writer call.
+    let mut file = open_machine_config(REFERENCE).unwrap();
+    let original_stored = file.get_meta().unwrap().configuration_hash;
+    let tmp = NamedTempFile::new().unwrap();
+    file.save(Some(tmp.path())).unwrap();
+
+    let rt = open_machine_config(tmp.path()).unwrap();
+    let rt_hash = rt.get_meta().unwrap().configuration_hash;
+    assert_eq!(rt_hash.len(), 64);
+    assert_ne!(rt_hash, original_stored);
+    assert!(rt.is_valid());
+}
+
+#[test]
+fn v1_1_save_computes_real_hash_and_updates_session() {
+    // Targets the specific bug this plan found: v1.1's save() bypassed
+    // MachineConfigWriter entirely (wrote via Hdf5WriterV1_1 directly),
+    // silently passing through whatever configuration_hash was already in
+    // memory rather than a fresh one.
+    let mut file = open_machine_config(REFERENCE_V1_1).unwrap();
+    assert_eq!(file.file_version(), "1.1");
+    let original_stored = file.get_meta().unwrap().configuration_hash;
+
+    let mut scanner = file.get_scanner(0).unwrap();
+    scanner.working_distance = Some(555.0);
+    file.set_scanner(0, scanner, SetMode::Merge).unwrap();
+    assert!(!file.is_valid(), "unsaved edit must read false, live");
+
+    let tmp = NamedTempFile::new().unwrap();
+    file.save(Some(tmp.path())).unwrap();
+
+    // Live, no reopen:
+    assert!(file.is_valid());
+    let saved_hash = file.get_meta().unwrap().configuration_hash;
+    assert_eq!(saved_hash.len(), 64);
+    assert_ne!(saved_hash, original_stored);
+
+    // Fresh session on the written file agrees:
+    let reopened = open_machine_config(tmp.path()).unwrap();
+    assert_eq!(reopened.file_version(), "1.1");
+    assert!(reopened.is_valid());
+    assert_eq!(reopened.get_meta().unwrap().configuration_hash, saved_hash);
+}

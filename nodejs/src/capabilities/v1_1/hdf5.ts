@@ -199,12 +199,16 @@ const KNOWN_TRIGGER = new Set([
 /**
  * `JSON.stringify` replacer: drops Scanner's four `invert_*` keys when their
  * value is exactly `false` — same "omit unless true" business rule applied
- * throughout this project.
+ * throughout this project. Also unconditionally drops `is_valid`
+ * (`MachineConfigMeta`) — reader-computed, in-memory only, never part of the
+ * interop contract; there's no separate dict-builder layer in this language
+ * to simply not populate it, so it must be actively stripped here instead.
  */
 const INVERT_FLAG_KEYS = new Set([
   "invert_actual_x", "invert_actual_y", "invert_commanded_x", "invert_commanded_y",
 ]);
 function omitFalseInvertFlags(key: string, value: unknown): unknown {
+  if (key === "is_valid") return undefined;
   if (INVERT_FLAG_KEYS.has(key) && value === false) return undefined;
   return value;
 }

@@ -18,6 +18,7 @@ import { MachineConfigWriter } from '../src/writer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(__dirname, '..', '..', 'fixtures', 'reference_config.h5');
+const REFERENCE_V1_1 = join(__dirname, '..', '..', 'fixtures', 'reference_config_v1_1.h5');
 const FIXTURE_OPCUA = join(
   __dirname,
   '..',
@@ -376,6 +377,155 @@ describe('capability facade (File_Version 1.0)', () => {
       expect(again.value.fileVersion()).toBe('1.0');
       expect(again.value.meta().getModel().machine_name).toBe('CreatedMachine');
       again.value.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isValid() -- CAPABILITIES_HASH_INTEGRATION_PLAN.md
+// ---------------------------------------------------------------------------
+
+describe('isValid()', () => {
+  it('is false for the externally-authored reference fixture', async () => {
+    // Permanent regression guard, mirroring CONFIGURATION_HASH_PLAN.md's own
+    // equivalent at the MachineConfigReader layer: reference_config.h5 was
+    // authored externally, so MCF's recomputed hash will never match its
+    // stored value. Expected and correct, not a defect.
+    const opened = await openMachineConfig(FIXTURE);
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    expect(opened.value.isValid()).toBe(false);
+    opened.value.close();
+  });
+
+  it('is true for a self-written file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcl-cap-'));
+    const out = join(dir, 'created.h5');
+    try {
+      const created = createMachineConfig('1.0');
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      const file = created.value;
+      expect(isOk(await file.save(out))).toBe(true);
+      expect(file.isValid()).toBe(true);
+      file.close();
+
+      const reopened = await openMachineConfig(out);
+      expect(reopened.ok).toBe(true);
+      if (!reopened.ok) return;
+      expect(reopened.value.isValid()).toBe(true);
+      reopened.value.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('flips live across an unsaved edit, then back after save, without reopening', async () => {
+    // The test this whole live-method design exists to satisfy: a cached,
+    // computed-once-at-open() value could never distinguish these states.
+    const dir = mkdtempSync(join(tmpdir(), 'mcl-cap-'));
+    const out = join(dir, 'created.h5');
+    try {
+      const created = createMachineConfig('1.0');
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      const file = created.value;
+      expect(isOk(await file.save(out))).toBe(true);
+      expect(file.isValid()).toBe(true);
+
+      const storedBefore = file.meta().getModel().configuration_hash;
+      const train = file.opticalTrain(0);
+      expect(train.ok).toBe(true);
+      if (!train.ok) return;
+      const scanner = train.value.getScanner();
+      await train.value.setScanner({ ...scanner, working_distance: 999.5 }, SetMode.Merge);
+
+      // Live-ness: an unsaved edit must be reflected immediately, with no
+      // save()/reopen in between. Expected, not a corruption signal (see
+      // CAPABILITIES_HASH_INTEGRATION_PLAN.md's documented caveat).
+      expect(file.isValid()).toBe(false);
+
+      // The save->live round trip: isValid() must flip back to true from
+      // the *same session*, without reopening.
+      expect(isOk(await file.save(out))).toBe(true);
+      expect(file.isValid()).toBe(true);
+      const storedAfter = file.meta().getModel().configuration_hash;
+      expect(storedAfter).not.toBe(storedBefore);
+      file.close();
+
+      // And a completely fresh session on the same path agrees.
+      const reopened = await openMachineConfig(out);
+      expect(reopened.ok).toBe(true);
+      if (!reopened.ok) return;
+      expect(reopened.value.isValid()).toBe(true);
+      expect(reopened.value.meta().getModel().configuration_hash).toBe(storedAfter);
+      reopened.value.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('v1.0 save() still routes through real hash computation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcl-cap-'));
+    const out = join(dir, 'roundtrip.h5');
+    try {
+      const opened = await openMachineConfig(FIXTURE);
+      expect(opened.ok).toBe(true);
+      if (!opened.ok) return;
+      const originalStored = opened.value.meta().getModel().configuration_hash;
+      expect(isOk(await opened.value.save(out))).toBe(true);
+      opened.value.close();
+
+      const rt = await openMachineConfig(out);
+      expect(rt.ok).toBe(true);
+      if (!rt.ok) return;
+      const rtHash = rt.value.meta().getModel().configuration_hash;
+      expect(rtHash).toHaveLength(64);
+      expect(rtHash).not.toBe(originalStored);
+      expect(rt.value.isValid()).toBe(true);
+      rt.value.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('v1.1 save() computes a real hash and updates session state', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcl-cap-'));
+    const out = join(dir, 'v1_1_roundtrip.h5');
+    try {
+      const opened = await openMachineConfig(REFERENCE_V1_1);
+      expect(opened.ok).toBe(true);
+      if (!opened.ok) return;
+      const file = opened.value;
+      expect(file.fileVersion()).toBe('1.1');
+      const originalStored = file.meta().getModel().configuration_hash;
+
+      const train = file.opticalTrain(0);
+      expect(train.ok).toBe(true);
+      if (!train.ok) return;
+      const scanner = train.value.getScanner();
+      await train.value.setScanner({ ...scanner, working_distance: 555.0 }, SetMode.Merge);
+      expect(file.isValid()).toBe(false);
+
+      expect(isOk(await file.save(out))).toBe(true);
+
+      // Live, no reopen:
+      expect(file.isValid()).toBe(true);
+      const savedHash = file.meta().getModel().configuration_hash;
+      expect(savedHash).toHaveLength(64);
+      expect(savedHash).not.toBe(originalStored);
+      file.close();
+
+      // Fresh session on the written file agrees:
+      const reopened = await openMachineConfig(out);
+      expect(reopened.ok).toBe(true);
+      if (!reopened.ok) return;
+      expect(reopened.value.fileVersion()).toBe('1.1');
+      expect(reopened.value.isValid()).toBe(true);
+      expect(reopened.value.meta().getModel().configuration_hash).toBe(savedHash);
+      reopened.value.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

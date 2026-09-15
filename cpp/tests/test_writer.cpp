@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "machine_config/builder.hpp"
 #include "machine_config/reader.hpp"
 #include "machine_config/writer.hpp"
 
@@ -83,7 +84,14 @@ TEST_CASE("RoundtripAllScalarFields") {
 
     // meta
     REQUIRE(rb.meta.machine_name       == orig.meta.machine_name);
-    REQUIRE(rb.meta.configuration_hash == orig.meta.configuration_hash);
+    // REF (reference_config.h5) is externally-authored, so its own stored
+    // hash is expected to be invalid — but once *this* writer produces a
+    // file, that file's stored hash must be real (64 hex chars, not a
+    // passthrough of the input) and must read back valid.
+    REQUIRE(rb.meta.configuration_hash.size() == 64);
+    REQUIRE(rb.meta.configuration_hash != orig.meta.configuration_hash);
+    REQUIRE(rb.meta.is_valid.has_value());
+    REQUIRE(*rb.meta.is_valid == true);
     REQUIRE(rb.meta.file_version       == orig.meta.file_version);
     REQUIRE(rb.meta.manufacturer       == orig.meta.manufacturer);
 
@@ -566,5 +574,41 @@ TEST_CASE("WriterRejectsUnknownFileVersion") {
     } catch (const std::runtime_error& e) {
         REQUIRE(std::string(e.what()).find("2.0") != std::string::npos);
     }
+    std::filesystem::remove(out);
+}
+
+// ---------------------------------------------------------------------------
+// Prerequisite fix (CONFIGURATION_HASH_PLAN.md): writers must no longer
+// materialize a hardcoded default (e.g. "mm") for an unset *_unit field —
+// that default was never real data, just the reader's own Rule-8 locked
+// constant written early for no benefit, and it broke pre-write/post-write
+// hash agreement. One representative field per affected struct, mirroring
+// the other languages' equivalent test's shape exactly.
+// ---------------------------------------------------------------------------
+TEST_CASE("UnsetUnitFieldsRoundTripAsNulloptNotADefault") {
+    MockConfigBuilder b;
+    b.laser_count = 1;
+    auto cfg = b.build();
+
+    cfg.machine.build_plate_radius_unit = std::nullopt;
+    for (auto& t : cfg.optical_trains) {
+        t.major_axis_angle_unit = std::nullopt;
+        t.scanner.working_distance_unit = std::nullopt;
+        t.light_source.wavelength_unit = std::nullopt;
+        t.collimator.focal_length_unit = std::nullopt;
+        t.scanner_card.sample_period_unit = std::nullopt;
+    }
+
+    auto out = tmpPath("unset_units");
+    MachineConfigWriter{cfg}.write(out);
+    auto rt = MachineConfigReader{out}.parse();
+
+    REQUIRE_FALSE(rt.machine.build_plate_radius_unit.has_value());
+    REQUIRE_FALSE(rt.optical_trains[0].major_axis_angle_unit.has_value());
+    REQUIRE_FALSE(rt.optical_trains[0].scanner.working_distance_unit.has_value());
+    REQUIRE_FALSE(rt.optical_trains[0].light_source.wavelength_unit.has_value());
+    REQUIRE_FALSE(rt.optical_trains[0].collimator.focal_length_unit.has_value());
+    REQUIRE_FALSE(rt.optical_trains[0].scanner_card.sample_period_unit.has_value());
+
     std::filesystem::remove(out);
 }

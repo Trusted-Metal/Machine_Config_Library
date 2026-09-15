@@ -458,6 +458,7 @@ impl Hdf5AdapterV1_0 {
             configuration_hash: read_required_str(f, "Configuration_Hash")?,
             facility_id: None,
             config_author: None,
+            is_valid: None,
             extra: collect_extra(f, KNOWN_ROOT_KEYS)?,
         };
 

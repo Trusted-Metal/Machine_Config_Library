@@ -8,14 +8,15 @@ use crate::capabilities::errors::CapabilityError;
 use crate::capabilities::generated::SetMode;
 use crate::capabilities::merge::apply_set_mode;
 use crate::capabilities::result::Result;
+use crate::hash::compute_configuration_hash;
 use crate::models::{
     nested_to_array3, ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfig,
     MachineConfigMeta, OpcuaConfig, OpticalTrain, Scanner, ScannerCard,
 };
+use crate::writer::MachineConfigWriter;
 use std::path::{Path, PathBuf};
 
 use super::hdf5::Hdf5AdapterV1_1;
-use super::writer::Hdf5WriterV1_1;
 
 pub struct MachineConfigFileV1_1 {
     config: MachineConfig,
@@ -320,6 +321,23 @@ impl MachineConfigFileV1_1 {
         Ok(())
     }
 
+    /// Recomputes the configuration hash from the session's *current*
+    /// content and compares it to the session's current
+    /// `meta.configuration_hash` — fresh, every call. Deliberately live, not
+    /// cached at `open()` time: this facade is a mutable session
+    /// (`set_meta`/`set_scanner`/etc. all mutate `self.config` in place), so
+    /// a value computed once at `open()` would silently go stale the
+    /// instant any `set_*` call ran. See
+    /// CAPABILITIES_HASH_INTEGRATION_PLAN.md's live-method design — in
+    /// particular, this reads `false` for the entire span between an edit
+    /// and the next `save()`, which is expected (an unsaved edit hasn't
+    /// been hashed yet), not a sign of corruption. Never errors: a mismatch
+    /// is informational, matching CONFIGURATION_HASH_PLAN.md's non-fatal
+    /// design throughout.
+    pub fn is_valid(&self) -> bool {
+        compute_configuration_hash(&self.config) == self.config.meta.configuration_hash
+    }
+
     pub fn save(&mut self, path: Option<&Path>) -> Result<(), CapabilityError> {
         self.assert_open()?;
         let out = path
@@ -328,7 +346,17 @@ impl MachineConfigFileV1_1 {
             .ok_or_else(|| {
                 CapabilityError::validation_error("save() requires a path for create()-d files")
             })?;
-        Hdf5WriterV1_1::new(&self.config)
+        // Compute-and-stamp on the session's own config first (not just
+        // whatever gets written to `out`) so is_valid() reads true
+        // immediately after save(), without requiring a fresh open() — see
+        // CAPABILITIES_HASH_INTEGRATION_PLAN.md's live-method design. Routes
+        // through the version-agnostic MachineConfigWriter (not
+        // Hdf5WriterV1_1 directly) so the write path always computes a
+        // fresh hash, matching v1_0/file.rs's save() — MachineConfigWriter
+        // is a shared, version-dispatching module, not v1_0-specific, so
+        // this doesn't violate this file's v1_0-independence.
+        self.config.meta.configuration_hash = compute_configuration_hash(&self.config);
+        MachineConfigWriter::new(&self.config)
             .write(&out)
             .map_err(|e| CapabilityError::IoError(e.to_string()))?;
         self.path = Some(out);
@@ -436,6 +464,9 @@ impl crate::capabilities::generated::MachineConfigFile for MachineConfigFileV1_1
     }
     fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError> {
         self.set_opcua(model, mode)
+    }
+    fn is_valid(&self) -> bool {
+        self.is_valid()
     }
     fn save(&mut self, path: Option<&Path>) -> Result<(), CapabilityError> {
         self.save(path)

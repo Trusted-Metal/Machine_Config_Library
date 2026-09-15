@@ -357,11 +357,18 @@ func TestSaveRoundTrip(t *testing.T) {
 		if meta2.MachineName != origName {
 			t.Errorf("machine_name: got %q want %q", meta2.MachineName, origName)
 		}
+		// reference_config.h5 is externally-authored, so its own stored hash
+		// is expected to be invalid -- but once *this* Save() produces a
+		// file, that file's stored hash must be real (64 hex chars, not a
+		// passthrough of the input) and must read back valid.
 		if len(meta2.ConfigurationHash) != 64 {
-			t.Errorf("configuration_hash len %d", len(meta2.ConfigurationHash))
+			t.Errorf("configuration_hash len %d, want 64", len(meta2.ConfigurationHash))
 		}
-		if meta2.ConfigurationHash != origHash {
-			t.Errorf("configuration_hash mismatch")
+		if meta2.ConfigurationHash == origHash {
+			t.Errorf("configuration_hash should differ from the externally-authored original, got same value")
+		}
+		if !f2.IsValid() {
+			t.Errorf("IsValid() = false, want true for a file this Save() just wrote")
 		}
 
 		sc2, err := f2.GetScanner(0)
@@ -625,6 +632,7 @@ func (fakeFile) GetCorrectionData(int) (*machineconfig.CorrectionData, *capabili
 func (fakeFile) GetInverseCorrectionData(int) (*machineconfig.CorrectionData, *capabilities.Error) {
 	return nil, nil
 }
+func (fakeFile) IsValid() bool                   { return false }
 func (fakeFile) Save(string) *capabilities.Error { return nil }
 func (fakeFile) Close()                          {}
 
@@ -676,5 +684,192 @@ func TestSupportedFileVersionsReflectsRegistry(t *testing.T) {
 	want := []string{"1.0", "1.1"}
 	if !reflect.DeepEqual(versions, want) {
 		t.Fatalf("expected %v, got %v", want, versions)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IsValid() -- CAPABILITIES_HASH_INTEGRATION_PLAN.md
+// ---------------------------------------------------------------------------
+
+func TestIsValidFalseForExternallyAuthoredReferenceFixture(t *testing.T) {
+	// Permanent regression guard, mirroring CONFIGURATION_HASH_PLAN.md's own
+	// equivalent at the MachineConfigReader layer: reference_config.h5 was
+	// authored externally, so MCF's recomputed hash will never match its
+	// stored value. Expected and correct, not a defect.
+	path := filepath.Join(fixturesDir(t), "reference_config.h5")
+	f, err := capabilities.OpenMachineConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if f.IsValid() {
+		t.Error("IsValid() = true, want false for an externally-authored fixture")
+	}
+}
+
+func TestIsValidTrueForSelfWrittenFile(t *testing.T) {
+	f, err := capabilities.CreateMachineConfig("1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "created.h5")
+	if err := f.Save(out); err != nil {
+		t.Fatal(err)
+	}
+	if !f.IsValid() {
+		t.Error("IsValid() = false, want true immediately after Save()")
+	}
+	f.Close()
+
+	reopened, err := capabilities.OpenMachineConfig(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if !reopened.IsValid() {
+		t.Error("IsValid() = false, want true for a freshly reopened self-written file")
+	}
+}
+
+func TestIsValidFlipsLiveAcrossAnUnsavedEditThenASave(t *testing.T) {
+	// The test this whole live-method design exists to satisfy: a cached,
+	// computed-once-at-Open() value could never distinguish these states.
+	f, err := capabilities.CreateMachineConfig("1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "created.h5")
+	if err := f.Save(out); err != nil {
+		t.Fatal(err)
+	}
+	if !f.IsValid() {
+		t.Fatal("freshly saved content must be valid")
+	}
+
+	meta, err := f.GetMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedBefore := meta.ConfigurationHash
+
+	sc, err := f.GetScanner(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.WorkingDistance = machineconfig.Float64Ptr(999.5)
+	if err := f.SetScanner(0, sc, capabilities.Merge); err != nil {
+		t.Fatal(err)
+	}
+
+	// Live-ness: an unsaved edit must be reflected immediately, with no
+	// Save()/reopen in between. This is expected, not a corruption signal
+	// (see CAPABILITIES_HASH_INTEGRATION_PLAN.md's documented caveat).
+	if f.IsValid() {
+		t.Error("IsValid() = true, want false for an unsaved edit, live, without saving")
+	}
+
+	// The save->live round trip: IsValid() must flip back to true from the
+	// *same session*, without reopening.
+	if err := f.Save(out); err != nil {
+		t.Fatal(err)
+	}
+	if !f.IsValid() {
+		t.Error("Save() must update session state so IsValid() is true without reopening")
+	}
+	meta2, err := f.GetMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedAfter := meta2.ConfigurationHash
+	if storedAfter == storedBefore {
+		t.Error("the edit must have produced a different hash")
+	}
+	f.Close()
+
+	// And a completely fresh session on the same path agrees.
+	reopened, err := capabilities.OpenMachineConfig(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if !reopened.IsValid() {
+		t.Error("IsValid() = false, want true for a freshly reopened session")
+	}
+	reopenedMeta, err := reopened.GetMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopenedMeta.ConfigurationHash != storedAfter {
+		t.Errorf("configuration_hash: got %q want %q", reopenedMeta.ConfigurationHash, storedAfter)
+	}
+}
+
+func TestV1_1SaveComputesRealHashAndUpdatesSession(t *testing.T) {
+	path := filepath.Join(fixturesDir(t), "reference_config_v1_1.h5")
+	f, err := capabilities.OpenMachineConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.FileVersion() != "1.1" {
+		t.Fatalf("expected file_version 1.1, got %q", f.FileVersion())
+	}
+	meta, err := f.GetMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStored := meta.ConfigurationHash
+
+	sc, err := f.GetScanner(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.WorkingDistance = machineconfig.Float64Ptr(555.0)
+	if err := f.SetScanner(0, sc, capabilities.Merge); err != nil {
+		t.Fatal(err)
+	}
+	if f.IsValid() {
+		t.Error("IsValid() = true, want false for an unsaved edit, live")
+	}
+
+	out := filepath.Join(t.TempDir(), "v1_1_roundtrip.h5")
+	if err := f.Save(out); err != nil {
+		t.Fatal(err)
+	}
+
+	// Live, no reopen:
+	if !f.IsValid() {
+		t.Error("IsValid() = false, want true immediately after Save()")
+	}
+	meta2, err := f.GetMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	savedHash := meta2.ConfigurationHash
+	if len(savedHash) != 64 {
+		t.Errorf("configuration_hash len %d, want 64", len(savedHash))
+	}
+	if savedHash == originalStored {
+		t.Error("configuration_hash should differ from the original")
+	}
+	f.Close()
+
+	// Fresh session on the written file agrees:
+	reopened, err := capabilities.OpenMachineConfig(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if reopened.FileVersion() != "1.1" {
+		t.Fatalf("expected file_version 1.1, got %q", reopened.FileVersion())
+	}
+	if !reopened.IsValid() {
+		t.Error("IsValid() = false, want true for a freshly reopened session")
+	}
+	reopenedMeta, err := reopened.GetMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopenedMeta.ConfigurationHash != savedHash {
+		t.Errorf("configuration_hash: got %q want %q", reopenedMeta.ConfigurationHash, savedHash)
 	}
 }

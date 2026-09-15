@@ -265,21 +265,52 @@ pub fn load_correction_hdf5(
 
 ## 6. Configuration Hash Validation
 
-The library exposes the SHA-256 hash stored in the HDF5 file as
-`config.meta.configuration_hash`. Use it to confirm a loaded file has not
-been corrupted:
+**This section describes the capabilities facade (`open_machine_config`/`MachineConfigFile`),
+not `MachineConfigReader`** — because that's the API clearbox-tauri actually integrates through
+today (`src-tauri/src/machine_config/reader.rs` calls `machine_config::open_machine_config()`,
+not `MachineConfigReader::new()`), even though §2's Phase 1 sketch above predates that decision.
+See `CAPABILITIES_HASH_INTEGRATION_PLAN.md` for the full history of why the two APIs compute
+`configuration_hash` validity differently and why this section had to wait for that plan to land.
+
+Every `MachineConfigFile` session (returned by `open_machine_config()`/`create_machine_config()`)
+has an `is_valid()` method:
 
 ```rust
-use machine_config::reader::MachineConfigReader;
+use machine_config::open_machine_config;
 
-let reader = MachineConfigReader::new(path)?;
-let config = reader.parse()?;
-let stored_hash = &config.meta.configuration_hash;
-
-// The reader also provides a recomputed hash (covers all non-hash datasets):
-let recomputed = reader.compute_hash()?;
-assert_eq!(stored_hash, &recomputed, "machine config file is corrupt");
+let mut file = open_machine_config(path)?;
+if !file.is_valid() {
+    log::warn!("machine config file {path:?} failed hash validation");
+    // still fully usable -- is_valid() is informational, never fatal.
+    // The file loads and every getter/setter works regardless of the result.
+}
 ```
+
+`is_valid()` recomputes the SHA-256 hash from the session's *current* in-memory content and
+compares it against `config.meta.configuration_hash` (also reachable directly via
+`file.get_meta()?.configuration_hash` if the raw hex digest itself is needed for display or
+logging) — **fresh, on every call**, not a value cached once at `open()` time. This matters
+because `MachineConfigFile` is a mutable session: `set_scanner()`/`set_meta()`/etc. all mutate it
+in place, so a value computed once at load time would go stale the instant any field changed.
+
+**A `false` result right after an edit is expected, not a corruption signal.** Nothing recomputes
+the hash until the next `save()`, so between an edit and a save, `is_valid()` genuinely does not
+match — that's correct, not a bug:
+
+```rust
+file.set_scanner(0, updated_scanner, SetMode::Merge)?;
+assert!(!file.is_valid());   // expected: unsaved edit, not evidence of tampering
+
+file.save(Some(path))?;
+assert!(file.is_valid());    // save() recomputes and re-stamps the hash, live, no reopen needed
+```
+
+Treat `is_valid()` as answering "has this session's content drifted from its last-known-good
+hash" — which covers both "file was tampered with externally before I opened it" and "I have
+unsaved edits right now." If clearbox-tauri ever needs to tell those two apart in the UI (e.g. to
+avoid showing a scary "corrupt file" warning for what's really just an in-progress edit), pair
+`is_valid()` with its own dirty-tracking rather than expecting the library to distinguish them —
+the library deliberately does not add a separate `is_dirty()` of its own.
 
 ---
 

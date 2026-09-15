@@ -426,6 +426,14 @@ struct MachineConfigMeta {
     // (test-only, not part of this header set) ever populates them.
     std::optional<std::string> facility_id;
     std::optional<std::string> config_author;
+    // Reader-computed, in-memory only: set once a MachineConfigReader has
+    // recomputed the configuration hash and compared it to the on-disk
+    // value; nullopt until then. Never set by a writer. Never wired into
+    // to_json/from_json below (passive exclusion, same as facility_id/
+    // config_author above) — never written to HDF5, never part of the
+    // interop contract. A mismatch is never an error: the file remains
+    // fully readable either way (see hash.hpp).
+    std::optional<bool> is_valid;
     ExtraAttrs extra; // non-typed root HDF5 attrs; empty object when none
 };
 

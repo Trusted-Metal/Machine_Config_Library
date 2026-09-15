@@ -7,6 +7,7 @@ import type { MachineConfig } from "./models.js";
 import { UnsupportedFileVersion } from "./capabilities/file_version.js";
 import { Hdf5WriterV1_0 } from "./capabilities/v1_0/writer.js";
 import { Hdf5WriterV1_1 } from "./capabilities/v1_1/writer.js";
+import { computeConfigurationHash } from "./hash.js";
 
 type WriterBackend = { write(path: string): Promise<void> };
 
@@ -44,9 +45,18 @@ export class MachineConfigWriter {
     // File_Version attribute — if targetVersion overrides the adapter
     // choice, the config handed to the adapter must reflect that too, or
     // the file would claim the wrong version on disk. A copy, not a
-    // mutation of the caller's config, and only made when actually needed
-    // (the common case — no override — never pays for it).
-    const resolvedConfig = fv === current ? config : { ...config, meta: { ...config.meta, file_version: fv } };
+    // mutation of the caller's config.
+    //
+    // Configuration_Hash is always computed fresh from the content actually
+    // being written — a caller-supplied value is never trusted or passed
+    // through, since anything else goes stale the instant any other field
+    // changes. Computed once, up front; no re-read, no patch, no
+    // fallback-on-error (see hash.ts).
+    const versionResolvedConfig: MachineConfig =
+      { ...config, meta: { ...config.meta, file_version: fv } };
+    const computedHash = computeConfigurationHash(versionResolvedConfig);
+    const resolvedConfig: MachineConfig =
+      { ...versionResolvedConfig, meta: { ...versionResolvedConfig.meta, configuration_hash: computedHash } };
     this.backend = new Ctor(resolvedConfig);
   }
 

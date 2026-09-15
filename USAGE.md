@@ -5,8 +5,6 @@ This document covers shared concepts and links to per-language documentation.
 - **Integrators** — start with the [feature matrix](#language-feature-matrix) and your language's doc below.
 - **Contributors** — see [docs/contributing.md](docs/contributing.md) for fixture generation, cross-check, and golden file workflows.
 
-The [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) covers *how the library is built*.
-
 ---
 
 ## Language documentation
@@ -26,6 +24,7 @@ Other docs:
 | [docs/schema.md](docs/schema.md) | JSON schema field reference — all types, required fields, unit conventions |
 | [docs/contributing.md](docs/contributing.md) | Cross-language check, golden file generation, smoke test |
 | [docs/clearbox-tauri-integration.md](docs/clearbox-tauri-integration.md) | ClearBox integration with Tauri desktop applications |
+| [docs/architecture-overview.md](docs/architecture-overview.md) | Diagrams: MCF's version-adapter design, how clearbox-tauri consumes it, and the full pipeline to its LBL output |
 
 ---
 

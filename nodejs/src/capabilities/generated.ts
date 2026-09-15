@@ -79,6 +79,7 @@ export interface MachineConfigFile {
   opcua(): Result<OpcuaHandle, CapabilityError>;
   getCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;
   getInverseCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;
+  isValid(): boolean;
   save(path?: string): Promise<Result<void, CapabilityError>>;
   close(): void;
 }

@@ -1,4 +1,4 @@
-// CLI entry point: export-json, correction-hash, write-hdf5, copy-hdf5 subcommands.
+// CLI entry point: export-json, correction-hash, configuration-hash, write-hdf5, copy-hdf5 subcommands.
 package main
 
 import (
@@ -22,19 +22,21 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: machine-config-cli <export-json|correction-hash|write-hdf5|copy-hdf5> [args]")
+		return fmt.Errorf("usage: machine-config-cli <export-json|correction-hash|configuration-hash|write-hdf5|copy-hdf5> [args]")
 	}
 	switch args[0] {
 	case "export-json":
 		return cmdExportJSON(args[1:])
 	case "correction-hash":
 		return cmdCorrectionHash(args[1:])
+	case "configuration-hash":
+		return cmdConfigurationHash(args[1:])
 	case "write-hdf5":
 		return cmdWriteHDF5(args[1:])
 	case "copy-hdf5":
 		return cmdCopyHDF5(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q (available: export-json, correction-hash, write-hdf5, copy-hdf5)", args[0])
+		return fmt.Errorf("unknown command %q (available: export-json, correction-hash, configuration-hash, write-hdf5, copy-hdf5)", args[0])
 	}
 }
 
@@ -100,6 +102,48 @@ func cmdCorrectionHash(args []string) error {
 		h.Write(buf)
 	}
 	fmt.Printf("%x\n", h.Sum(nil))
+	return nil
+}
+
+func cmdConfigurationHash(args []string) error {
+	var (
+		path  string
+		quiet = false
+	)
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--quiet":
+			quiet = true
+		default:
+			if path != "" {
+				return fmt.Errorf("unexpected argument %q", args[i])
+			}
+			path = args[i]
+		}
+	}
+	if path == "" {
+		return fmt.Errorf("configuration-hash: usage: configuration-hash <path.h5> [--quiet]")
+	}
+	cfg, err := machineconfig.NewReader(path).Parse()
+	if err != nil {
+		return err
+	}
+	stored := cfg.Meta.ConfigurationHash
+	recomputed, err := machineconfig.ComputeConfigurationHash(cfg)
+	if err != nil {
+		return err
+	}
+	valid := cfg.Meta.IsValid != nil && *cfg.Meta.IsValid
+	if quiet {
+		fmt.Println(recomputed)
+		return nil
+	}
+	fmt.Printf("stored: %s\n", stored)
+	fmt.Printf("recomputed: %s\n", recomputed)
+	fmt.Printf("valid: %t\n", valid)
+	if !valid {
+		os.Exit(1)
+	}
 	return nil
 }
 

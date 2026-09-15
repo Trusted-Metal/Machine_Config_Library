@@ -8,6 +8,7 @@ import * as h5wasm from 'h5wasm/node';
 import { MachineConfigWriter } from '../src/index.js';
 import { MachineConfigReader } from '../src/index.js';
 import { UnsupportedFileVersion } from '../src/capabilities/index.js';
+import { MockConfigBuilder } from '../src/builder.js';
 import type { MachineConfig, SynchronousSensor } from '../src/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -111,6 +112,42 @@ describe('MachineConfigWriter — class', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Prerequisite fix (CONFIGURATION_HASH_PLAN.md): writers must no longer
+// materialize a hardcoded default (e.g. "mm") for an unset `*_unit` field —
+// that default was never real data, just the reader's own Rule-8 locked
+// constant written early for no benefit, and it broke pre-write/post-write
+// hash agreement. One representative field per affected struct, mirroring
+// Python's/Rust's equivalent test's shape exactly.
+// ---------------------------------------------------------------------------
+
+describe('MachineConfigWriter — unset unit fields round trip as null, not a default', () => {
+  it('leaves unset *_unit fields null rather than materializing a default', async () => {
+    const built = new MockConfigBuilder({ nLasers: 1 }).build();
+    const config: MachineConfig = {
+      ...built,
+      machine: { ...built.machine, build_plate_radius_unit: null },
+      optical_trains: built.optical_trains.map((train) => ({
+        ...train,
+        major_axis_angle_unit: null,
+        scanner: { ...train.scanner, working_distance_unit: null },
+        light_source: { ...train.light_source, wavelength_unit: null },
+        collimator: { ...train.collimator, focal_length_unit: null },
+        scanner_card: { ...train.scanner_card, sample_period_unit: null },
+      })),
+    };
+
+    const rt = await roundtrip(config);
+
+    expect(rt.machine.build_plate_radius_unit).toBeNull();
+    expect(rt.optical_trains[0].major_axis_angle_unit).toBeNull();
+    expect(rt.optical_trains[0].scanner.working_distance_unit).toBeNull();
+    expect(rt.optical_trains[0].light_source.wavelength_unit).toBeNull();
+    expect(rt.optical_trains[0].collimator.focal_length_unit).toBeNull();
+    expect(rt.optical_trains[0].scanner_card.sample_period_unit).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Roundtrip: reference fixture
 // ---------------------------------------------------------------------------
 
@@ -129,8 +166,14 @@ describe('MachineConfigWriter — reference roundtrip', () => {
     expect(rt.meta.machine_name).toBe(reference.meta.machine_name);
   });
 
-  it('configuration_hash survives roundtrip', () => {
-    expect(rt.meta.configuration_hash).toBe(reference.meta.configuration_hash);
+  it('configuration_hash is real and valid after roundtrip', () => {
+    // reference_config.h5 is externally-authored, so its own stored hash is
+    // expected to be invalid — but once *this* writer produces a file, that
+    // file's stored hash must be real (64 hex chars, not a passthrough of
+    // the input) and must read back valid.
+    expect(rt.meta.configuration_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(rt.meta.configuration_hash).not.toBe(reference.meta.configuration_hash);
+    expect(rt.meta.is_valid).toBe(true);
   });
 
   it('optical train count survives roundtrip', () => {

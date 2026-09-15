@@ -280,21 +280,21 @@ function writeScanner(grp: h5wasm.Group, s: Scanner): void {
   ws(grp, "Model", s.model);
   ws(grp, "Serial_Number", s.serial_number);
   wf(grp, "Working_Distance", s.working_distance);
-  ws(grp, "Working_Distance_unit", s.working_distance_unit ?? "mm");
+  ws(grp, "Working_Distance_unit", s.working_distance_unit);
   wf(grp, "Scan_Field_Size_X", s.scan_field_x);
-  ws(grp, "Scan_Field_Size_X_unit", s.scan_field_x_unit ?? "mm");
+  ws(grp, "Scan_Field_Size_X_unit", s.scan_field_x_unit);
   wf(grp, "Scan_Field_Size_Y", s.scan_field_y);
-  ws(grp, "Scan_Field_Size_Y_unit", s.scan_field_y_unit ?? "mm");
+  ws(grp, "Scan_Field_Size_Y_unit", s.scan_field_y_unit);
   wf(grp, "Scan_Field_Size_Z", s.scan_field_z);
-  ws(grp, "Scan_Field_Size_Z_unit", s.scan_field_z_unit ?? "mm");
+  ws(grp, "Scan_Field_Size_Z_unit", s.scan_field_z_unit);
   wf(grp, "Scan_Head_Offset_X", s.scan_head_offset_x);
-  ws(grp, "Scan_Head_Offset_X_unit", s.scan_head_offset_x_unit ?? "mm");
+  ws(grp, "Scan_Head_Offset_X_unit", s.scan_head_offset_x_unit);
   wf(grp, "Scan_Head_Offset_Y", s.scan_head_offset_y);
-  ws(grp, "Scan_Head_Offset_Y_unit", s.scan_head_offset_y_unit ?? "mm");
+  ws(grp, "Scan_Head_Offset_Y_unit", s.scan_head_offset_y_unit);
   wf(grp, "Scan_Head_Offset_Z", s.scan_head_offset_z);
-  ws(grp, "Scan_Head_Offset_Z_unit", s.scan_head_offset_z_unit ?? "mm");
+  ws(grp, "Scan_Head_Offset_Z_unit", s.scan_head_offset_z_unit);
   wf(grp, "Scan_Head_Rotation", s.scan_head_rotation);
-  ws(grp, "Scan_Head_Rotation_unit", s.scan_head_rotation_unit ?? "degrees");
+  ws(grp, "Scan_Head_Rotation_unit", s.scan_head_rotation_unit);
   ws(grp, "Axis_Configuration", s.axis_configuration);
   wbIfTrue(grp, "Invert_Actual_X", s.invert_actual_x);
   wbIfTrue(grp, "Invert_Actual_Y", s.invert_actual_y);
@@ -313,18 +313,18 @@ function writeLightSource(grp: h5wasm.Group, ls: LightSource): void {
   ws(grp, "Model", ls.model);
   ws(grp, "Serial_Number", ls.serial_number);
   wf(grp, "Light_Wavelength", ls.wavelength);
-  ws(grp, "Light_Wavelength_unit", ls.wavelength_unit ?? "nm");
+  ws(grp, "Light_Wavelength_unit", ls.wavelength_unit);
   wf(grp, "Power_Max_Nominal", ls.power_max_nominal);
-  ws(grp, "Power_Max_Nominal_unit", ls.power_max_nominal_unit ?? "W");
+  ws(grp, "Power_Max_Nominal_unit", ls.power_max_nominal_unit);
   wf(grp, "Power_Max_Actual", ls.power_max_actual);
-  ws(grp, "Power_Max_Actual_unit", ls.power_max_actual_unit ?? "W");
+  ws(grp, "Power_Max_Actual_unit", ls.power_max_actual_unit);
   wf(grp, "Power_Min_Actual", ls.power_min_actual);
-  ws(grp, "Power_Min_Actual_unit", ls.power_min_actual_unit ?? "W");
+  ws(grp, "Power_Min_Actual_unit", ls.power_min_actual_unit);
   wf(grp, "Power_Min_Nominal", ls.power_min_nominal);
-  ws(grp, "Power_Min_Nominal_unit", ls.power_min_nominal_unit ?? "W");
+  ws(grp, "Power_Min_Nominal_unit", ls.power_min_nominal_unit);
   ws(grp, "Power_Bit_Resolution",
     ls.power_bit_resolution != null ? String(ls.power_bit_resolution) : null);
-  ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit ?? "bits");
+  ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit);
   writePowerCharacterization(grp.create_group(layout.GROUP_POWER_CHARACTERIZATION), ls.power_characterization);
 }
 
@@ -333,7 +333,7 @@ function writeCollimator(grp: h5wasm.Group, c: Collimator): void {
   ws(grp, "Model", c.model);
   ws(grp, "Serial_Number", c.serial_number);
   wf(grp, "Focal_Length", c.focal_length);
-  ws(grp, "Focal_Length_unit", c.focal_length_unit ?? "mm");
+  ws(grp, "Focal_Length_unit", c.focal_length_unit);
 }
 
 function writeScannerCard(grp: h5wasm.Group, sc: ScannerCard): void {
@@ -342,7 +342,7 @@ function writeScannerCard(grp: h5wasm.Group, sc: ScannerCard): void {
   ws(grp, "Serial_Number", sc.serial_number);
   ws(grp, "Communication_Protocol", sc.communication_protocol);
   wf(grp, "Sample_Period", sc.sample_period);
-  ws(grp, "Sample_Period_unit", sc.sample_period_unit ?? "μs");
+  ws(grp, "Sample_Period_unit", sc.sample_period_unit);
 }
 
 /**
@@ -404,32 +404,32 @@ function writeTrainAttrs(grp: h5wasm.Group, train: OpticalTrain): void {
   ws(grp, "Beam_Profile_Type", train.beam_profile_type);
   ws(grp, "Beam_Waist_Definition", train.beam_waist_definition);
   wf(grp, "Beam_Waist_Major", train.beam_waist_major);
-  ws(grp, "Beam_Waist_Major_unit", train.beam_waist_major_unit ?? "μm");
+  ws(grp, "Beam_Waist_Major_unit", train.beam_waist_major_unit);
   wf(grp, "Beam_Waist_Minor", train.beam_waist_minor);
-  ws(grp, "Beam_Waist_Minor_unit", train.beam_waist_minor_unit ?? "μm");
+  ws(grp, "Beam_Waist_Minor_unit", train.beam_waist_minor_unit);
   wf(grp, "Beam_Waist_Offset_Z", train.beam_waist_offset_z);
-  ws(grp, "Beam_Waist_Offset_Z_unit", train.beam_waist_offset_z_unit ?? "mm");
+  ws(grp, "Beam_Waist_Offset_Z_unit", train.beam_waist_offset_z_unit);
   wf(grp, "Build_Plane_Offset_Major", train.build_plane_offset_major);
-  ws(grp, "Build_Plane_Offset_Major_unit", train.build_plane_offset_major_unit ?? "mm");
+  ws(grp, "Build_Plane_Offset_Major_unit", train.build_plane_offset_major_unit);
   wf(grp, "Build_Plane_Offset_Minor", train.build_plane_offset_minor);
-  ws(grp, "Build_Plane_Offset_Minor_unit", train.build_plane_offset_minor_unit ?? "mm");
+  ws(grp, "Build_Plane_Offset_Minor_unit", train.build_plane_offset_minor_unit);
   wf(grp, "Collimator_Focal_Length", train.collimator_focal_length);
-  ws(grp, "Collimator_Focal_Length_unit", train.collimator_focal_length_unit ?? "mm");
+  ws(grp, "Collimator_Focal_Length_unit", train.collimator_focal_length_unit);
   wf(grp, "M2_Major", train.m2_major);
   wf(grp, "M2_Minor", train.m2_minor);
   wf(grp, "Major_Axis_Angle", train.major_axis_angle);
-  ws(grp, "Major_Axis_Angle_unit", train.major_axis_angle_unit ?? "degrees");
+  ws(grp, "Major_Axis_Angle_unit", train.major_axis_angle_unit);
   wf(grp, "Rayleigh_Length_Major", train.rayleigh_length_major);
-  ws(grp, "Rayleigh_Length_Major_unit", train.rayleigh_length_major_unit ?? "mm");
+  ws(grp, "Rayleigh_Length_Major_unit", train.rayleigh_length_major_unit);
   wf(grp, "Rayleigh_Length_Minor", train.rayleigh_length_minor);
-  ws(grp, "Rayleigh_Length_Minor_unit", train.rayleigh_length_minor_unit ?? "mm");
+  ws(grp, "Rayleigh_Length_Minor_unit", train.rayleigh_length_minor_unit);
   ws(grp, "Scanner_Number", train.scanner_number);
   wb(grp, "Thermal_Lensing_Test_Passed", train.thermal_lensing_passed);
   wf(grp, "Thermal_Lensing_Focal_Plane_Shift", train.thermal_lensing_focal_plane_shift);
   ws(grp, "Thermal_Lensing_Focal_Plane_Shift_unit",
-    train.thermal_lensing_focal_plane_shift_unit ?? "mm");
+    train.thermal_lensing_focal_plane_shift_unit);
   wf(grp, "Thermal_Lensing_Threshold", train.thermal_lensing_threshold);
-  ws(grp, "Thermal_Lensing_Threshold_unit", train.thermal_lensing_threshold_unit ?? "mm");
+  ws(grp, "Thermal_Lensing_Threshold_unit", train.thermal_lensing_threshold_unit);
 }
 
 function writeOpcua(f: h5wasm.File, opcua: OpcuaConfig): void {
@@ -560,13 +560,13 @@ export class Hdf5WriterV1_1 {
       ws(machineGrp, "Model", ma.model);
       ws(machineGrp, "Serial_Number", ma.serial_number);
       wf(machineGrp, "Build_Plate_X_Dimension", ma.build_plate_x);
-      ws(machineGrp, "Build_Plate_X_Dimension_unit", ma.build_plate_x_unit ?? "mm");
+      ws(machineGrp, "Build_Plate_X_Dimension_unit", ma.build_plate_x_unit);
       wf(machineGrp, "Build_Plate_Y_Dimension", ma.build_plate_y);
-      ws(machineGrp, "Build_Plate_Y_Dimension_unit", ma.build_plate_y_unit ?? "mm");
+      ws(machineGrp, "Build_Plate_Y_Dimension_unit", ma.build_plate_y_unit);
       wf(machineGrp, "Build_Plate_Z_Dimension", ma.build_plate_z);
-      ws(machineGrp, "Build_Plate_Z_Dimension_unit", ma.build_plate_z_unit ?? "mm");
+      ws(machineGrp, "Build_Plate_Z_Dimension_unit", ma.build_plate_z_unit);
       wf(machineGrp, "Build_Plate_Corner_Radius", ma.build_plate_radius);
-      ws(machineGrp, "Build_Plate_Corner_Radius_unit", ma.build_plate_radius_unit ?? "mm");
+      ws(machineGrp, "Build_Plate_Corner_Radius_unit", ma.build_plate_radius_unit);
       ws(machineGrp, "Gas_Flow_Direction", ma.gas_flow_direction);
       ws(machineGrp, "Recoat_Direction", ma.recoat_direction);
       ws(machineGrp, "Recoater_Blade_Type", ma.recoater_blade_type);

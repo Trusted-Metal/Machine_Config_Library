@@ -8,6 +8,7 @@ from machine_config.capabilities.errors import CapabilityError, SessionClosedErr
 from machine_config.capabilities.generated import SetMode
 from machine_config.capabilities.merge import apply_set_mode, snapshot
 from machine_config.capabilities.result import Result, err, ok
+from machine_config.hash import compute_configuration_hash
 from machine_config.models import nested_to_array
 
 from .hdf5 import Hdf5AdapterV1_0, config_from_dict
@@ -186,6 +187,24 @@ class MachineConfigFileV1_0:
             )
         )
 
+    def is_valid(self) -> bool:
+        """Recomputes the configuration hash from the session's *current*
+        content and compares it to the session's current
+        ``meta.configuration_hash`` — fresh, every call. Deliberately live,
+        not cached at ``open()`` time: this facade is a mutable session
+        (``set_meta``/``set_scanner``/etc. all mutate ``self._data`` in
+        place), so a value computed once at ``open()`` would silently go
+        stale the instant any ``set_*`` call ran. See
+        CAPABILITIES_HASH_INTEGRATION_PLAN.md's live-method design — in
+        particular, this reads ``False`` for the entire span between an
+        edit and the next ``save()``, which is expected (an unsaved edit
+        hasn't been hashed yet), not a sign of corruption. Never raises: a
+        mismatch is informational, matching CONFIGURATION_HASH_PLAN.md's
+        non-fatal design throughout.
+        """
+        config = config_from_dict(self._data)
+        return compute_configuration_hash(config) == config.meta.configuration_hash
+
     def save(self, path: str | None = None) -> Result[None, CapabilityError]:
         self._assert_open()
         out = path or self._path
@@ -197,6 +216,13 @@ class MachineConfigFileV1_0:
             )
         try:
             config = config_from_dict(self._data)
+            # Compute-and-stamp on both the config actually written *and*
+            # the session's own retained dict (not just the config passed
+            # to the writer) so is_valid() reads True immediately after
+            # save(), without requiring a fresh open() — see
+            # CAPABILITIES_HASH_INTEGRATION_PLAN.md's live-method design.
+            config.meta.configuration_hash = compute_configuration_hash(config)
+            self._data["meta"]["configuration_hash"] = config.meta.configuration_hash
             Hdf5WriterV1_0(config).write(out)
             self._path = out
             return ok(None)
