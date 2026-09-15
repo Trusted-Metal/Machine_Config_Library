@@ -37,3 +37,7 @@ python/build/
 *.egg-info/
 
 file_testing/
+
+# Implementation plan / audit docs — durable local working notes, not shipped
+# with the library and not tracked in version control.
+/implementation-plans/

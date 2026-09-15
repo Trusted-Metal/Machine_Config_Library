@@ -190,7 +190,6 @@ ci: add HDF5 vcpkg config verification step on Windows
 | Document | Audience | Contents |
 |---|---|---|
 | [USAGE.md](USAGE.md) | Integrators & contributors | End-to-end usage guide for all languages — install, use cases 1–10, CLI reference, quickstart, full workflow, test suite |
-| [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | Contributors | Phase-by-phase build plan, developer quick reference, test suite index, environment setup |
 | [CHANGELOG.md](CHANGELOG.md) | Everyone | Auto-generated release history |
 | [docs/clearbox-tauri-integration.md](docs/clearbox-tauri-integration.md) | Integrators | ClearBox integration with Tauri desktop applications |
 | [schema/machine_config_v1.schema.json](schema/machine_config_v1.schema.json) | Integrators | JSON Schema (draft 2020-12) — the canonical field reference |

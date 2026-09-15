@@ -5,8 +5,6 @@ This document covers shared concepts and links to per-language documentation.
 - **Integrators** — start with the [feature matrix](#language-feature-matrix) and your language's doc below.
 - **Contributors** — see [docs/contributing.md](docs/contributing.md) for fixture generation, cross-check, and golden file workflows.
 
-The [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) covers *how the library is built*.
-
 ---
 
 ## Language documentation
