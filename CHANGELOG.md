@@ -1,3 +1,9 @@
+## 0.2.0-rc.8 (2026-09-15)
+
+* Merge pull request #21 from Trusted-Metal/SD-1710 ([dd6832d](https://github.com/Trusted-Metal/Machine_Config_Library/commit/dd6832d)), closes [#21](https://github.com/Trusted-Metal/Machine_Config_Library/issues/21)
+* feat: Added hash writing/hash checking to MCF to all languages, updated testing/docs ([dc14d57](https://github.com/Trusted-Metal/Machine_Config_Library/commit/dc14d57))
+* feat: Moved implementation plans to local folder, added to git ignore, untracked files ([c337cc4](https://github.com/Trusted-Metal/Machine_Config_Library/commit/c337cc4))
+
 ## 0.2.0-rc.7 (2026-09-11)
 
 * Merge pull request #20 from Trusted-Metal/SD-1692 ([33d9251](https://github.com/Trusted-Metal/Machine_Config_Library/commit/33d9251)), closes [#20](https://github.com/Trusted-Metal/Machine_Config_Library/issues/20)
