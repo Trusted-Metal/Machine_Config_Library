@@ -38,7 +38,13 @@ def test_writer_roundtrip_machine_name(roundtrip_config: MachineConfig, referenc
 
 
 def test_writer_roundtrip_configuration_hash(roundtrip_config: MachineConfig, reference_config: MachineConfig) -> None:
-    assert roundtrip_config.meta.configuration_hash == reference_config.meta.configuration_hash
+    # The writer always computes a fresh hash from the content actually being
+    # written — never a passthrough of reference_config's original,
+    # externally-authored hash — so the roundtripped file gets its own,
+    # different value, and validates against it.
+    assert len(roundtrip_config.meta.configuration_hash) == 64
+    assert roundtrip_config.meta.configuration_hash != reference_config.meta.configuration_hash
+    assert roundtrip_config.meta.is_valid is True
 
 
 def test_writer_roundtrip_build_plate(roundtrip_config: MachineConfig, reference_config: MachineConfig) -> None:

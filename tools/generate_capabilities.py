@@ -107,6 +107,7 @@ def render_ts(api: dict, models: dict) -> str:
         "  opcua(): Result<OpcuaHandle, CapabilityError>;",
         "  getCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;",
         "  getInverseCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;",
+        "  isValid(): boolean;",
         "  save(path?: string): Promise<Result<void, CapabilityError>>;",
         "  close(): void;",
         "}",
@@ -166,6 +167,7 @@ def render_py(api: dict, models: dict) -> str:
         + "    def optical_trains(self) -> TrainCollection: ...\n"
         + "    def optical_train(self, index: int) -> Result[TrainHandle, CapabilityError]: ...\n"
         + "    def opcua(self) -> Result[OpcuaHandle, CapabilityError]: ...\n"
+        + "    def is_valid(self) -> bool: ...\n"
         + "    def save(self, path: str | None = None) -> Result[None, CapabilityError]: ...\n"
         + "    def close(self) -> None: ...\n"
     )
@@ -233,6 +235,8 @@ def render_rs(api: dict, models: dict) -> str:
         + "    fn get_opcua(&self) -> Result<OpcuaConfig, CapabilityError>;\n"
         + "    fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError>;\n"
         + "\n"
+        + "    fn is_valid(&self) -> bool;\n"
+        + "\n"
         + "    fn save(&mut self, path: Option<&Path>) -> Result<(), CapabilityError>;\n"
         + "    fn close(&mut self);\n"
         + "}\n"
@@ -293,6 +297,8 @@ def render_hpp(api: dict, models: dict) -> str:
         + "\n"
         + "  virtual Result<OpcuaConfig> getOpcua() const = 0;\n"
         + "  virtual Result<void> setOpcua(const OpcuaConfig& model, SetMode mode = SetMode::Merge) = 0;\n"
+        + "\n"
+        + "  virtual bool isValid() const = 0;\n"
         + "\n"
         + "  virtual Result<void> save(const std::string* path = nullptr) = 0;\n"
         + "  virtual void close() = 0;\n"

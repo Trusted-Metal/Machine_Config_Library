@@ -56,6 +56,8 @@ pub trait MachineConfigFile {
     fn get_opcua(&self) -> Result<OpcuaConfig, CapabilityError>;
     fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError>;
 
+    fn is_valid(&self) -> bool;
+
     fn save(&mut self, path: Option<&Path>) -> Result<(), CapabilityError>;
     fn close(&mut self);
 }

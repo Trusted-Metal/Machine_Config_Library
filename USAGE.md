@@ -26,6 +26,7 @@ Other docs:
 | [docs/schema.md](docs/schema.md) | JSON schema field reference — all types, required fields, unit conventions |
 | [docs/contributing.md](docs/contributing.md) | Cross-language check, golden file generation, smoke test |
 | [docs/clearbox-tauri-integration.md](docs/clearbox-tauri-integration.md) | ClearBox integration with Tauri desktop applications |
+| [docs/architecture-overview.md](docs/architecture-overview.md) | Diagrams: MCF's version-adapter design, how clearbox-tauri consumes it, and the full pipeline to its LBL output |
 
 ---
 

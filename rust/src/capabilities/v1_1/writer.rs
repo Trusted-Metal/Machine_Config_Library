@@ -183,16 +183,16 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Model", &ma.model)?;
         ws(grp, "Serial_Number", &ma.serial_number)?;
         wf(grp, "Build_Plate_X_Dimension", ma.build_plate_x)?;
-        ws(grp, "Build_Plate_X_Dimension_unit", ma.build_plate_x_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Build_Plate_X_Dimension_unit", ma.build_plate_x_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Build_Plate_Y_Dimension", ma.build_plate_y)?;
-        ws(grp, "Build_Plate_Y_Dimension_unit", ma.build_plate_y_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Build_Plate_Y_Dimension_unit", ma.build_plate_y_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Build_Plate_Z_Dimension", ma.build_plate_z)?;
-        ws(grp, "Build_Plate_Z_Dimension_unit", ma.build_plate_z_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Build_Plate_Z_Dimension_unit", ma.build_plate_z_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Build_Plate_Corner_Radius", ma.build_plate_radius)?;
         ws(
             grp,
             "Build_Plate_Corner_Radius_unit",
-            ma.build_plate_radius_unit.as_deref().unwrap_or("mm"),
+            ma.build_plate_radius_unit.as_deref().unwrap_or(""),
         )?;
         ws(grp, "Gas_Flow_Direction", ma.gas_flow_direction.as_deref().unwrap_or(""))?;
         ws(grp, "Recoat_Direction", ma.recoat_direction.as_deref().unwrap_or(""))?;
@@ -279,44 +279,44 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Beam_Profile_Type", t.beam_profile_type.as_deref().unwrap_or(""))?;
         ws(grp, "Beam_Waist_Definition", t.beam_waist_definition.as_deref().unwrap_or(""))?;
         wf(grp, "Beam_Waist_Major", t.beam_waist_major)?;
-        ws(grp, "Beam_Waist_Major_unit", t.beam_waist_major_unit.as_deref().unwrap_or("\u{03bc}m"))?;
+        ws(grp, "Beam_Waist_Major_unit", t.beam_waist_major_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Beam_Waist_Minor", t.beam_waist_minor)?;
-        ws(grp, "Beam_Waist_Minor_unit", t.beam_waist_minor_unit.as_deref().unwrap_or("\u{03bc}m"))?;
+        ws(grp, "Beam_Waist_Minor_unit", t.beam_waist_minor_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Beam_Waist_Offset_Z", t.beam_waist_offset_z)?;
-        ws(grp, "Beam_Waist_Offset_Z_unit", t.beam_waist_offset_z_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Beam_Waist_Offset_Z_unit", t.beam_waist_offset_z_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Build_Plane_Offset_Major", t.build_plane_offset_major)?;
         ws(
             grp,
             "Build_Plane_Offset_Major_unit",
-            t.build_plane_offset_major_unit.as_deref().unwrap_or("mm"),
+            t.build_plane_offset_major_unit.as_deref().unwrap_or(""),
         )?;
         wf(grp, "Build_Plane_Offset_Minor", t.build_plane_offset_minor)?;
         ws(
             grp,
             "Build_Plane_Offset_Minor_unit",
-            t.build_plane_offset_minor_unit.as_deref().unwrap_or("mm"),
+            t.build_plane_offset_minor_unit.as_deref().unwrap_or(""),
         )?;
         wf(grp, "Collimator_Focal_Length", t.collimator_focal_length)?;
         ws(
             grp,
             "Collimator_Focal_Length_unit",
-            t.collimator_focal_length_unit.as_deref().unwrap_or("mm"),
+            t.collimator_focal_length_unit.as_deref().unwrap_or(""),
         )?;
         wf(grp, "M2_Major", t.m2_major)?;
         wf(grp, "M2_Minor", t.m2_minor)?;
         wf(grp, "Major_Axis_Angle", t.major_axis_angle)?;
-        ws(grp, "Major_Axis_Angle_unit", t.major_axis_angle_unit.as_deref().unwrap_or("degrees"))?;
+        ws(grp, "Major_Axis_Angle_unit", t.major_axis_angle_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Rayleigh_Length_Major", t.rayleigh_length_major)?;
         ws(
             grp,
             "Rayleigh_Length_Major_unit",
-            t.rayleigh_length_major_unit.as_deref().unwrap_or("mm"),
+            t.rayleigh_length_major_unit.as_deref().unwrap_or(""),
         )?;
         wf(grp, "Rayleigh_Length_Minor", t.rayleigh_length_minor)?;
         ws(
             grp,
             "Rayleigh_Length_Minor_unit",
-            t.rayleigh_length_minor_unit.as_deref().unwrap_or("mm"),
+            t.rayleigh_length_minor_unit.as_deref().unwrap_or(""),
         )?;
         ws(grp, "Scanner_Number", t.scanner_number.as_deref().unwrap_or(""))?;
         wb(grp, "Thermal_Lensing_Test_Passed", t.thermal_lensing_passed)?;
@@ -324,13 +324,13 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(
             grp,
             "Thermal_Lensing_Focal_Plane_Shift_unit",
-            t.thermal_lensing_focal_plane_shift_unit.as_deref().unwrap_or("mm"),
+            t.thermal_lensing_focal_plane_shift_unit.as_deref().unwrap_or(""),
         )?;
         wf(grp, "Thermal_Lensing_Threshold", t.thermal_lensing_threshold)?;
         ws(
             grp,
             "Thermal_Lensing_Threshold_unit",
-            t.thermal_lensing_threshold_unit.as_deref().unwrap_or("mm"),
+            t.thermal_lensing_threshold_unit.as_deref().unwrap_or(""),
         )?;
         Ok(())
     }
@@ -340,21 +340,21 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Model", &s.model)?;
         ws(grp, "Serial_Number", &s.serial_number)?;
         wf(grp, "Working_Distance", s.working_distance)?;
-        ws(grp, "Working_Distance_unit", s.working_distance_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Working_Distance_unit", s.working_distance_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Scan_Field_Size_X", s.scan_field_x)?;
-        ws(grp, "Scan_Field_Size_X_unit", s.scan_field_x_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Scan_Field_Size_X_unit", s.scan_field_x_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Scan_Field_Size_Y", s.scan_field_y)?;
-        ws(grp, "Scan_Field_Size_Y_unit", s.scan_field_y_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Scan_Field_Size_Y_unit", s.scan_field_y_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Scan_Field_Size_Z", s.scan_field_z)?;
-        ws(grp, "Scan_Field_Size_Z_unit", s.scan_field_z_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Scan_Field_Size_Z_unit", s.scan_field_z_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Scan_Head_Offset_X", s.scan_head_offset_x)?;
-        ws(grp, "Scan_Head_Offset_X_unit", s.scan_head_offset_x_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Scan_Head_Offset_X_unit", s.scan_head_offset_x_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Scan_Head_Offset_Y", s.scan_head_offset_y)?;
-        ws(grp, "Scan_Head_Offset_Y_unit", s.scan_head_offset_y_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Scan_Head_Offset_Y_unit", s.scan_head_offset_y_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Scan_Head_Offset_Z", s.scan_head_offset_z)?;
-        ws(grp, "Scan_Head_Offset_Z_unit", s.scan_head_offset_z_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Scan_Head_Offset_Z_unit", s.scan_head_offset_z_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Scan_Head_Rotation", s.scan_head_rotation)?;
-        ws(grp, "Scan_Head_Rotation_unit", s.scan_head_rotation_unit.as_deref().unwrap_or("degrees"))?;
+        ws(grp, "Scan_Head_Rotation_unit", s.scan_head_rotation_unit.as_deref().unwrap_or(""))?;
         ws(grp, "Axis_Configuration", s.axis_configuration.as_deref().unwrap_or(""))?;
         wb_if_true(grp, "Invert_Actual_X", s.invert_actual_x)?;
         wb_if_true(grp, "Invert_Actual_Y", s.invert_actual_y)?;
@@ -452,19 +452,19 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Model", &ls.model)?;
         ws(grp, "Serial_Number", &ls.serial_number)?;
         wf(grp, "Light_Wavelength", ls.wavelength)?;
-        ws(grp, "Light_Wavelength_unit", ls.wavelength_unit.as_deref().unwrap_or("nm"))?;
+        ws(grp, "Light_Wavelength_unit", ls.wavelength_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Power_Max_Nominal", ls.power_max_nominal)?;
-        ws(grp, "Power_Max_Nominal_unit", ls.power_max_nominal_unit.as_deref().unwrap_or("W"))?;
+        ws(grp, "Power_Max_Nominal_unit", ls.power_max_nominal_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Power_Max_Actual", ls.power_max_actual)?;
-        ws(grp, "Power_Max_Actual_unit", ls.power_max_actual_unit.as_deref().unwrap_or("W"))?;
+        ws(grp, "Power_Max_Actual_unit", ls.power_max_actual_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Power_Min_Actual", ls.power_min_actual)?;
-        ws(grp, "Power_Min_Actual_unit", ls.power_min_actual_unit.as_deref().unwrap_or("W"))?;
+        ws(grp, "Power_Min_Actual_unit", ls.power_min_actual_unit.as_deref().unwrap_or(""))?;
         wf(grp, "Power_Min_Nominal", ls.power_min_nominal)?;
-        ws(grp, "Power_Min_Nominal_unit", ls.power_min_nominal_unit.as_deref().unwrap_or("W"))?;
+        ws(grp, "Power_Min_Nominal_unit", ls.power_min_nominal_unit.as_deref().unwrap_or(""))?;
         // Power_Bit_Resolution is always stored as a string in real HDF5 files.
         let pbr_str = ls.power_bit_resolution.map(|v| v.to_string()).unwrap_or_default();
         ws(grp, "Power_Bit_Resolution", &pbr_str)?;
-        ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit.as_deref().unwrap_or("bits"))?;
+        ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit.as_deref().unwrap_or(""))?;
         // Change 4: Watts_To_Volts_Algorithm/Params are not written in v1.1 —
         // power_characterization is the only StableModel representation of
         // this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md), so
@@ -481,7 +481,7 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Model", &c.model)?;
         ws(grp, "Serial_Number", &c.serial_number)?;
         wf(grp, "Focal_Length", c.focal_length)?;
-        ws(grp, "Focal_Length_unit", c.focal_length_unit.as_deref().unwrap_or("mm"))?;
+        ws(grp, "Focal_Length_unit", c.focal_length_unit.as_deref().unwrap_or(""))?;
         Ok(())
     }
 
@@ -491,7 +491,7 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Serial_Number", &sc.serial_number)?;
         ws(grp, "Communication_Protocol", sc.communication_protocol.as_deref().unwrap_or(""))?;
         wf(grp, "Sample_Period", sc.sample_period)?;
-        ws(grp, "Sample_Period_unit", sc.sample_period_unit.as_deref().unwrap_or("\u{03bc}s"))?;
+        ws(grp, "Sample_Period_unit", sc.sample_period_unit.as_deref().unwrap_or(""))?;
         Ok(())
     }
 

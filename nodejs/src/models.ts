@@ -331,6 +331,17 @@ export interface MachineConfigMeta {
   // Not real schema fields — never wired into JSON export or the JSON schema.
   facility_id?: string | null;
   config_author?: string | null;
+  /**
+   * Reader-computed, in-memory only: `true`/`false` once a
+   * `MachineConfigReader` has recomputed the configuration hash and
+   * compared it to the on-disk value; absent until then. Never set by a
+   * writer or by `MockConfigBuilder`. Unconditionally excluded from JSON
+   * output by the `omitFalseInvertFlags` replacer in each capability's
+   * `hdf5.ts` — never written to HDF5, never part of the interop contract.
+   * A mismatch is never an error: the file remains fully readable either
+   * way (see `hash.ts`).
+   */
+  is_valid?: boolean;
   extra: Record<string, unknown>;
 }
 

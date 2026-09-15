@@ -47,6 +47,8 @@ public:
   virtual Result<OpcuaConfig> getOpcua() const = 0;
   virtual Result<void> setOpcua(const OpcuaConfig& model, SetMode mode = SetMode::Merge) = 0;
 
+  virtual bool isValid() const = 0;
+
   virtual Result<void> save(const std::string* path = nullptr) = 0;
   virtual void close() = 0;
 };

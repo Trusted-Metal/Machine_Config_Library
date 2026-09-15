@@ -15,6 +15,7 @@
 // `<machine_config/schema.hpp>` themselves and define SCHEMA_DIR.
 
 #include "machine_config/models.hpp"
+#include "machine_config/hash.hpp"
 #include "machine_config/reader.hpp"
 #include "machine_config/writer.hpp"
 #include "machine_config/builder.hpp"

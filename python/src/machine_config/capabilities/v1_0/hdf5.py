@@ -950,6 +950,19 @@ class Hdf5AdapterV1_0:
             "correction_grid_domain_shape": cb.correction_grid_domain_shape,
             "inverse_grid_domain_shape": cb.inverse_grid_domain_shape,
         }
+        # firmware_version: v1.1 addition, no on-disk source for a v1.0 file,
+        # but the StableModel itself is version-agnostic (ClearBox.firmware_version
+        # is a real field regardless of which adapter parsed it) — include it
+        # whenever set so this dict-builder's output doesn't depend on which
+        # version's adapter happens to be constructing it, matching v1_1's
+        # _clearbox_to_dict exactly. (Found via a real cross-language hash
+        # mismatch on fixtures/reference_config_v1_1.h5 — hash.py always uses
+        # this v1_0 builder regardless of the config's actual file_version, on
+        # the assumption that v1_0's and v1_1's _config_to_dict() already
+        # produce identical output for identical content; this field was the
+        # one place that wasn't true.)
+        if cb.firmware_version is not None:
+            d["firmware_version"] = cb.firmware_version
         if cb.power_characterization is not None:
             d["power_characterization"] = self._power_characterization_to_dict(
                 cb.power_characterization

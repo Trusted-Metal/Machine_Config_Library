@@ -369,6 +369,14 @@ class MachineConfigMeta:
     # ADDITION category only. Never wired into _config_to_dict() or the JSON schema.
     facility_id: Optional[str] = None
     config_author: Optional[str] = None
+    # Reader-computed, in-memory only: True/False once a MachineConfigReader has
+    # recomputed the configuration hash and compared it to the on-disk value;
+    # None until then. Never set by a writer or by MockConfigBuilder/
+    # YamlConfigBuilder. Deliberately excluded from _config_to_dict()/to_json()
+    # and from the JSON schema — never written to HDF5, never part of the
+    # interop contract. A mismatch is not an error: the file remains fully
+    # readable either way (see machine_config.hash).
+    is_valid: Optional[bool] = None
     extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed root HDF5 attrs
 
 

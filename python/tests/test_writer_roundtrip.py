@@ -402,7 +402,11 @@ class TestScalarFieldRoundtrip:
         assert scalar_rt.meta.export_date == "2024-06-01T12:00:00.000Z"
 
     def test_meta_configuration_hash(self, scalar_rt: MachineConfig) -> None:
-        assert scalar_rt.meta.configuration_hash == "a" * 64
+        # The writer always computes a fresh hash from actual content — the
+        # input's placeholder "a" * 64 never survives to disk.
+        assert scalar_rt.meta.configuration_hash != "a" * 64
+        assert len(scalar_rt.meta.configuration_hash) == 64
+        assert scalar_rt.meta.is_valid is True
 
     # --- Machine / BuildPlate -----------------------------------------------
 

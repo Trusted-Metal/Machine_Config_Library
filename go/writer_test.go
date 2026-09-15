@@ -50,11 +50,18 @@ func TestWriterRoundtripMetaFields(t *testing.T) {
 	if rt.Meta.Manufacturer != orig.Meta.Manufacturer {
 		t.Errorf("manufacturer: got %q want %q", rt.Meta.Manufacturer, orig.Meta.Manufacturer)
 	}
-	if rt.Meta.ConfigurationHash != orig.Meta.ConfigurationHash {
-		t.Errorf("configuration_hash mismatch")
-	}
+	// reference_config.h5 is externally-authored, so its own stored hash is
+	// expected to be invalid — but once *this* writer produces a file, that
+	// file's stored hash must be real (64 hex chars, not a passthrough of
+	// the input) and must read back valid.
 	if len(rt.Meta.ConfigurationHash) != 64 {
-		t.Errorf("configuration_hash len = %d", len(rt.Meta.ConfigurationHash))
+		t.Errorf("configuration_hash len = %d, want 64", len(rt.Meta.ConfigurationHash))
+	}
+	if rt.Meta.ConfigurationHash == orig.Meta.ConfigurationHash {
+		t.Errorf("configuration_hash should differ from the externally-authored original, got same value")
+	}
+	if rt.Meta.IsValid == nil || !*rt.Meta.IsValid {
+		t.Errorf("is_valid = %v, want true", rt.Meta.IsValid)
 	}
 	if rt.Meta.FileVersion != orig.Meta.FileVersion {
 		t.Errorf("file_version: got %q want %q", rt.Meta.FileVersion, orig.Meta.FileVersion)
@@ -659,5 +666,54 @@ func TestWriterRegistryDispatchesViaInjectedAdapter(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected the fake adapter's Write to be called — dispatch did not route to the fake")
+	}
+}
+
+// Prerequisite fix (CONFIGURATION_HASH_PLAN.md): writers must no longer
+// materialize a hardcoded default (e.g. "mm") for an unset *_unit field —
+// that default was never real data, just the reader's own Rule-8 locked
+// constant written early for no benefit, and it broke pre-write/post-write
+// hash agreement. One representative field per affected struct, mirroring
+// Python's/Rust's/Node.js's equivalent test's shape exactly.
+func TestUnsetUnitFieldsRoundTripAsNilNotADefault(t *testing.T) {
+	cfg := machineconfig.NewMockConfigBuilder()
+	cfg.NLasers = 1
+	built := cfg.Build()
+
+	built.Machine.BuildPlateRadiusUnit = nil
+	for i := range built.OpticalTrains {
+		built.OpticalTrains[i].MajorAxisAngleUnit = nil
+		built.OpticalTrains[i].Scanner.WorkingDistanceUnit = nil
+		built.OpticalTrains[i].LightSource.WavelengthUnit = nil
+		built.OpticalTrains[i].Collimator.FocalLengthUnit = nil
+		built.OpticalTrains[i].ScannerCard.SamplePeriodUnit = nil
+	}
+
+	tmp := filepath.Join(t.TempDir(), "unset_units.h5")
+	if err := machineconfig.NewWriter().Write(built, tmp); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := machineconfig.NewReader(tmp).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rt.Machine.BuildPlateRadiusUnit != nil {
+		t.Errorf("Machine.BuildPlateRadiusUnit = %q, want nil", *rt.Machine.BuildPlateRadiusUnit)
+	}
+	if rt.OpticalTrains[0].MajorAxisAngleUnit != nil {
+		t.Errorf("OpticalTrains[0].MajorAxisAngleUnit = %q, want nil", *rt.OpticalTrains[0].MajorAxisAngleUnit)
+	}
+	if rt.OpticalTrains[0].Scanner.WorkingDistanceUnit != nil {
+		t.Errorf("Scanner.WorkingDistanceUnit = %q, want nil", *rt.OpticalTrains[0].Scanner.WorkingDistanceUnit)
+	}
+	if rt.OpticalTrains[0].LightSource.WavelengthUnit != nil {
+		t.Errorf("LightSource.WavelengthUnit = %q, want nil", *rt.OpticalTrains[0].LightSource.WavelengthUnit)
+	}
+	if rt.OpticalTrains[0].Collimator.FocalLengthUnit != nil {
+		t.Errorf("Collimator.FocalLengthUnit = %q, want nil", *rt.OpticalTrains[0].Collimator.FocalLengthUnit)
+	}
+	if rt.OpticalTrains[0].ScannerCard.SamplePeriodUnit != nil {
+		t.Errorf("ScannerCard.SamplePeriodUnit = %q, want nil", *rt.OpticalTrains[0].ScannerCard.SamplePeriodUnit)
 	}
 }

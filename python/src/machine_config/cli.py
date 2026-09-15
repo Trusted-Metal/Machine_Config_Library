@@ -11,6 +11,7 @@ import jsonschema
 import yaml
 
 from .builder import MockConfigBuilder, YamlConfigBuilder
+from .hash import compute_configuration_hash
 from .reader import MachineConfigReader, config_from_dict
 from .schema import SCHEMA
 from .writer import MachineConfigWriter
@@ -275,6 +276,39 @@ def correction_hash(path: str, train: int, inverse: bool) -> None:
         # Explicit little-endian float64 for cross-platform determinism.
         digest = hashlib.sha256(arr.astype("<f8").tobytes()).hexdigest()
         click.echo(digest)
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# configuration-hash
+# ---------------------------------------------------------------------------
+
+@main.command(name="configuration-hash")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--quiet", is_flag=True, default=False, help="Print only the recomputed hex digest.")
+def configuration_hash(path: str, quiet: bool) -> None:
+    """Recompute the configuration hash and compare it to the stored value.
+
+    Never treats a mismatch as an error at the library level — the file is
+    always fully readable either way. This command exits 1 on mismatch as a
+    scripting/CI convenience only.
+    """
+    try:
+        reader = MachineConfigReader(path)
+        config = reader.parse()
+        stored = config.meta.configuration_hash
+        recomputed = compute_configuration_hash(config)
+        valid = bool(config.meta.is_valid)
+        if quiet:
+            click.echo(recomputed)
+        else:
+            click.echo(f"stored: {stored}")
+            click.echo(f"recomputed: {recomputed}")
+            click.echo(f"valid: {'true' if valid else 'false'}")
+        if not valid:
+            sys.exit(1)
     except Exception as exc:  # noqa: BLE001
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)

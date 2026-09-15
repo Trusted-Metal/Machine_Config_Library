@@ -3,6 +3,7 @@
 // On-disk group paths and HDF5 attribute names live in the matching adapter.
 
 #include "machine_config/adapters.hpp"
+#include "machine_config/hash.hpp"
 #include "machine_config/models.hpp"
 #include "machine_config/capabilities/v1_0/hdf5.hpp"
 #include "machine_config/capabilities/v1_1/hdf5.hpp"
@@ -68,9 +69,16 @@ public:
     explicit MachineConfigReader(std::filesystem::path path)
         : path_(std::move(path)) {}
 
-    MachineConfig parse() const { return adapter()->parse(); }
+    // Parses the file and recomputes Configuration_Hash from the content
+    // just read, comparing it to the stored value to set meta.is_valid. A
+    // mismatch is never an error — the config is always returned; see
+    // hash.hpp.
+    MachineConfig parse() const { return withValidatedHash(adapter()->parse()); }
 
-    MachineConfig parseWithBinary() const { return adapter()->parseWithBinary(); }
+    // Like parse(), but also loads binary correction-grid data. is_valid is
+    // computed identically either way — the hash itself always excludes
+    // binary data (see hash.hpp).
+    MachineConfig parseWithBinary() const { return withValidatedHash(adapter()->parseWithBinary()); }
 
     std::string toJson(int indent = 2, bool include_binary = false) const {
         return adapter()->toJson(indent, include_binary);
@@ -98,6 +106,12 @@ private:
     std::unique_ptr<ReaderAdapter> adapter() const {
         std::string ver = peekFileVersion(path_);
         return resolveReader(ver, path_, productionReaderRegistry());
+    }
+
+    static MachineConfig withValidatedHash(MachineConfig config) {
+        std::string recomputed = computeConfigurationHash(config);
+        config.meta.is_valid = (recomputed == config.meta.configuration_hash);
+        return config;
     }
 };
 

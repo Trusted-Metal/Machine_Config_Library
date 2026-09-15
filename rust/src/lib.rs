@@ -4,6 +4,7 @@
 pub mod builder;
 pub mod capabilities;
 pub mod error;
+pub mod hash;
 pub mod models;
 pub mod power_characterization;
 pub mod reader;

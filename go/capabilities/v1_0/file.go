@@ -219,6 +219,27 @@ func (f *File) GetInverseCorrectionData(index int) (*machineconfig.CorrectionDat
 	return &machineconfig.CorrectionData{Data: flat, Shape: [3]int{257, 257, 2}}, nil
 }
 
+// IsValid recomputes the configuration hash from the session's *current*
+// content and compares it to the session's current Meta.ConfigurationHash
+// -- fresh, every call. Deliberately live, not cached at Open() time: this
+// facade is a mutable session (SetMeta/SetScanner/etc. all mutate f.config
+// in place), so a value computed once at Open() would silently go stale the
+// instant any Set* call ran. See CAPABILITIES_HASH_INTEGRATION_PLAN.md's
+// live-method design -- in particular, this reads false for the entire span
+// between an edit and the next Save(), which is expected (an unsaved edit
+// hasn't been hashed yet), not a sign of corruption. Never returns an
+// error: a hash mismatch is informational, matching
+// CONFIGURATION_HASH_PLAN.md's non-fatal design throughout; an internal
+// hashing error (should not happen in practice) is reported as false rather
+// than propagated.
+func (f *File) IsValid() bool {
+	hash, err := machineconfig.ComputeConfigurationHash(f.config)
+	if err != nil {
+		return false
+	}
+	return hash == f.config.Meta.ConfigurationHash
+}
+
 func (f *File) Save(path string) *api.Error {
 	if err := f.assertOpen(); err != nil {
 		return err
@@ -230,6 +251,16 @@ func (f *File) Save(path string) *api.Error {
 	if out == "" {
 		return api.Errf(api.ErrValidation, "save() requires a path for create()-d files")
 	}
+	// Compute-and-stamp on the session's own config first -- f.config is a
+	// pointer, so this single assignment also updates the session's own
+	// retained state, satisfying the "IsValid() reads true immediately
+	// after Save(), without requiring a fresh Open()" requirement from
+	// CAPABILITIES_HASH_INTEGRATION_PLAN.md's live-method design.
+	hash, err := machineconfig.ComputeConfigurationHash(f.config)
+	if err != nil {
+		return api.Errf(api.ErrIo, err.Error())
+	}
+	f.config.Meta.ConfigurationHash = hash
 	if err := v1_0hdf5.Write(f.config, out); err != nil {
 		return api.Errf(api.ErrIo, err.Error())
 	}

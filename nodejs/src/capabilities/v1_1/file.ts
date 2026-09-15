@@ -8,6 +8,7 @@
 import { Hdf5AdapterV1_1 } from './hdf5.js';
 import { Hdf5WriterV1_1 } from './writer.js';
 import { MockConfigBuilder } from '../../builder.js';
+import { computeConfigurationHash } from '../../hash.js';
 import type { CorrectionData, MachineConfig } from '../../models.js';
 import { nestedToFlat } from '../../models.js';
 import { err, ok, type Result } from '../result.js';
@@ -339,6 +340,25 @@ export class MachineConfigFileV1_1 implements MachineConfigFile {
     return ok({ data: flat, shape });
   }
 
+  /**
+   * Recomputes the configuration hash from the session's *current* content
+   * and compares it to the session's current `meta.configuration_hash` —
+   * fresh, every call. Deliberately live, not cached at open() time: this
+   * facade is a mutable session (setMeta/setScanner/etc. all mutate
+   * `this.data` in place), so a value computed once at open() would
+   * silently go stale the instant any set* call ran. See
+   * CAPABILITIES_HASH_INTEGRATION_PLAN.md's live-method design — in
+   * particular, this reads `false` for the entire span between an edit and
+   * the next save(), which is expected (an unsaved edit hasn't been hashed
+   * yet), not a sign of corruption. Never throws: a mismatch is
+   * informational, matching CONFIGURATION_HASH_PLAN.md's non-fatal design
+   * throughout.
+   */
+  isValid(): boolean {
+    const config = this.data as unknown as MachineConfig;
+    return computeConfigurationHash(config) === config.meta.configuration_hash;
+  }
+
   async save(path?: string): Promise<Result<void, CapabilityError>> {
     this.assertOpen();
     const out = path ?? this.path;
@@ -348,9 +368,15 @@ export class MachineConfigFileV1_1 implements MachineConfigFile {
       );
     }
     try {
-      await new Hdf5WriterV1_1(
-        this.data as unknown as MachineConfig,
-      ).write(out);
+      const config = this.data as unknown as MachineConfig;
+      // Compute-and-stamp before writing. `this.data` and `config` are the
+      // exact same object (asJson is a pure type-cast, no copy), so this
+      // single assignment also updates the session's own retained state --
+      // isValid() reads true immediately after save(), without requiring a
+      // fresh open(). See CAPABILITIES_HASH_INTEGRATION_PLAN.md's
+      // live-method design.
+      config.meta.configuration_hash = computeConfigurationHash(config);
+      await new Hdf5WriterV1_1(config).write(out);
       this.path = out;
       return ok(undefined);
     } catch (e) {

@@ -471,6 +471,17 @@ pub struct MachineConfigMeta {
     /// TEST FIXTURE for the mock v1.1 adapter — see `facility_id` above.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub config_author: Option<String>,
+    /// Reader-computed, in-memory only: `Some(true)`/`Some(false)` once a
+    /// `MachineConfigReader` has recomputed the configuration hash and
+    /// compared it to the on-disk value; `None` until then. Never set by a
+    /// writer or by `MockConfigBuilder`. Unconditionally excluded from
+    /// serialization (`skip`, not `skip_serializing_if` — this field, unlike
+    /// `facility_id`/`config_author`, is genuinely populated on every real
+    /// read, so a conditional skip would stop excluding it) — never written
+    /// to HDF5, never part of the interop contract. A mismatch is never an
+    /// error: the file remains fully readable either way (see `hash.rs`).
+    #[serde(skip, default)]
+    pub is_valid: Option<bool>,
     /// Preserves any non-typed root HDF5 attrs.
     #[serde(default)]
     pub extra: ExtraAttrs,
@@ -693,6 +704,7 @@ mod tests {
                 configuration_hash: "9".repeat(64),
                 facility_id: None,
                 config_author: None,
+                is_valid: None,
                 extra: IndexMap::new(),
             },
             machine: Machine {

@@ -8,6 +8,8 @@ export type { MockConfigBuilderOptions } from './builder.js';
 
 export { SCHEMA_VERSION, getSchema, validate } from './schema.js';
 
+export { computeConfigurationHash, canonicalizeForHash } from './hash.js';
+
 export {
   openMachineConfig,
   createMachineConfig,

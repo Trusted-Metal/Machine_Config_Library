@@ -226,6 +226,9 @@ mod tests {
         fn set_opcua(&mut self, _model: OpcuaConfig, _mode: SetMode) -> Result<(), CapabilityError> {
             unreachable!("not exercised by the registry-dispatch tests")
         }
+        fn is_valid(&self) -> bool {
+            unreachable!("not exercised by the registry-dispatch tests")
+        }
         fn save(&mut self, _path: Option<&Path>) -> Result<(), CapabilityError> {
             unreachable!("not exercised by the registry-dispatch tests")
         }

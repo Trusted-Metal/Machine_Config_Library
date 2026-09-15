@@ -31,6 +31,7 @@ type File interface {
 	GetClearbox(index int) (machineconfig.ClearBox, *Error)
 	GetCorrectionData(index int) (*machineconfig.CorrectionData, *Error)
 	GetInverseCorrectionData(index int) (*machineconfig.CorrectionData, *Error)
+	IsValid() bool
 	Save(path string) *Error
 	Close()
 }

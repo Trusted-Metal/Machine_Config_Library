@@ -12,6 +12,8 @@ import {
   type ToJsonOptions,
 } from "./capabilities/v1_0/hdf5.js";
 import { Hdf5AdapterV1_1 } from "./capabilities/v1_1/hdf5.js";
+import { computeConfigurationHash } from "./hash.js";
+import type { MachineConfig } from "./models.js";
 
 export type { CorrectionData, ReadOptions, ToJsonOptions };
 
@@ -54,8 +56,19 @@ export class MachineConfigReader {
     return this.backend;
   }
 
-  async parse(options: ReadOptions = {}) {
-    return (await this.adapter()).parse(options);
+  /**
+   * Parses the file and recomputes `Configuration_Hash` from the content
+   * just read, comparing it to the stored value to set `meta.is_valid`. A
+   * mismatch is never an error — the config is always returned; see
+   * `hash.ts`.
+   */
+  async parse(options: ReadOptions = {}): Promise<MachineConfig> {
+    const config = await (await this.adapter()).parse(options);
+    const recomputed = computeConfigurationHash(config);
+    return {
+      ...config,
+      meta: { ...config.meta, is_valid: recomputed === config.meta.configuration_hash },
+    };
   }
 
   async toJson(options: ToJsonOptions = {}) {

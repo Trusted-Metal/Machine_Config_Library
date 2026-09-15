@@ -216,12 +216,16 @@ const KNOWN_TRIGGER = new Set([
  * model/API layer keeps a plain, always-true-or-false field (never
  * `undefined`); this is the one place the "omit unless true" business rule
  * (user-confirmed, 2026-08-21) actually applies, since there's no separate
- * to-dict serialisation layer in this language to hold it instead.
+ * to-dict serialisation layer in this language to hold it instead. Also
+ * unconditionally drops `is_valid` (`MachineConfigMeta`) — reader-computed,
+ * in-memory only, never part of the interop contract; the same "no
+ * to-dict layer" reasoning applies, so it must be actively stripped here.
  */
 const INVERT_FLAG_KEYS = new Set([
   "invert_actual_x", "invert_actual_y", "invert_commanded_x", "invert_commanded_y",
 ]);
 function omitFalseInvertFlags(key: string, value: unknown): unknown {
+  if (key === "is_valid") return undefined;
   if (INVERT_FLAG_KEYS.has(key) && value === false) return undefined;
   return value;
 }

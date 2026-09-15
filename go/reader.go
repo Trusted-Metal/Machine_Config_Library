@@ -93,7 +93,10 @@ func (r *MachineConfigReader) Parse() (*MachineConfig, error) {
 	return r.ParseWithOptions(ParseOptions{})
 }
 
-// ParseWithOptions peeks File_Version and dispatches to that version's adapter.
+// ParseWithOptions peeks File_Version and dispatches to that version's
+// adapter, then recomputes Configuration_Hash from the content just read
+// and compares it to the stored value, setting Meta.IsValid. A mismatch is
+// never an error — the config is always returned; see hash.go.
 func (r *MachineConfigReader) ParseWithOptions(opts ParseOptions) (*MachineConfig, error) {
 	fv, err := PeekFileVersion(r.path)
 	if err != nil {
@@ -103,7 +106,17 @@ func (r *MachineConfigReader) ParseWithOptions(opts ParseOptions) (*MachineConfi
 	if err != nil {
 		return nil, err
 	}
-	return adapter.Parse(opts)
+	cfg, err := adapter.Parse(opts)
+	if err != nil {
+		return nil, err
+	}
+	recomputed, err := ComputeConfigurationHash(cfg)
+	if err != nil {
+		return nil, err
+	}
+	valid := recomputed == cfg.Meta.ConfigurationHash
+	cfg.Meta.IsValid = &valid
+	return cfg, nil
 }
 
 // GetCorrectionData loads the ClearBox Correction_Data grid for train index.

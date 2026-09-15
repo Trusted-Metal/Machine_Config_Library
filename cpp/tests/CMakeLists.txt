@@ -9,6 +9,7 @@ add_executable(machine_config_tests
   test_v1_1_adapter.cpp     # real v1.1 adapter (Phase 1 + Phase 2)
   test_power_characterization.cpp # shared shape-conversion functions (Phase 2)
   test_version_adapter_isolation.cpp # cross-version import guard
+  test_hash.cpp             # CONFIGURATION_HASH_PLAN.md Step 5
 )
 
 target_link_libraries(machine_config_tests PRIVATE

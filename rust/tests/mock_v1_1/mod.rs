@@ -470,6 +470,7 @@ impl MockV1_1Reader {
             configuration_hash: read_required_str(&f, "Configuration_Hash")?,
             facility_id: read_str(&f, ATTR_FACILITY_ID)?,
             config_author: read_str(&f, ATTR_CONFIG_AUTHOR)?,
+            is_valid: None,
             extra: collect_extra(&f, KNOWN_ROOT_KEYS)?,
         };
 

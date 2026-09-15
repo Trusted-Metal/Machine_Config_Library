@@ -93,27 +93,24 @@ impl<'a> MachineConfigWriter<'a> {
     }
 
     /// Writes the config to `path`, creating or overwriting the file.
+    ///
+    /// Always computes `Configuration_Hash` fresh from the content actually
+    /// being written — a caller-supplied value is never trusted or passed
+    /// through, since anything else goes stale the instant any other field
+    /// changes. Computed once, up front; no re-read, no patch, no
+    /// fallback-on-error (see `hash.rs`).
     pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let fv = self.resolved_file_version();
-        let current = {
-            let c = self.config.meta.file_version.trim();
-            if c.is_empty() { "1.0" } else { c }
-        };
         // Every adapter stamps config.meta.file_version verbatim as the
         // on-disk File_Version attribute — if target_version overrides the
         // adapter choice, the config handed to the adapter must reflect that
         // too, or the file would claim the wrong version on disk. A clone,
-        // not a mutation of the caller's config, and only made when actually
-        // needed (the common case — no override — never pays for it).
-        if fv == current {
-            let backend = resolve_writer(fv, self.config, &PRODUCTION_WRITER_REGISTRY)?;
-            backend.write(path.as_ref())
-        } else {
-            let mut corrected = self.config.clone();
-            corrected.meta.file_version = fv.to_string();
-            let backend = resolve_writer(fv, &corrected, &PRODUCTION_WRITER_REGISTRY)?;
-            backend.write(path.as_ref())
-        }
+        // not a mutation of the caller's config.
+        let mut corrected = self.config.clone();
+        corrected.meta.file_version = fv.to_string();
+        corrected.meta.configuration_hash = crate::hash::compute_configuration_hash(&corrected);
+        let backend = resolve_writer(fv, &corrected, &PRODUCTION_WRITER_REGISTRY)?;
+        backend.write(path.as_ref())
     }
 }
 
@@ -147,9 +144,22 @@ mod tests {
         let rt = roundtrip(REFERENCE);
         assert_eq!(orig.meta.machine_name, rt.meta.machine_name);
         assert_eq!(orig.meta.manufacturer, rt.meta.manufacturer);
-        assert_eq!(orig.meta.configuration_hash, rt.meta.configuration_hash);
         assert_eq!(orig.meta.file_version, rt.meta.file_version);
         assert_eq!(orig.meta.export_date, rt.meta.export_date);
+    }
+
+    #[test]
+    fn roundtrip_configuration_hash_is_real_and_valid() {
+        // reference_config.h5 is externally-authored, so its own stored hash
+        // is expected to be invalid — but once *this* writer produces a file,
+        // that file's stored hash must be real (64 hex chars, not a
+        // passthrough of the input) and must read back valid.
+        let orig = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let rt = roundtrip(REFERENCE);
+        assert_eq!(rt.meta.configuration_hash.len(), 64);
+        assert!(rt.meta.configuration_hash.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(orig.meta.configuration_hash, rt.meta.configuration_hash);
+        assert_eq!(rt.meta.is_valid, Some(true));
     }
 
     #[test]
@@ -335,6 +345,37 @@ mod tests {
             orig.optical_trains[0].scanner.working_distance,
             rt.optical_trains[0].scanner.working_distance,
         );
+    }
+
+    #[test]
+    fn unset_unit_fields_round_trip_as_none_not_a_default() {
+        // Prerequisite fix (CONFIGURATION_HASH_PLAN.md): writers must no
+        // longer materialize a hardcoded default (e.g. "mm") for an unset
+        // `*_unit` field — that default was never real data, just the
+        // reader's own Rule-8 locked constant written early for no benefit,
+        // and it broke pre-write/post-write hash agreement. One
+        // representative field per affected struct, mirroring Python's
+        // `test_unset_unit_fields_round_trip_as_none_not_a_default`.
+        use crate::builder::MockConfigBuilder;
+
+        let mut config = MockConfigBuilder::new(1).build();
+        config.machine.build_plate_radius_unit = None;
+        config.optical_trains[0].major_axis_angle_unit = None;
+        config.optical_trains[0].scanner.working_distance_unit = None;
+        config.optical_trains[0].light_source.wavelength_unit = None;
+        config.optical_trains[0].collimator.focal_length_unit = None;
+        config.optical_trains[0].scanner_card.sample_period_unit = None;
+
+        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+        MachineConfigWriter::new(&config).write(tmp.path()).unwrap();
+        let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
+
+        assert_eq!(rt.machine.build_plate_radius_unit, None);
+        assert_eq!(rt.optical_trains[0].major_axis_angle_unit, None);
+        assert_eq!(rt.optical_trains[0].scanner.working_distance_unit, None);
+        assert_eq!(rt.optical_trains[0].light_source.wavelength_unit, None);
+        assert_eq!(rt.optical_trains[0].collimator.focal_length_unit, None);
+        assert_eq!(rt.optical_trains[0].scanner_card.sample_period_unit, None);
     }
 
     #[test]

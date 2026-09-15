@@ -237,6 +237,27 @@ def _diff(a: dict, b: dict) -> list[str]:
     return []
 
 
+def _without_configuration_hash(data: dict) -> dict:
+    """Return a shallow copy of an export-json dict with meta.configuration_hash
+    removed.
+
+    Every writer now unconditionally recomputes Configuration_Hash from the
+    content actually being written (CONFIGURATION_HASH_PLAN.md) — a
+    deliberate, load-bearing part of the feature, not a passthrough. That
+    means the fidelity check in phase_write_interop (which compares a
+    just-written-then-read-back file against the *original* canonical JSON
+    it was written from) will always see a different configuration_hash,
+    on purpose, for every writer language. This is the one field that check
+    must ignore; everything else must still match exactly.
+    """
+    out = dict(data)
+    if isinstance(out.get("meta"), dict):
+        meta = dict(out["meta"])
+        meta.pop("configuration_hash", None)
+        out["meta"] = meta
+    return out
+
+
 def _validate_schema(data: dict, schema: dict) -> list[str]:
     if not _JSONSCHEMA:
         return []
@@ -425,10 +446,16 @@ def phase_write_interop(langs: list[str], verbose: bool) -> bool:
                         elif verbose:
                             print(f"{PASS} {tag}")
 
-                # Fidelity: Python's reading must match the canonical JSON.
+                # Fidelity: Python's reading must match the canonical JSON,
+                # except meta.configuration_hash — every writer now recomputes
+                # it fresh from the content actually written, on purpose (see
+                # _without_configuration_hash).
                 if "python" in reader_outputs:
                     tag = f"{writer_lang}-writes → fidelity"
-                    fid_diffs = _diff(canonical, reader_outputs["python"])
+                    fid_diffs = _diff(
+                        _without_configuration_hash(canonical),
+                        _without_configuration_hash(reader_outputs["python"]),
+                    )
                     if fid_diffs:
                         print(f"{FAIL} {tag}:")
                         for line in fid_diffs:
@@ -516,6 +543,96 @@ def phase_correction_hash(langs: list[str], verbose: bool) -> bool:
     if not failures:
         combos = len(langs) * (len(langs) - 1) // 2 * len(FIXTURES) * 2
         print(f"{PASS} Correction data hashes match ({combos} comparisons).")
+    return not failures
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Configuration hash parity
+# ---------------------------------------------------------------------------
+
+def _configuration_hash_output(lang: str, path: Path) -> dict[str, str]:
+    """Run `configuration-hash <path>` (non-quiet) and parse its 3 output lines.
+
+    Deliberately does not use `_run_text`/`--quiet`: the CLI's own contract
+    exits 1 whenever `valid: false` (a convenience for shell scripting), and
+    an externally-authored fixture like reference_config.h5 is *expected* to
+    be invalid on every language — that is not a crash. So this ignores the
+    return code entirely and instead requires the three expected
+    `stored:`/`recomputed:`/`valid:` lines to be present; their absence (as
+    opposed to `valid: false`) is what actually indicates a real failure.
+    """
+    cmd = [*BINARIES[lang](), "configuration-hash", str(path)]
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
+    fields: dict[str, str] = {}
+    for line in r.stdout.strip().splitlines():
+        key, sep, val = line.partition(":")
+        if sep:
+            fields[key.strip()] = val.strip()
+    if not {"stored", "recomputed", "valid"} <= fields.keys():
+        raise RuntimeError(
+            f"{Path(cmd[0]).name} configuration-hash: missing expected output "
+            f"(exit {r.returncode})\nstdout: {r.stdout!r}\nstderr: {r.stderr.strip()}"
+        )
+    return fields
+
+
+def phase_configuration_hash(langs: list[str], verbose: bool) -> bool:
+    """All languages must agree on the recomputed configuration hash AND the
+    is_valid conclusion, for every fixture.
+
+    This does NOT assert every fixture is valid — an externally-authored
+    fixture (e.g. reference_config.h5) is expected to be invalid on every
+    language, permanently, since MCF's own hash scheme only certifies "an
+    MCF writer touched this file last," not parity with any other producer.
+    That shared invalid verdict is itself what this phase verifies: all
+    languages independently compute the same recomputed hash and reach the
+    same valid/invalid conclusion from it.
+    """
+    print("\n=== Phase 5: Configuration Hash Parity ===")
+    if len(langs) < 2:
+        print(f"{SKIP} Need ≥2 languages for hash parity check.")
+        return True
+
+    ref_lang = _ref_lang(langs)
+    failures: list[str] = []
+
+    for name, path in FIXTURES.items():
+        results: dict[str, dict[str, str]] = {}
+        for lang in langs:
+            try:
+                results[lang] = _configuration_hash_output(lang, path)
+            except Exception as exc:
+                tag = f"{lang}/{name}"
+                print(f"{FAIL} {tag}: {exc}")
+                failures.append(tag)
+
+        if ref_lang not in results:
+            continue
+
+        ref = results[ref_lang]
+        for lang, r in results.items():
+            if lang == ref_lang:
+                continue
+            tag = f"{ref_lang} vs {lang} / {name}"
+            mismatches = []
+            if r["recomputed"] != ref["recomputed"]:
+                mismatches.append(
+                    f"recomputed: {ref_lang}={ref['recomputed']} {lang}={r['recomputed']}"
+                )
+            if r["valid"] != ref["valid"]:
+                mismatches.append(f"valid: {ref_lang}={ref['valid']} {lang}={r['valid']}")
+            if mismatches:
+                print(f"{FAIL} {tag}:")
+                for m in mismatches:
+                    print(f"  {m}")
+                failures.append(tag)
+            elif verbose:
+                print(f"{PASS} {tag} (valid={r['valid']})")
+
+    if not failures:
+        combos = len(langs) * (len(langs) - 1) // 2 * len(FIXTURES)
+        print(f"{PASS} Configuration hashes and validity match ({combos} comparisons).")
     return not failures
 
 
@@ -662,6 +779,11 @@ def _parse_args() -> argparse.Namespace:
         help="Skip Phase 3.5 (binary copy round-trip).",
     )
     p.add_argument(
+        "--skip-configuration-hash",
+        action="store_true",
+        help="Skip Phase 5 (configuration hash parity).",
+    )
+    p.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Print PASS lines in addition to FAIL/SKIP lines.",
@@ -707,6 +829,7 @@ def main() -> None:
         ("Phase 3 (Write Interop)",   None if args.skip_write_interop   else phase_write_interop(reachable, args.verbose)),
         ("Phase 3.5 (Binary Copy)",   None if args.skip_binary_copy     else phase_binary_copy(reachable, args.verbose)),
         ("Phase 4 (Correction Hash)", None if args.skip_correction_hash else phase_correction_hash(reachable, args.verbose)),
+        ("Phase 5 (Configuration Hash)", None if args.skip_configuration_hash else phase_configuration_hash(reachable, args.verbose)),
     ]
 
     print()

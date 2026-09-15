@@ -194,14 +194,6 @@ func strOrEmpty(s *string) string {
 	return *s
 }
 
-// strOrDefault dereferences *string or returns def when nil.
-func strOrDefault(s *string, def string) string {
-	if s == nil {
-		return def
-	}
-	return *s
-}
-
 // ---------------------------------------------------------------------------
 // Root group → MachineConfigMeta
 // ---------------------------------------------------------------------------
@@ -259,25 +251,25 @@ func writeMachine(g *h5c.Group, ma *Machine) error {
 	if err := wf(g, "Build_Plate_X_Dimension", ma.BuildPlateX); err != nil {
 		return err
 	}
-	if err := ws(g, "Build_Plate_X_Dimension_unit", strOrDefault(ma.BuildPlateXUnit, "mm")); err != nil {
+	if err := ws(g, "Build_Plate_X_Dimension_unit", strOrEmpty(ma.BuildPlateXUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Build_Plate_Y_Dimension", ma.BuildPlateY); err != nil {
 		return err
 	}
-	if err := ws(g, "Build_Plate_Y_Dimension_unit", strOrDefault(ma.BuildPlateYUnit, "mm")); err != nil {
+	if err := ws(g, "Build_Plate_Y_Dimension_unit", strOrEmpty(ma.BuildPlateYUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Build_Plate_Z_Dimension", ma.BuildPlateZ); err != nil {
 		return err
 	}
-	if err := ws(g, "Build_Plate_Z_Dimension_unit", strOrDefault(ma.BuildPlateZUnit, "mm")); err != nil {
+	if err := ws(g, "Build_Plate_Z_Dimension_unit", strOrEmpty(ma.BuildPlateZUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Build_Plate_Corner_Radius", ma.BuildPlateRadius); err != nil {
 		return err
 	}
-	if err := ws(g, "Build_Plate_Corner_Radius_unit", strOrDefault(ma.BuildPlateRadiusUnit, "mm")); err != nil {
+	if err := ws(g, "Build_Plate_Corner_Radius_unit", strOrEmpty(ma.BuildPlateRadiusUnit)); err != nil {
 		return err
 	}
 	if err := ws(g, "Gas_Flow_Direction", strOrEmpty(ma.GasFlowDirection)); err != nil {
@@ -306,37 +298,37 @@ func writeTrain(g *h5c.Group, t *OpticalTrain) error {
 	if err := wf(g, "Beam_Waist_Major", t.BeamWaistMajor); err != nil {
 		return err
 	}
-	if err := ws(g, "Beam_Waist_Major_unit", strOrDefault(t.BeamWaistMajorUnit, "μm")); err != nil {
+	if err := ws(g, "Beam_Waist_Major_unit", strOrEmpty(t.BeamWaistMajorUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Beam_Waist_Minor", t.BeamWaistMinor); err != nil {
 		return err
 	}
-	if err := ws(g, "Beam_Waist_Minor_unit", strOrDefault(t.BeamWaistMinorUnit, "μm")); err != nil {
+	if err := ws(g, "Beam_Waist_Minor_unit", strOrEmpty(t.BeamWaistMinorUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Beam_Waist_Offset_Z", t.BeamWaistOffsetZ); err != nil {
 		return err
 	}
-	if err := ws(g, "Beam_Waist_Offset_Z_unit", strOrDefault(t.BeamWaistOffsetZUnit, "mm")); err != nil {
+	if err := ws(g, "Beam_Waist_Offset_Z_unit", strOrEmpty(t.BeamWaistOffsetZUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Build_Plane_Offset_Major", t.BuildPlaneOffsetMajor); err != nil {
 		return err
 	}
-	if err := ws(g, "Build_Plane_Offset_Major_unit", strOrDefault(t.BuildPlaneOffsetMajorUnit, "mm")); err != nil {
+	if err := ws(g, "Build_Plane_Offset_Major_unit", strOrEmpty(t.BuildPlaneOffsetMajorUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Build_Plane_Offset_Minor", t.BuildPlaneOffsetMinor); err != nil {
 		return err
 	}
-	if err := ws(g, "Build_Plane_Offset_Minor_unit", strOrDefault(t.BuildPlaneOffsetMinorUnit, "mm")); err != nil {
+	if err := ws(g, "Build_Plane_Offset_Minor_unit", strOrEmpty(t.BuildPlaneOffsetMinorUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Collimator_Focal_Length", t.CollimatorFocalLength); err != nil {
 		return err
 	}
-	if err := ws(g, "Collimator_Focal_Length_unit", strOrDefault(t.CollimatorFocalLengthUnit, "mm")); err != nil {
+	if err := ws(g, "Collimator_Focal_Length_unit", strOrEmpty(t.CollimatorFocalLengthUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "M2_Major", t.M2Major); err != nil {
@@ -348,19 +340,19 @@ func writeTrain(g *h5c.Group, t *OpticalTrain) error {
 	if err := wf(g, "Major_Axis_Angle", t.MajorAxisAngle); err != nil {
 		return err
 	}
-	if err := ws(g, "Major_Axis_Angle_unit", strOrDefault(t.MajorAxisAngleUnit, "degrees")); err != nil {
+	if err := ws(g, "Major_Axis_Angle_unit", strOrEmpty(t.MajorAxisAngleUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Rayleigh_Length_Major", t.RayleighLengthMajor); err != nil {
 		return err
 	}
-	if err := ws(g, "Rayleigh_Length_Major_unit", strOrDefault(t.RayleighLengthMajorUnit, "mm")); err != nil {
+	if err := ws(g, "Rayleigh_Length_Major_unit", strOrEmpty(t.RayleighLengthMajorUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Rayleigh_Length_Minor", t.RayleighLengthMinor); err != nil {
 		return err
 	}
-	if err := ws(g, "Rayleigh_Length_Minor_unit", strOrDefault(t.RayleighLengthMinorUnit, "mm")); err != nil {
+	if err := ws(g, "Rayleigh_Length_Minor_unit", strOrEmpty(t.RayleighLengthMinorUnit)); err != nil {
 		return err
 	}
 	if err := ws(g, "Scanner_Number", strOrEmpty(t.ScannerNumber)); err != nil {
@@ -372,13 +364,13 @@ func writeTrain(g *h5c.Group, t *OpticalTrain) error {
 	if err := wf(g, "Thermal_Lensing_Focal_Plane_Shift", t.ThermalLensingFocalPlaneShift); err != nil {
 		return err
 	}
-	if err := ws(g, "Thermal_Lensing_Focal_Plane_Shift_unit", strOrDefault(t.ThermalLensingFocalPlaneShiftUnit, "mm")); err != nil {
+	if err := ws(g, "Thermal_Lensing_Focal_Plane_Shift_unit", strOrEmpty(t.ThermalLensingFocalPlaneShiftUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Thermal_Lensing_Threshold", t.ThermalLensingThreshold); err != nil {
 		return err
 	}
-	if err := ws(g, "Thermal_Lensing_Threshold_unit", strOrDefault(t.ThermalLensingThresholdUnit, "mm")); err != nil {
+	if err := ws(g, "Thermal_Lensing_Threshold_unit", strOrEmpty(t.ThermalLensingThresholdUnit)); err != nil {
 		return err
 	}
 
@@ -460,49 +452,49 @@ func writeScanner(g *h5c.Group, s *Scanner) error {
 	if err := wf(g, "Working_Distance", s.WorkingDistance); err != nil {
 		return err
 	}
-	if err := ws(g, "Working_Distance_unit", strOrDefault(s.WorkingDistanceUnit, "mm")); err != nil {
+	if err := ws(g, "Working_Distance_unit", strOrEmpty(s.WorkingDistanceUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Scan_Field_Size_X", s.ScanFieldX); err != nil {
 		return err
 	}
-	if err := ws(g, "Scan_Field_Size_X_unit", strOrDefault(s.ScanFieldXUnit, "mm")); err != nil {
+	if err := ws(g, "Scan_Field_Size_X_unit", strOrEmpty(s.ScanFieldXUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Scan_Field_Size_Y", s.ScanFieldY); err != nil {
 		return err
 	}
-	if err := ws(g, "Scan_Field_Size_Y_unit", strOrDefault(s.ScanFieldYUnit, "mm")); err != nil {
+	if err := ws(g, "Scan_Field_Size_Y_unit", strOrEmpty(s.ScanFieldYUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Scan_Field_Size_Z", s.ScanFieldZ); err != nil {
 		return err
 	}
-	if err := ws(g, "Scan_Field_Size_Z_unit", strOrDefault(s.ScanFieldZUnit, "mm")); err != nil {
+	if err := ws(g, "Scan_Field_Size_Z_unit", strOrEmpty(s.ScanFieldZUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Scan_Head_Offset_X", s.ScanHeadOffsetX); err != nil {
 		return err
 	}
-	if err := ws(g, "Scan_Head_Offset_X_unit", strOrDefault(s.ScanHeadOffsetXUnit, "mm")); err != nil {
+	if err := ws(g, "Scan_Head_Offset_X_unit", strOrEmpty(s.ScanHeadOffsetXUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Scan_Head_Offset_Y", s.ScanHeadOffsetY); err != nil {
 		return err
 	}
-	if err := ws(g, "Scan_Head_Offset_Y_unit", strOrDefault(s.ScanHeadOffsetYUnit, "mm")); err != nil {
+	if err := ws(g, "Scan_Head_Offset_Y_unit", strOrEmpty(s.ScanHeadOffsetYUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Scan_Head_Offset_Z", s.ScanHeadOffsetZ); err != nil {
 		return err
 	}
-	if err := ws(g, "Scan_Head_Offset_Z_unit", strOrDefault(s.ScanHeadOffsetZUnit, "mm")); err != nil {
+	if err := ws(g, "Scan_Head_Offset_Z_unit", strOrEmpty(s.ScanHeadOffsetZUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Scan_Head_Rotation", s.ScanHeadRotation); err != nil {
 		return err
 	}
-	if err := ws(g, "Scan_Head_Rotation_unit", strOrDefault(s.ScanHeadRotationUnit, "degrees")); err != nil {
+	if err := ws(g, "Scan_Head_Rotation_unit", strOrEmpty(s.ScanHeadRotationUnit)); err != nil {
 		return err
 	}
 	if err := ws(g, "Axis_Configuration", strOrEmpty(s.AxisConfiguration)); err != nil {
@@ -583,31 +575,31 @@ func writeLightSource(g *h5c.Group, ls *LightSource) error {
 	if err := wf(g, "Light_Wavelength", ls.Wavelength); err != nil {
 		return err
 	}
-	if err := ws(g, "Light_Wavelength_unit", strOrDefault(ls.WavelengthUnit, "nm")); err != nil {
+	if err := ws(g, "Light_Wavelength_unit", strOrEmpty(ls.WavelengthUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Power_Max_Nominal", ls.PowerMaxNominal); err != nil {
 		return err
 	}
-	if err := ws(g, "Power_Max_Nominal_unit", strOrDefault(ls.PowerMaxNominalUnit, "W")); err != nil {
+	if err := ws(g, "Power_Max_Nominal_unit", strOrEmpty(ls.PowerMaxNominalUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Power_Max_Actual", ls.PowerMaxActual); err != nil {
 		return err
 	}
-	if err := ws(g, "Power_Max_Actual_unit", strOrDefault(ls.PowerMaxActualUnit, "W")); err != nil {
+	if err := ws(g, "Power_Max_Actual_unit", strOrEmpty(ls.PowerMaxActualUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Power_Min_Actual", ls.PowerMinActual); err != nil {
 		return err
 	}
-	if err := ws(g, "Power_Min_Actual_unit", strOrDefault(ls.PowerMinActualUnit, "W")); err != nil {
+	if err := ws(g, "Power_Min_Actual_unit", strOrEmpty(ls.PowerMinActualUnit)); err != nil {
 		return err
 	}
 	if err := wf(g, "Power_Min_Nominal", ls.PowerMinNominal); err != nil {
 		return err
 	}
-	if err := ws(g, "Power_Min_Nominal_unit", strOrDefault(ls.PowerMinNominalUnit, "W")); err != nil {
+	if err := ws(g, "Power_Min_Nominal_unit", strOrEmpty(ls.PowerMinNominalUnit)); err != nil {
 		return err
 	}
 	// Power_Bit_Resolution is always stored as a string in real HDF5 files.
@@ -618,7 +610,7 @@ func writeLightSource(g *h5c.Group, ls *LightSource) error {
 	if err := ws(g, "Power_Bit_Resolution", pbr); err != nil {
 		return err
 	}
-	if err := ws(g, "Power_Bit_Resolution_unit", strOrDefault(ls.PowerBitResolutionUnit, "bits")); err != nil {
+	if err := ws(g, "Power_Bit_Resolution_unit", strOrEmpty(ls.PowerBitResolutionUnit)); err != nil {
 		return err
 	}
 	algorithm, params := BackwardFlatFieldsPoints(ls.PowerCharacterization)
@@ -645,7 +637,7 @@ func writeCollimator(g *h5c.Group, c *Collimator) error {
 	if err := wf(g, "Focal_Length", c.FocalLength); err != nil {
 		return err
 	}
-	return ws(g, "Focal_Length_unit", strOrDefault(c.FocalLengthUnit, "mm"))
+	return ws(g, "Focal_Length_unit", strOrEmpty(c.FocalLengthUnit))
 }
 
 // ---------------------------------------------------------------------------
@@ -668,7 +660,7 @@ func writeScannerCard(g *h5c.Group, sc *ScannerCard) error {
 	if err := wf(g, "Sample_Period", sc.SamplePeriod); err != nil {
 		return err
 	}
-	return ws(g, "Sample_Period_unit", strOrDefault(sc.SamplePeriodUnit, "μs"))
+	return ws(g, "Sample_Period_unit", strOrEmpty(sc.SamplePeriodUnit))
 }
 
 // ---------------------------------------------------------------------------

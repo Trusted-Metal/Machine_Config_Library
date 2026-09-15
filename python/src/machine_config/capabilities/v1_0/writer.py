@@ -118,13 +118,13 @@ class Hdf5WriterV1_0:
         grp.attrs["Model"]        = ma.model
         grp.attrs["Serial_Number"]= ma.serial_number
         grp.attrs["Build_Plate_X_Dimension"]      = self._f(bp.x)
-        grp.attrs["Build_Plate_X_Dimension_unit"] = bp.x_unit or "mm"
+        grp.attrs["Build_Plate_X_Dimension_unit"] = self._s(bp.x_unit)
         grp.attrs["Build_Plate_Y_Dimension"]      = self._f(bp.y)
-        grp.attrs["Build_Plate_Y_Dimension_unit"] = bp.y_unit or "mm"
+        grp.attrs["Build_Plate_Y_Dimension_unit"] = self._s(bp.y_unit)
         grp.attrs["Build_Plate_Z_Dimension"]      = self._f(bp.z)
-        grp.attrs["Build_Plate_Z_Dimension_unit"] = bp.z_unit or "mm"
+        grp.attrs["Build_Plate_Z_Dimension_unit"] = self._s(bp.z_unit)
         grp.attrs["Build_Plate_Corner_Radius"]      = self._f(bp.corner_radius)
-        grp.attrs["Build_Plate_Corner_Radius_unit"] = bp.corner_radius_unit or "mm"
+        grp.attrs["Build_Plate_Corner_Radius_unit"] = self._s(bp.corner_radius_unit)
         grp.attrs["Gas_Flow_Direction"] = self._s(ma.gas_flow_direction)
         grp.attrs["Recoat_Direction"]   = self._s(ma.recoat_direction)
         grp.attrs["Recoater_Blade_Type"] = self._s(ma.recoater_blade_type)
@@ -154,52 +154,52 @@ class Hdf5WriterV1_0:
         grp.attrs["Beam_Profile_Type"]     = self._s(t.beam_profile_type)
         grp.attrs["Beam_Waist_Definition"] = self._s(t.beam_waist_definition)
         grp.attrs["Beam_Waist_Major"]      = self._f(t.beam_waist_major)
-        grp.attrs["Beam_Waist_Major_unit"] = t.beam_waist_major_unit or "μm"
+        grp.attrs["Beam_Waist_Major_unit"] = self._s(t.beam_waist_major_unit)
         grp.attrs["Beam_Waist_Minor"]      = self._f(t.beam_waist_minor)
-        grp.attrs["Beam_Waist_Minor_unit"] = t.beam_waist_minor_unit or "μm"
+        grp.attrs["Beam_Waist_Minor_unit"] = self._s(t.beam_waist_minor_unit)
         grp.attrs["Beam_Waist_Offset_Z"]      = self._f(t.beam_waist_offset_z)
-        grp.attrs["Beam_Waist_Offset_Z_unit"] = t.beam_waist_offset_z_unit or "mm"
+        grp.attrs["Beam_Waist_Offset_Z_unit"] = self._s(t.beam_waist_offset_z_unit)
         grp.attrs["Build_Plane_Offset_Major"]      = self._f(t.build_plane_offset_major)
-        grp.attrs["Build_Plane_Offset_Major_unit"] = t.build_plane_offset_major_unit or "mm"
+        grp.attrs["Build_Plane_Offset_Major_unit"] = self._s(t.build_plane_offset_major_unit)
         grp.attrs["Build_Plane_Offset_Minor"]      = self._f(t.build_plane_offset_minor)
-        grp.attrs["Build_Plane_Offset_Minor_unit"] = t.build_plane_offset_minor_unit or "mm"
+        grp.attrs["Build_Plane_Offset_Minor_unit"] = self._s(t.build_plane_offset_minor_unit)
         grp.attrs["Collimator_Focal_Length"]      = self._f(t.collimator_focal_length)
-        grp.attrs["Collimator_Focal_Length_unit"] = t.collimator_focal_length_unit or "mm"
+        grp.attrs["Collimator_Focal_Length_unit"] = self._s(t.collimator_focal_length_unit)
         grp.attrs["M2_Major"] = self._f(t.m2_major)
         grp.attrs["M2_Minor"] = self._f(t.m2_minor)
         grp.attrs["Major_Axis_Angle"]      = self._f(t.major_axis_angle)
-        grp.attrs["Major_Axis_Angle_unit"] = t.major_axis_angle_unit or "degrees"
+        grp.attrs["Major_Axis_Angle_unit"] = self._s(t.major_axis_angle_unit)
         grp.attrs["Rayleigh_Length_Major"]      = self._f(t.rayleigh_length_major)
-        grp.attrs["Rayleigh_Length_Major_unit"] = t.rayleigh_length_major_unit or "mm"
+        grp.attrs["Rayleigh_Length_Major_unit"] = self._s(t.rayleigh_length_major_unit)
         grp.attrs["Rayleigh_Length_Minor"]      = self._f(t.rayleigh_length_minor)
-        grp.attrs["Rayleigh_Length_Minor_unit"] = t.rayleigh_length_minor_unit or "mm"
+        grp.attrs["Rayleigh_Length_Minor_unit"] = self._s(t.rayleigh_length_minor_unit)
         grp.attrs["Scanner_Number"]           = self._s(t.scanner_number)
         grp.attrs["Thermal_Lensing_Test_Passed"]        = self._b(t.thermal_lensing_passed)
         grp.attrs["Thermal_Lensing_Focal_Plane_Shift"]      = self._f(t.thermal_lensing_focal_plane_shift)
-        grp.attrs["Thermal_Lensing_Focal_Plane_Shift_unit"] = t.thermal_lensing_focal_plane_shift_unit or "mm"
+        grp.attrs["Thermal_Lensing_Focal_Plane_Shift_unit"] = self._s(t.thermal_lensing_focal_plane_shift_unit)
         grp.attrs["Thermal_Lensing_Threshold"]      = self._f(t.thermal_lensing_threshold)
-        grp.attrs["Thermal_Lensing_Threshold_unit"] = t.thermal_lensing_threshold_unit or "mm"
+        grp.attrs["Thermal_Lensing_Threshold_unit"] = self._s(t.thermal_lensing_threshold_unit)
 
     def _write_scanner(self, grp: h5py.Group, s: Scanner) -> None:
         grp.attrs["Manufacturer"]  = s.manufacturer
         grp.attrs["Model"]         = s.model
         grp.attrs["Serial_Number"] = s.serial_number
         grp.attrs["Working_Distance"]      = self._f(s.working_distance)
-        grp.attrs["Working_Distance_unit"] = s.working_distance_unit or "mm"
+        grp.attrs["Working_Distance_unit"] = self._s(s.working_distance_unit)
         grp.attrs["Scan_Field_Size_X"]      = self._f(s.scan_field_x)
-        grp.attrs["Scan_Field_Size_X_unit"] = s.scan_field_x_unit or "mm"
+        grp.attrs["Scan_Field_Size_X_unit"] = self._s(s.scan_field_x_unit)
         grp.attrs["Scan_Field_Size_Y"]      = self._f(s.scan_field_y)
-        grp.attrs["Scan_Field_Size_Y_unit"] = s.scan_field_y_unit or "mm"
+        grp.attrs["Scan_Field_Size_Y_unit"] = self._s(s.scan_field_y_unit)
         grp.attrs["Scan_Field_Size_Z"]      = self._f(s.scan_field_z)
-        grp.attrs["Scan_Field_Size_Z_unit"] = s.scan_field_z_unit or "mm"
+        grp.attrs["Scan_Field_Size_Z_unit"] = self._s(s.scan_field_z_unit)
         grp.attrs["Scan_Head_Offset_X"]      = self._f(s.scan_head_offset_x)
-        grp.attrs["Scan_Head_Offset_X_unit"] = s.scan_head_offset_x_unit or "mm"
+        grp.attrs["Scan_Head_Offset_X_unit"] = self._s(s.scan_head_offset_x_unit)
         grp.attrs["Scan_Head_Offset_Y"]      = self._f(s.scan_head_offset_y)
-        grp.attrs["Scan_Head_Offset_Y_unit"] = s.scan_head_offset_y_unit or "mm"
+        grp.attrs["Scan_Head_Offset_Y_unit"] = self._s(s.scan_head_offset_y_unit)
         grp.attrs["Scan_Head_Offset_Z"]      = self._f(s.scan_head_offset_z)
-        grp.attrs["Scan_Head_Offset_Z_unit"] = s.scan_head_offset_z_unit or "mm"
+        grp.attrs["Scan_Head_Offset_Z_unit"] = self._s(s.scan_head_offset_z_unit)
         grp.attrs["Scan_Head_Rotation"]      = self._f(s.scan_head_rotation)
-        grp.attrs["Scan_Head_Rotation_unit"] = s.scan_head_rotation_unit or "degrees"
+        grp.attrs["Scan_Head_Rotation_unit"] = self._s(s.scan_head_rotation_unit)
         grp.attrs["Axis_Configuration"]      = self._s(s.axis_configuration)
         # Written only when True — never written at all (not even as 0) when
         # False, unlike every other bool attribute (user-confirmed, 2026-08-21).
@@ -236,18 +236,18 @@ class Hdf5WriterV1_0:
         grp.attrs["Model"]         = ls.model
         grp.attrs["Serial_Number"] = ls.serial_number
         grp.attrs["Light_Wavelength"]      = self._f(ls.wavelength)
-        grp.attrs["Light_Wavelength_unit"] = ls.wavelength_unit or "nm"
+        grp.attrs["Light_Wavelength_unit"] = self._s(ls.wavelength_unit)
         grp.attrs["Power_Max_Nominal"]      = self._f(ls.power_max_nominal)
-        grp.attrs["Power_Max_Nominal_unit"] = ls.power_max_nominal_unit or "W"
+        grp.attrs["Power_Max_Nominal_unit"] = self._s(ls.power_max_nominal_unit)
         grp.attrs["Power_Max_Actual"]      = self._f(ls.power_max_actual)
-        grp.attrs["Power_Max_Actual_unit"] = ls.power_max_actual_unit or "W"
+        grp.attrs["Power_Max_Actual_unit"] = self._s(ls.power_max_actual_unit)
         grp.attrs["Power_Min_Actual"]      = self._f(ls.power_min_actual)
-        grp.attrs["Power_Min_Actual_unit"] = ls.power_min_actual_unit or "W"
+        grp.attrs["Power_Min_Actual_unit"] = self._s(ls.power_min_actual_unit)
         grp.attrs["Power_Min_Nominal"]      = self._f(ls.power_min_nominal)
-        grp.attrs["Power_Min_Nominal_unit"] = ls.power_min_nominal_unit or "W"
+        grp.attrs["Power_Min_Nominal_unit"] = self._s(ls.power_min_nominal_unit)
         # Power_Bit_Resolution is stored as String type in real HDF5 files
         grp.attrs["Power_Bit_Resolution"]      = self._s(ls.power_bit_resolution)
-        grp.attrs["Power_Bit_Resolution_unit"] = ls.power_bit_resolution_unit or "bits"
+        grp.attrs["Power_Bit_Resolution_unit"] = self._s(ls.power_bit_resolution_unit)
         # power_characterization is the only StableModel representation of
         # this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md) —
         # always derive the flat v1.0 shape from it, unconditionally.
@@ -260,7 +260,7 @@ class Hdf5WriterV1_0:
         grp.attrs["Model"]         = c.model
         grp.attrs["Serial_Number"] = c.serial_number
         grp.attrs["Focal_Length"]      = self._f(c.focal_length)
-        grp.attrs["Focal_Length_unit"] = c.focal_length_unit or "mm"
+        grp.attrs["Focal_Length_unit"] = self._s(c.focal_length_unit)
 
     def _write_scanner_card(self, grp: h5py.Group, sc: ScannerCard) -> None:
         grp.attrs["Manufacturer"]  = sc.manufacturer
@@ -268,7 +268,7 @@ class Hdf5WriterV1_0:
         grp.attrs["Serial_Number"] = sc.serial_number
         grp.attrs["Communication_Protocol"] = self._s(sc.communication_protocol)
         grp.attrs["Sample_Period"]      = self._f(sc.sample_period)
-        grp.attrs["Sample_Period_unit"] = sc.sample_period_unit or "μs"
+        grp.attrs["Sample_Period_unit"] = self._s(sc.sample_period_unit)
 
     def _write_clearbox(self, grp: h5py.Group, cb: ClearBox) -> None:
         grp.attrs["Ip_Address"]           = cb.ip_address

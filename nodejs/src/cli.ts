@@ -64,6 +64,29 @@ program
   });
 
 program
+  .command('configuration-hash <file>')
+  .description('Recompute the configuration hash and compare it to the stored value')
+  .option('--quiet', 'Print only the bare recomputed hex digest (for scripting)')
+  .action(async (file: string, opts: { quiet?: boolean }) => {
+    const { MachineConfigReader } = await import('./reader.js');
+    const { computeConfigurationHash } = await import('./hash.js');
+    const config = await new MachineConfigReader(file).parse();
+    const stored = config.meta.configuration_hash;
+    const recomputed = computeConfigurationHash(config);
+    const valid = config.meta.is_valid ?? false;
+    if (opts.quiet) {
+      process.stdout.write(recomputed + '\n');
+    } else {
+      process.stdout.write(`stored: ${stored}\n`);
+      process.stdout.write(`recomputed: ${recomputed}\n`);
+      process.stdout.write(`valid: ${valid}\n`);
+      if (!valid) {
+        process.exitCode = 1;
+      }
+    }
+  });
+
+program
   .command('copy-hdf5 <input> <output>')
   .description('Copy an HDF5 machine config file, preserving all binary data (correction grids, fc3 bytes)')
   .action(async (input: string, output: string) => {

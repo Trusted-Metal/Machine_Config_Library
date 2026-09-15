@@ -25,12 +25,14 @@
 using machine_config::MachineConfigReader;
 using machine_config::MachineConfigWriter;
 using machine_config::capabilities::MachineConfigFileV1_0;
+using machine_config::capabilities::MachineConfigFileV1_1;
 using machine_config::capabilities::SetMode;
 using machine_config::capabilities::createMachineConfig;
 using machine_config::capabilities::openMachineConfig;
 using machine_config::capabilities::supportedFileVersions;
 
 static const std::string REF       = std::string(FIXTURES_DIR) + "/reference_config.h5";
+static const std::string REFERENCE_V1_1 = std::string(FIXTURES_DIR) + "/reference_config_v1_1.h5";
 static const std::string OPCUA_REF = std::string(FIXTURES_DIR) + "/reference_config_opcua.h5";
 static const std::string SENSORS_REF =
     std::string(FIXTURES_DIR) + "/reference_config_synchronous_sensors.h5";
@@ -127,6 +129,7 @@ public:
         return ResultT<machine_config::OpcuaConfig>::Err("NotPresent", "fake");
     }
     Result setOpcua(const machine_config::OpcuaConfig&, SetMode) override { return Result::Ok(); }
+    bool isValid() const override { return false; }
     Result save(const std::string* = nullptr) override { return Result::Ok(); }
     void close() override {}
 };
@@ -557,4 +560,142 @@ TEST_CASE("CapabilityCreateDispatchesViaInjectedRegistryEntry") {
     auto result = machine_config::capabilities::createMachineConfigWithRegistry("9.9-test", registry);
     REQUIRE(result.ok());
     REQUIRE(dynamic_cast<FakeMachineConfigFile*>(result.value().get()) != nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// isValid() -- CAPABILITIES_HASH_INTEGRATION_PLAN.md
+// ---------------------------------------------------------------------------
+
+TEST_CASE("CapabilityIsValidFalseForExternallyAuthoredReferenceFixture") {
+    // Permanent regression guard, mirroring CONFIGURATION_HASH_PLAN.md's own
+    // equivalent at the MachineConfigReader layer: reference_config.h5 was
+    // authored externally, so MCF's recomputed hash will never match its
+    // stored value. Expected and correct, not a defect.
+    auto opened = MachineConfigFileV1_0::open(REF);
+    REQUIRE(opened.ok());
+    REQUIRE_FALSE(opened.value()->isValid());
+    opened.value()->close();
+}
+
+TEST_CASE("CapabilityIsValidTrueForSelfWrittenFile") {
+    auto created = createMachineConfig("1.0");
+    REQUIRE(created.ok());
+    auto file = created.value();
+    auto out = tmpPath("isvalid_self_written");
+    std::string out_s = out.string();
+    REQUIRE(file->save(&out_s).ok());
+    REQUIRE(file->isValid());
+    file->close();
+
+    auto reopened = MachineConfigFileV1_0::open(out);
+    REQUIRE(reopened.ok());
+    REQUIRE(reopened.value()->isValid());
+    reopened.value()->close();
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityIsValidFlipsLiveAcrossAnUnsavedEditThenASave") {
+    // The test this whole live-method design exists to satisfy: a cached,
+    // computed-once-at-open() value could never distinguish these states.
+    auto created = createMachineConfig("1.0");
+    REQUIRE(created.ok());
+    auto file = created.value();
+    auto out = tmpPath("isvalid_live_flip");
+    std::string out_s = out.string();
+    REQUIRE(file->save(&out_s).ok());
+    REQUIRE(file->isValid());
+
+    const auto stored_before = file->getMeta().configuration_hash;
+    auto scanner = file->getScanner(0);
+    REQUIRE(scanner.ok());
+    auto patched = scanner.value();
+    patched.working_distance = 999.5;
+    REQUIRE(file->setScanner(0, patched, SetMode::Merge).ok());
+
+    // Live-ness: an unsaved edit must be reflected immediately, with no
+    // save()/reopen in between. This is expected, not a corruption signal
+    // (see CAPABILITIES_HASH_INTEGRATION_PLAN.md's documented caveat).
+    REQUIRE_FALSE(file->isValid());
+
+    // The save->live round trip: isValid() must flip back to true from the
+    // *same session*, without reopening -- this is what catches a save()
+    // that forgets to update its own session state, which a test that only
+    // reopens fresh could never distinguish from a save() that does it
+    // correctly.
+    REQUIRE(file->save(&out_s).ok());
+    REQUIRE(file->isValid());
+    REQUIRE(file->getMeta().configuration_hash != stored_before);
+
+    // And a completely fresh session on the same path agrees.
+    auto reopened = MachineConfigFileV1_0::open(out);
+    REQUIRE(reopened.ok());
+    REQUIRE(reopened.value()->isValid());
+    REQUIRE(reopened.value()->getMeta().configuration_hash == file->getMeta().configuration_hash);
+
+    file->close();
+    reopened.value()->close();
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityV1_0SaveStillRoutesThroughRealHashComputation") {
+    // Regression guard for the one language/version combination that was
+    // already correct before this plan (v1.0's save() already used
+    // MachineConfigWriter) -- a future refactor must not silently
+    // reintroduce a bypass back to a raw per-version writer call.
+    auto opened = MachineConfigFileV1_0::open(REF);
+    REQUIRE(opened.ok());
+    auto file = opened.value();
+    const auto original_stored = file->getMeta().configuration_hash;
+    auto out = tmpPath("v1_0_real_hash");
+    std::string out_s = out.string();
+    REQUIRE(file->save(&out_s).ok());
+    file->close();
+
+    auto rt = MachineConfigFileV1_0::open(out);
+    REQUIRE(rt.ok());
+    const auto rt_hash = rt.value()->getMeta().configuration_hash;
+    REQUIRE(rt_hash.size() == 64);
+    REQUIRE(rt_hash != original_stored);
+    REQUIRE(rt.value()->isValid());
+    rt.value()->close();
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityV1_1SaveComputesRealHashAndUpdatesSession") {
+    // Targets the same class of bug this plan found and fixed in other
+    // languages' v1.1 adapters: save() must route through
+    // MachineConfigWriter (a fresh, real hash) rather than passing through
+    // whatever configuration_hash was already in memory.
+    auto opened = MachineConfigFileV1_1::open(REFERENCE_V1_1);
+    REQUIRE(opened.ok());
+    auto file = opened.value();
+    REQUIRE(file->fileVersion() == "1.1");
+    const auto original_stored = file->getMeta().configuration_hash;
+
+    auto scanner = file->getScanner(0);
+    REQUIRE(scanner.ok());
+    auto patched = scanner.value();
+    patched.working_distance = 555.0;
+    REQUIRE(file->setScanner(0, patched, SetMode::Merge).ok());
+    REQUIRE_FALSE(file->isValid());
+
+    auto out = tmpPath("v1_1_real_hash");
+    std::string out_s = out.string();
+    REQUIRE(file->save(&out_s).ok());
+
+    // Live, no reopen:
+    REQUIRE(file->isValid());
+    const auto saved_hash = file->getMeta().configuration_hash;
+    REQUIRE(saved_hash.size() == 64);
+    REQUIRE(saved_hash != original_stored);
+    file->close();
+
+    // Fresh session on the written file agrees:
+    auto reopened = MachineConfigFileV1_1::open(out);
+    REQUIRE(reopened.ok());
+    REQUIRE(reopened.value()->fileVersion() == "1.1");
+    REQUIRE(reopened.value()->isValid());
+    REQUIRE(reopened.value()->getMeta().configuration_hash == saved_hash);
+    reopened.value()->close();
+    std::filesystem::remove(out);
 }
