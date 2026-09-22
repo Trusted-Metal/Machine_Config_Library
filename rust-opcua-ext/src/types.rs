@@ -6,210 +6,270 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Build configuration from /Configuration/build_configuration
+/// Generic attribute value that can be stored in HDF5
+#[cfg(feature = "opcua-client")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BuildConfig {
-    /// Unique build identifier
-    pub build_id: String,
-    /// Operator/user name
-    pub username: String,
-    /// Total number of layers
-    pub layer_count: u32,
-    /// Number of parts being built
-    pub num_of_parts: u32,
-    /// Alloy/material name
-    pub alloy: String,
-    /// Material ID
-    pub material_id: String,
-    /// Build plate thickness (mm)
-    pub build_plate_thick: f64,
-    /// Build plate weight (kg)
-    pub build_plate_weight: f64,
-    /// Starting height (mm)
-    pub starting_height: f64,
-    /// Layer thickness (mm)
-    pub layer_thick: f64,
-    /// Estimated build time
-    pub est_build_time: f64,
-    /// Time unit for estimated build time
-    pub est_build_time_unit: String,
-    /// Whether to save binary data
-    pub save_bin_data: bool,
+#[serde(untagged)]
+pub enum AttributeValue {
+    String(String),
+    Float(f64),
+    Int(i64),
+    FloatArray(Vec<f64>),
+    Bool(bool),
 }
 
-impl Default for BuildConfig {
+#[cfg(feature = "opcua-client")]
+/// OPCUA configuration from /OPCUA/Client
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientConfig {
+    // CLIENT_GROUP
+    /// Sets user identity token requirements for RBAC
+    pub auth_mode: String,
+    /// Sets search depth for address space discovery and subscription
+    pub bfs_max_depth: u32,
+    /// Maximum number of consecutive publish cycles without any new data before server sends keep-alive confimation
+    pub keep_alive_count: u32,
+    /// Maximum number of consecutive publish cycles without successfule request before subscription termination
+    pub lifetime_count: u32,
+    /// OEM/Make specifier which selects browse strategy and other subsets of client processes/properties
+    pub machine_profile: String,
+    /// Time between batch dispatch from server to client [ms]
+    pub publish_interval: u32,
+    /// Queue filtering policy to prevent buffer overflow
+    pub queue_policy: String,
+    /// Maximum number of data change items
+    pub queue_size_data_change: u32,
+    /// Maximum number of event type items
+    pub queue_size_events: u32,
+    /// How often client attempts server reconnect [ms]
+    pub reconnect_interval: u32,
+    /// The target node for a subset of a server's address space
+    pub root_node: String,
+    /// How often existing subscriptions are polled [ms]
+    pub sampling_interval: i32,
+    /// Secure level of data in transport
+    pub security_mode: String,
+    /// Level of encryption for client-server connection
+    pub security_policy: String,
+    /// Specifies target server
+    pub server_url: String,
+    /// How long until client connection timesout [ms]
+    pub session_timeout: u32,
+    /// How often the client checks for new subscriptions [ms]
+    pub sync_loop_interval_initial: u32,
+    /// How often client checks for new subscriptions after settling [ms]
+    pub sync_loop_interval_settled: u32,
+}
+
+#[cfg(feature = "opcua-client")]
+impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            build_id: String::new(),
-            username: String::new(),
-            layer_count: 0,
-            num_of_parts: 0,
-            alloy: String::new(),
-            material_id: String::new(),
-            build_plate_thick: 0.0,
-            build_plate_weight: 0.0,
-            starting_height: 0.0,
-            layer_thick: 0.03, // 30 microns default
-            est_build_time: 60.0,
-            est_build_time_unit: "Minutes".to_string(),
-            save_bin_data: false,
+            // CLIENT_GROUP
+            auth_mode: "Certificate".into(),
+            bfs_max_depth: 16,
+            keep_alive_count: 240,
+            lifetime_count: 2400,
+            machine_profile: String::new(),
+            publish_interval: 250,
+            queue_policy: "DropOldest".into(),
+            queue_size_data_change: 10,
+            queue_size_events: 7200,
+            reconnect_interval: 10000,
+            root_node: String::new(),
+            sampling_interval: 250,
+            security_mode: "SignAndEncrypt".into(),
+            security_policy: "Basic256Sha256".into(),
+            server_url: String::new(),
+            session_timeout: 60000,
+            sync_loop_interval_initial: 1000,
+            sync_loop_interval_settled: 30000,
         }
     }
 }
 
-/// Sensor configuration from /Configuration/sensor_configurations/sensor_{id}
+#[cfg(feature = "opcua-client")]
+/// OPCUA configuration from /OPCUA/Pipe
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SensorConfig {
-    /// Sensor ID
-    pub sensor_id: String,
-    /// Derived units (e.g., "Watts", "Celsius")
-    pub sensor_derived_units: String,
-    /// Port ID
-    pub sensor_port_id: String,
-    /// Sensor type
-    pub sensor_type: String,
-    /// Input type (e.g., "Analog", "Digital")
-    pub sensor_input_type: String,
-    /// Whether this sensor is enabled
-    pub sensor_enabled: bool,
-    /// Timing/sampling interval
-    pub sensor_timing: f64,
-    /// Associated laser number
-    pub sensor_laser_num: u8,
-    /// Sensor input values [min, max]
-    pub sensor_input: [f64; 2],
-    /// Derivation equation constants
-    pub sensor_derivation_eqn_constants: Vec<f64>,
+pub struct PipeConfig {
+    // PIPE_GROUP
+    /// Maximum size of by pipe buffer [Bytes]
+    pub buffer_size: u32,
+    /// Enable/Disable pushing machine config Client Group entries to client
+    pub configure_client: String,
+    /// Limits processing rate of read loop [Hz]
+    pub inbound_rate_limit: i32,
+    /// Maximum size of single message [Bytes]
+    pub max_inbound_message_size: u32,
+    /// Minimum client process integrity level accepted by pipe
+    pub min_integrity_level: String,
+    /// Enable/Disable for OPCUA support
+    pub pipe_enabled: String,
+    /// Name of pipe to match client
+    pub pipe_name: String,
+    /// DACL restriction based on user level
+    pub user_access_level: String,
 }
 
-impl Default for SensorConfig {
+#[cfg(feature = "opcua-client")]
+impl Default for PipeConfig {
     fn default() -> Self {
         Self {
-            sensor_id: "sensor_1".to_string(),
-            sensor_derived_units: "Watts".to_string(),
-            sensor_port_id: "1".to_string(),
-            sensor_type: "Laser Power".to_string(),
-            sensor_input_type: "Analog".to_string(),
-            sensor_enabled: true,
-            sensor_timing: 0.1,
-            sensor_laser_num: 1,
-            sensor_input: [0.0, 10.0],
-            sensor_derivation_eqn_constants: vec![0.0, 1.0],
+            // PIPE_GROUP
+            buffer_size: 65536,
+            configure_client: "false".into(),
+            inbound_rate_limit: 100,
+            max_inbound_message_size: 4096,
+            min_integrity_level: "medium".into(),
+            pipe_enabled: "false".into(),
+            pipe_name: r"\\.\pipe\opc_ua_client_pipe".into(),
+            user_access_level: "AnyLocalUser".into(),
         }
     }
 }
 
-/// Active machine configuration — held in `AppState.machine_config`.
-///
-/// Fields are extracted from the library facade at load time via its public
-/// getters and stored as the library's own model types. The app never reaches
-/// past the facade's stable API surface, so it is version-agnostic: adding a
-/// new adapter to the library requires no change here.
-#[derive(Debug, Clone)]
-pub struct LoadedConfig {
-    pub source_file: PathBuf,
-    // Extracted via the facade's public getters — library-owned types, Clone+Serialize.
-    pub meta: machine_config::MachineConfigMeta,
-    pub machine: machine_config::Machine,
-    pub optical_trains: Vec<machine_config::OpticalTrain>,
-    /// None when the file has no OPCUA group, or when validation fails.
-    pub opcua: Option<machine_config::OpcuaConfig>,
-    /// Correction data per optical train, parallel-indexed to `optical_trains`.
-    /// Fetched via the facade's `get_correction_data(i)` at load time, while the
-    /// file is still open — `None` for a train whose `ClearBox` has no
-    /// correction grid, `Some(_)` with the library's own flat, row-major
-    /// `CorrectionData` otherwise. Deliberately the facade's own type, not a
-    /// re-flattened copy: the NaN-as-`None` grid conversion is the library's
-    /// logic to own, not this app's to reimplement.
-    pub correction_data: Vec<Option<machine_config::CorrectionData>>,
-    /// Same shape as `correction_data`, for the inverse correction grid.
-    pub inverse_correction_data: Vec<Option<machine_config::CorrectionData>>,
-    // Legacy groups outside the MCF library's schema.
-    pub build: BuildConfig,
-    pub sensors: Vec<SensorConfig>,
-    /// `recoater_blade_type` from the legacy `/Configuration/settings_configuration` group
-    /// (Phase 3d-v). The only field of the old, pre-migration `SettingsConfig` struct that
-    /// turned out to still be a genuine orphan after checking all 11 against both the MCF
-    /// library's schema and the app's own live `Settings` — see
-    /// docs/MCF_INTEGRATION_PLAN.md, Phase 3d-v. Falls back to `"Standard"` when the group
-    /// or attribute is absent, matching the old `SettingsConfig::default()` exactly.
-    pub recoater_blade_type: String,
+#[cfg(feature = "opcua-client")]
+/// OPCUA configuration from /OPCUA/Triggers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerConfig {
+    // Triggers_GROUP
+    pub triggers_enabled: String,
+    pub trigger_stop_ceiling_layers: u32,
+    pub rules: Vec<TriggerRuleConfig>,
 }
 
-/// JSON boundary for `LoadedConfig` — `LoadedConfig` itself deliberately isn't
-/// `Serialize` (Phase 2a), so this DTO defines exactly the shape any JSON consumer
-/// receives. `opcua` is an *optional* key (matching the Phase 4 TS `LoadedConfig`
-/// interface's `opcua?: McfOpcuaConfig`) because `machine_config::OpcuaConfig` has no
-/// `skip_serializing_if` on any of its own fields — that omission has to happen at
-/// this boundary, not inside the library type. Holds references, not clones, for every
-/// field except `optical_trains` (see that field's own doc comment for why) — so it's
-/// built and consumed via `serde_json::to_value` within the borrow's lifetime (see
-/// docs/MCF_INTEGRATION_PLAN.md, Phase 3c-ii for why callers return `serde_json::Value`
-/// rather than this struct itself).
-///
-/// Lives here, not in `commands.rs` (its original Phase 3c-ii location), because both
-/// `commands.rs` (desktop) and `daemon/server.rs` (headless) need it and neither may
-/// depend on the other's feature gate — see docs/MCF_INTEGRATION_PLAN.md, Phase 3l.
-/// This module is never feature-gated, so it's the correct neutral home, the same way
-/// `crate::machine_config::MachineConfig` was itself the neutral, ungated type both
-/// sides independently imported before this integration.
-#[derive(serde::Serialize)]
-pub(crate) struct LoadedConfigJson<'a> {
-    source_file: &'a std::path::Path,
-    meta: &'a machine_config::MachineConfigMeta,
-    machine: &'a machine_config::Machine,
-    optical_trains: &'a [machine_config::OpticalTrain],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    opcua: Option<&'a machine_config::OpcuaConfig>,
-    build: &'a BuildConfig,
-    sensors: &'a [SensorConfig],
-    /// Phase 4a: exposed for display only (`SettingsPage.tsx`'s `MachineSettingsPanel`) — see
-    /// docs/MCF_INTEGRATION_PLAN.md, Phase 4a's `recoater_blade_type` deferral note. No edit path;
-    /// same value `LoadedConfig.recoater_blade_type` already holds (Phase 3d-v).
-    recoater_blade_type: &'a str,
-    /// Parallel to `optical_trains` (same shape/index convention as `LoadedConfig.correction_data`
-    /// itself) — a cheap derived boolean, not the actual grid data. This is the *only* sanctioned
-    /// way for the frontend's per-laser "Correction Data" badge to know whether a train has one.
-    /// `optical_trains[i].optional_components.clearbox.correction_data`/`inverse_correction_data`
-    /// and `scan_field_correction_file.raw_bytes` are stripped at load time (see
-    /// `machine_config::reader::strip_heavy_binary_fields`), so they're never present to leak here
-    /// in the first place — this boolean is the sole signal by construction, not by a second pass.
-    has_correction_data: Vec<bool>,
-}
-
-impl<'a> From<&'a LoadedConfig> for LoadedConfigJson<'a> {
-    fn from(config: &'a LoadedConfig) -> Self {
+#[cfg(feature = "opcua-client")]
+impl Default for TriggerConfig {
+    fn default() -> Self {
         Self {
-            source_file: &config.source_file,
-            meta: &config.meta,
-            machine: &config.machine,
-            optical_trains: &config.optical_trains,
-            opcua: config.opcua.as_ref(),
-            build: &config.build,
-            sensors: &config.sensors,
-            recoater_blade_type: &config.recoater_blade_type,
-            has_correction_data: config.correction_data.iter().map(Option::is_some).collect(),
+            // Triggers_GROUP
+            triggers_enabled: "false".into(),
+            trigger_stop_ceiling_layers: 0,
+            rules: Vec::new(),
         }
     }
 }
 
-#[cfg(test)]
-mod contract {
-    use super::*;
+#[cfg(feature = "opcua-client")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Trigger configuration from /OPCUA/Triggers/{TriggerLabel}
+pub struct TriggerRuleConfig {
+    // RULE_SUBGROUP
+    /// Determines what automation capture performs based if rule evaluates
+    pub action: String,
+    /// Determines whether hybrid evaluation is active
+    pub combinator: String,
+    /// Conditions for rule evaluation
+    pub conditions: Vec<TriggerConditionConfig>,
+    /// Minimum time between trigger firing consecutively [ms]
+    pub cooldown_period: u32,
+    /// Operator-facing notes for internal justification for rule existence
+    pub description: String,
+    /// Maximum number of firings between a start/stop evaluation
+    pub max_fires_per_job: u32,
+    /// Conflict resolution for rules with the same conditions but differing actions
+    pub priority: u32,
+    /// Enable/Disable for per-rule support
+    pub rule_enabled: String,
+    /// Stable identifier for the rule
+    pub rule_id: u32,
+    /// User-facing label for a rule - intended to capture the machine behavior the rule applies to
+    pub rule_label: String,
+}
 
-    /// `LoadedConfig` must hold the library's own model types directly. If this stops
-    /// compiling, someone reintroduced the mapping antipattern this integration removed —
-    /// fix the field type, don't fix this test.
-    #[test]
-    fn loaded_config_holds_library_types_directly() {
-        fn assert_types(c: &LoadedConfig) {
-            let _: &machine_config::MachineConfigMeta = &c.meta;
-            let _: &machine_config::Machine = &c.machine;
-            let _: &Vec<machine_config::OpticalTrain> = &c.optical_trains;
-            let _: &Option<machine_config::OpcuaConfig> = &c.opcua;
-            let _: &Vec<Option<machine_config::CorrectionData>> = &c.correction_data;
-            let _: &Vec<Option<machine_config::CorrectionData>> = &c.inverse_correction_data;
+#[cfg(feature = "opcua-client")]
+impl Default for TriggerRuleConfig {
+    fn default() -> Self {
+        Self {
+            action: String::new(),
+            combinator: String::new(),
+            conditions: Vec::new(),
+            cooldown_period: 0,
+            description: String::new(),
+            max_fires_per_job: 0,
+            priority: 0,
+            rule_enabled: "false".into(),
+            rule_id: 0,
+            rule_label: String::new(),
         }
-        let _ = assert_types; // never called — the type-check at compile time is the test
     }
+}
+
+#[cfg(feature = "opcua-client")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Trigger configuration from /OPCUA/Triggers/{TriggerLabel}
+pub struct TriggerConditionConfig {
+    // CONDITION_SUBGROUP
+    /// Affects how strictly to evaluate rule based on matching signal name
+    pub case_sensitivity: String,
+    /// Numeric specific equivalent to case_sensitivity
+    pub comparison_operator: String,
+    /// Component for which this rule applies
+    pub component: String,
+    /// Enable/Disable for per-condition support
+    pub condition_enabled: String,
+    /// Stable identifier for this condition within its rule — never assume
+    /// `conditions` is in the same order the HDF5 group was written in.
+    pub condition_id: u32,
+    /// User-facing label for a condition - intended to capture the signal behavior the condition evaluates on
+    pub condition_label: String,
+    /// Determines sensitivity to float value delta
+    pub epsilon: f64,
+    /// Determines trigger evaluation logic
+    pub evaluation_mode: String,
+    /// Event type for which this rule applies
+    pub event: String,
+    /// Signal for which this rule applies
+    pub signal: String,
+    /// Subsystem [component group] for which this rule applies
+    pub subsystem: String,
+    /// Value that requests rule evaluation
+    pub value: String,
+}
+
+#[cfg(feature = "opcua-client")]
+impl Default for TriggerConditionConfig {
+    fn default() -> Self {
+        Self {
+            case_sensitivity: String::new(),
+            comparison_operator: String::new(),
+            component: String::new(),
+            condition_enabled: String::new(),
+            condition_id: 0,
+            condition_label: String::new(),
+            epsilon: 0.0,
+            evaluation_mode: String::new(),
+            event: String::new(),
+            signal: String::new(),
+            subsystem: String::new(),
+            value: String::new(),
+        }
+    }
+}
+
+/// Simplifies repeated checks for (opcua-config) flag guards
+pub trait FlagLike {
+    fn is_enabled(&self) -> bool;
+}
+
+impl FlagLike for str {
+    fn is_enabled(&self) -> bool {
+        self.eq_ignore_ascii_case("true")
+    }
+}
+
+impl FlagLike for String {
+    fn is_enabled(&self) -> bool {
+        self.as_str().is_enabled()
+    }
+}
+
+impl FlagLike for u32 {
+    fn is_enabled(&self) -> bool {
+        *self != 0
+    }
+}
+
+pub fn is_flag_enabled<T: FlagLike + ?Sized>(v: &T) -> bool {
+    v.is_enabled()
 }
