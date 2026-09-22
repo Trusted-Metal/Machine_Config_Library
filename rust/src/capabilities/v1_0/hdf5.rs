@@ -186,7 +186,11 @@ fn read_str(loc: &Location, key: &str) -> Result<Option<String>> {
         None => Ok(None),
         Some(RawValue::Str(s)) => {
             let trimmed = s.trim();
-            Ok(if trimmed.is_empty() { None } else { Some(trimmed.to_string()) })
+            Ok(if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            })
         }
         Some(RawValue::Int(i)) => Ok(Some(i.to_string())),
         Some(RawValue::Float(f)) => Ok(Some(f.to_string())),
@@ -389,7 +393,10 @@ impl Hdf5AdapterV1_0 {
         let path = layout::correction_data_path(train_index);
         let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
         let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
-        Ok(CorrectionData { data: arr.into_raw_vec_and_offset().0, shape })
+        Ok(CorrectionData {
+            data: arr.into_raw_vec_and_offset().0,
+            shape,
+        })
     }
 
     /// Returns the `(257, 257, 2)` float64 *inverse* correction grid for
@@ -403,7 +410,10 @@ impl Hdf5AdapterV1_0 {
         let path = layout::inverse_correction_data_path(train_index);
         let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
         let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
-        Ok(CorrectionData { data: arr.into_raw_vec_and_offset().0, shape })
+        Ok(CorrectionData {
+            data: arr.into_raw_vec_and_offset().0,
+            shape,
+        })
     }
 
     /// Returns the raw `.fc3` bytes embedded as a `uint8` dataset for optical
@@ -426,6 +436,42 @@ impl Hdf5AdapterV1_0 {
         collect_extra(&grp, &[])
     }
 
+    /// Lists the immediate child group names under an arbitrary HDF5 path.
+    /// Use alongside `get_raw_group` to walk a non-schema subtree (e.g. `OPCUA/Triggers/{rule}/Conditions`)
+    /// whose child names aren't known in advance.
+    pub fn list_raw_group_children(&self, hdf5_path: &str) -> Result<Vec<String>> {
+        let f = H5File::open(&self.path)?;
+        let grp = match f.group(hdf5_path) {
+            Ok(g) => g,
+            Err(_) => return Ok(Vec::new()),
+        };
+        Ok(grp.member_names()?)
+    }
+
+    /// Writes `attrs` onto the group at `hdf5_path`, creating it (and any
+    /// missing intermediate groups) if absent. Merges onto existing attrs —
+    /// doesn't clear ones not present in `attrs` — matching the Merge/Replace
+    /// vocabulary `SetMode` already uses elsewhere at the field level.
+    pub fn set_raw_group(&self, hdf5_path: &str, attrs: &ExtraAttrs) -> Result<()> {
+        let f = H5File::open_rw(&self.path)?;
+        let grp = ensure_group(&f, hdf5_path)?;
+        for (key, value) in attrs {
+            write_json_attr(&grp, key, value)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_group(f: &H5File, hdf5_path: &str) -> Result<Group> {
+        let mut current = f.group("/")?;
+        for segment in hdf5_path.split('/').filter(|s| !s.is_empty()) {
+            current = match current.group(segment) {
+                Ok(g) => g,
+                Err(_) => current.create_group(segment)?,
+            };
+        }
+        Ok(current)
+    }
+
     /// Parses and returns the canonical JSON representation.
     ///
     /// `include_binary` controls whether `correction_data`,
@@ -434,7 +480,11 @@ impl Hdf5AdapterV1_0 {
     /// [`Self::get_correction_data`] and [`Self::get_scan_field_correction_bytes`]
     /// for direct numeric access instead.
     pub fn to_json(&self, pretty: bool, include_binary: bool) -> Result<String> {
-        let config = if include_binary { self.parse_with_binary()? } else { self.parse()? };
+        let config = if include_binary {
+            self.parse_with_binary()?
+        } else {
+            self.parse()?
+        };
         if pretty {
             Ok(serde_json::to_string_pretty(&config)?)
         } else {
@@ -476,11 +526,7 @@ impl Hdf5AdapterV1_0 {
             build_plate_z: read_float(&m, "Build_Plate_Z_Dimension")?,
             build_plate_z_unit: read_unit_locked(&m, "Build_Plate_Z_Dimension_unit", "mm")?,
             build_plate_radius: read_float(&m, "Build_Plate_Corner_Radius")?,
-            build_plate_radius_unit: read_unit_locked(
-                &m,
-                "Build_Plate_Corner_Radius_unit",
-                "mm",
-            )?,
+            build_plate_radius_unit: read_unit_locked(&m, "Build_Plate_Corner_Radius_unit", "mm")?,
             gas_flow_direction: read_str(&m, "Gas_Flow_Direction")?,
             recoat_direction: read_str(&m, "Recoat_Direction")?,
             recoater_blade_type: read_str(&m, "Recoater_Blade_Type")?,
@@ -500,10 +546,20 @@ impl Hdf5AdapterV1_0 {
 
         let opcua = self.parse_opcua(f)?;
 
-        Ok(MachineConfig { meta, machine, optical_trains, opcua })
+        Ok(MachineConfig {
+            meta,
+            machine,
+            optical_trains,
+            opcua,
+        })
     }
 
-    fn parse_train(&self, f: &H5File, train_id: &str, include_binary: bool) -> Result<OpticalTrain> {
+    fn parse_train(
+        &self,
+        f: &H5File,
+        train_id: &str,
+        include_binary: bool,
+    ) -> Result<OpticalTrain> {
         let base = layout::train_path_by_id(train_id);
         let a = require_group(f, &base)?;
 
@@ -660,11 +716,7 @@ impl Hdf5AdapterV1_0 {
             power_min_nominal: read_float(grp, "Power_Min_Nominal")?,
             power_min_nominal_unit: read_unit_locked(grp, "Power_Min_Nominal_unit", "W")?,
             power_bit_resolution: read_float(grp, "Power_Bit_Resolution")?,
-            power_bit_resolution_unit: read_unit_locked(
-                grp,
-                "Power_Bit_Resolution_unit",
-                "bits",
-            )?,
+            power_bit_resolution_unit: read_unit_locked(grp, "Power_Bit_Resolution_unit", "bits")?,
             power_characterization: forward_power_characterization_points(
                 watts_to_volts_algorithm.as_deref(),
                 watts_to_volts_params.as_deref(),
@@ -695,9 +747,16 @@ impl Hdf5AdapterV1_0 {
 
     fn parse_clearbox(&self, grp: &Group, include_binary: bool) -> Result<ClearBox> {
         let (correction_data, inverse_correction_data) = if include_binary {
-            let cd = grp.dataset("Correction_Data")?.read::<f64, ndarray::Ix3>()?;
-            let icd = grp.dataset("Inverse_Correction_Data")?.read::<f64, ndarray::Ix3>()?;
-            (Some(nan_array3_to_nested(&cd)), Some(nan_array3_to_nested(&icd)))
+            let cd = grp
+                .dataset("Correction_Data")?
+                .read::<f64, ndarray::Ix3>()?;
+            let icd = grp
+                .dataset("Inverse_Correction_Data")?
+                .read::<f64, ndarray::Ix3>()?;
+            (
+                Some(nan_array3_to_nested(&cd)),
+                Some(nan_array3_to_nested(&icd)),
+            )
         } else {
             (None, None)
         };
@@ -758,7 +817,10 @@ impl Hdf5AdapterV1_0 {
             Ok(ds) => ds
                 .read_raw::<RawEquationConstant>()?
                 .into_iter()
-                .map(|r| EquationConstant { name: r.name.as_str().to_string(), value: r.value })
+                .map(|r| EquationConstant {
+                    name: r.name.as_str().to_string(),
+                    value: r.value,
+                })
                 .collect(),
             Err(_) => Vec::new(),
         };
@@ -766,7 +828,10 @@ impl Hdf5AdapterV1_0 {
             Ok(ds) => ds
                 .read_raw::<RawCalibrationPoint>()?
                 .into_iter()
-                .map(|r| CalibrationPoint { input_value: r.input_value, output_value: r.output_value })
+                .map(|r| CalibrationPoint {
+                    input_value: r.input_value,
+                    output_value: r.output_value,
+                })
                 .collect(),
             Err(_) => Vec::new(),
         };
@@ -795,7 +860,11 @@ impl Hdf5AdapterV1_0 {
     }
 
     fn parse_sfcf(&self, ds: &Dataset, include_binary: bool) -> Result<ScanFieldCorrectionFile> {
-        let raw_bytes = if include_binary { Some(ds.read_raw::<u8>()?) } else { None };
+        let raw_bytes = if include_binary {
+            Some(ds.read_raw::<u8>()?)
+        } else {
+            None
+        };
         Ok(ScanFieldCorrectionFile {
             document_name: read_required_str(ds, "document_name")?,
             document_id: read_required_str(ds, "document_id")?,
@@ -928,16 +997,22 @@ impl ReaderAdapter for Hdf5AdapterV1_0 {
 mod tests {
     use super::*;
 
-    const REFERENCE: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_config.h5");
-    const REFERENCE_OPCUA: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_config_opcua.h5");
+    const REFERENCE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/reference_config.h5"
+    );
+    const REFERENCE_OPCUA: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/reference_config_opcua.h5"
+    );
     const OPCUA_MISSING_REQUIRED: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../docs/validation/fixtures/opcua_missing_required.h5"
     );
-    const SYNTHETIC: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/synthetic_2laser.h5");
+    const SYNTHETIC: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/synthetic_2laser.h5"
+    );
     const REFERENCE_SENSORS: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../fixtures/reference_config_synchronous_sensors.h5"
@@ -961,7 +1036,11 @@ mod tests {
         assert_eq!(config.meta.configuration_hash.len(), 64);
         assert_eq!(config.meta.schema_version, "v1");
         assert_eq!(
-            config.meta.extra.get("Description").and_then(|v| v.as_str()),
+            config
+                .meta
+                .extra
+                .get("Description")
+                .and_then(|v| v.as_str()),
             Some("Machine Configuration Export from Service Observations")
         );
 
@@ -984,7 +1063,10 @@ mod tests {
         assert_eq!(t1.scanner.axis_configuration, Some("3D".to_string()));
         assert_eq!(t1.thermal_lensing_passed, Some(false));
         // X_Axis is always present; Focus is absent for a "3D" (not "3D+Focus") config.
-        assert_eq!(t1.scanner.x_axis.smoothing_kernel, Some("GAUSSIAN".to_string()));
+        assert_eq!(
+            t1.scanner.x_axis.smoothing_kernel,
+            Some("GAUSSIAN".to_string())
+        );
         assert!(t1.scanner.z_axis.is_some());
         assert!(t1.scanner.focus.is_none());
         // Range_Of_Motion is unpopulated in the fixture and stored as an empty
@@ -1002,9 +1084,16 @@ mod tests {
         let config = Hdf5AdapterV1_0::open(REFERENCE).unwrap().parse().unwrap();
         let t1 = &config.optical_trains[0];
 
-        let cb = t1.optional_components.clearbox.as_ref().expect("clearbox present on reference fixture");
+        let cb = t1
+            .optional_components
+            .clearbox
+            .as_ref()
+            .expect("clearbox present on reference fixture");
         assert!(!cb.ip_address.is_empty());
-        assert!(cb.correction_data.is_none(), "parse() must not read binary correction grids");
+        assert!(
+            cb.correction_data.is_none(),
+            "parse() must not read binary correction grids"
+        );
         assert!(cb.inverse_correction_data.is_none());
 
         let sfcf = t1
@@ -1012,7 +1101,10 @@ mod tests {
             .as_ref()
             .expect("scan field correction file present");
         assert_eq!(sfcf.file_size, 1138799);
-        assert!(sfcf.raw_bytes.is_none(), "parse() must not read raw .fc3 bytes");
+        assert!(
+            sfcf.raw_bytes.is_none(),
+            "parse() must not read raw .fc3 bytes"
+        );
     }
 
     #[test]
@@ -1021,7 +1113,11 @@ mod tests {
         // (SYNCHRONOUS_SENSOR_PLAN.md Phase 0) — must read back as an empty
         // map, not an error, not a panic.
         let config = Hdf5AdapterV1_0::open(REFERENCE).unwrap().parse().unwrap();
-        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        let cb = config.optical_trains[0]
+            .optional_components
+            .clearbox
+            .as_ref()
+            .unwrap();
         assert!(cb.synchronous_sensors.is_empty());
     }
 
@@ -1031,25 +1127,41 @@ mod tests {
     /// h5py before writing this test (SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
     #[test]
     fn synchronous_sensor_fixture_has_real_values() {
-        let config = Hdf5AdapterV1_0::open(REFERENCE_SENSORS).unwrap().parse().unwrap();
-        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        let config = Hdf5AdapterV1_0::open(REFERENCE_SENSORS)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let cb = config.optical_trains[0]
+            .optional_components
+            .clearbox
+            .as_ref()
+            .unwrap();
         assert_eq!(cb.synchronous_sensors.len(), 1);
         let sensor = &cb.synchronous_sensors["Oxygen Sensor"];
 
         assert_eq!(sensor.enabled, Some(true));
-        assert_eq!(sensor.sensor_name, Some("ZR800 Oxygen Analyzer".to_string()));
+        assert_eq!(
+            sensor.sensor_name,
+            Some("ZR800 Oxygen Analyzer".to_string())
+        );
         assert_eq!(sensor.sensor_output_range_low, Some(-1.0));
         assert_eq!(sensor.sensor_output_range_high, Some(6.0));
         assert_eq!(sensor.sensor_output_space, Some("log10(ppm)".to_string()));
         assert_eq!(sensor.sensor_model, Some("ZR810".to_string()));
-        assert_eq!(sensor.sensor_manufacturer, Some("Industrial Physics".to_string()));
+        assert_eq!(
+            sensor.sensor_manufacturer,
+            Some("Industrial Physics".to_string())
+        );
         assert_eq!(sensor.sensor_scope, Some("Global".to_string()));
         assert_eq!(sensor.units_derived_quantity, Some("ppm".to_string()));
         assert_eq!(sensor.port_id, Some(5));
         assert_eq!(sensor.sensor_type, Some("Oxygen Sensor".to_string()));
         assert_eq!(sensor.input_type, Some("4-20 mA".to_string()));
         assert_eq!(sensor.algorithm_type, Some("Log-Linear".to_string()));
-        assert_eq!(sensor.algorithm_equation, Some("log(ppm) = a*mA + b".to_string()));
+        assert_eq!(
+            sensor.algorithm_equation,
+            Some("log(ppm) = a*mA + b".to_string())
+        );
         assert_eq!(sensor.calibration_source, Some("Datasheet".to_string()));
         assert_eq!(sensor.calibration_verified, Some(false));
         assert_eq!(sensor.sample_period, Some(5.0));
@@ -1080,12 +1192,22 @@ mod tests {
 
     #[test]
     fn combined_opcua_and_synchronous_sensors_fixture_has_both() {
-        let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA_SENSORS).unwrap().parse().unwrap();
+        let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA_SENSORS)
+            .unwrap()
+            .parse()
+            .unwrap();
 
-        let opcua = config.opcua.as_ref().expect("OPCUA present on the combined fixture");
+        let opcua = config
+            .opcua
+            .as_ref()
+            .expect("OPCUA present on the combined fixture");
         assert!(!opcua.client.server_url.is_empty());
 
-        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
+        let cb = config.optical_trains[0]
+            .optional_components
+            .clearbox
+            .as_ref()
+            .unwrap();
         assert_eq!(cb.synchronous_sensors.len(), 1);
         assert_eq!(
             cb.synchronous_sensors["Oxygen Sensor"].sensor_name,
@@ -1095,11 +1217,17 @@ mod tests {
 
     #[test]
     fn parse_with_binary_populates_correction_data_and_raw_bytes() {
-        let config = Hdf5AdapterV1_0::open(REFERENCE).unwrap().parse_with_binary().unwrap();
+        let config = Hdf5AdapterV1_0::open(REFERENCE)
+            .unwrap()
+            .parse_with_binary()
+            .unwrap();
         let t1 = &config.optical_trains[0];
 
         let cb = t1.optional_components.clearbox.as_ref().unwrap();
-        let data = cb.correction_data.as_ref().expect("correction_data populated");
+        let data = cb
+            .correction_data
+            .as_ref()
+            .expect("correction_data populated");
         assert_eq!(data.len(), 257);
         assert_eq!(data[0].len(), 257);
         assert_eq!(data[0][0].len(), 2);
@@ -1142,7 +1270,10 @@ mod tests {
 
     #[test]
     fn opcua_fixture_parses_client_pipe_and_triggers() {
-        let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
+        let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA)
+            .unwrap()
+            .parse()
+            .unwrap();
         let opcua = config.opcua.expect("OPCUA group present on this fixture");
 
         assert!(!opcua.client.server_url.is_empty());
@@ -1153,7 +1284,10 @@ mod tests {
         let trigger = &opcua.triggers["Laser Emission Interlock"];
         assert!(trigger.signal.is_some());
         // Trigger_Label is now a typed field, not swept into `extra`.
-        assert_eq!(trigger.trigger_label, Some("Laser Emission Interlock".into()));
+        assert_eq!(
+            trigger.trigger_label,
+            Some("Laser Emission Interlock".into())
+        );
         assert!(!trigger.extra.contains_key("Trigger_Label"));
     }
 
@@ -1163,7 +1297,10 @@ mod tests {
     /// this test. Also confirms none of them still land in `extra`.
     #[test]
     fn opcua_fixture_promoted_fields_have_real_values() {
-        let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
+        let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA)
+            .unwrap()
+            .parse()
+            .unwrap();
         let opcua = config.opcua.expect("OPCUA group present on this fixture");
 
         let c = &opcua.client;
@@ -1178,7 +1315,10 @@ mod tests {
         assert_eq!(c.sync_loop_interval_initial, Some(1000));
         assert_eq!(c.sync_loop_interval_settled, Some(30000));
         for key in KNOWN_CLIENT_KEYS {
-            assert!(!c.extra.contains_key(*key), "{key} should be typed, not in extra");
+            assert!(
+                !c.extra.contains_key(*key),
+                "{key} should be typed, not in extra"
+            );
         }
 
         let p = &opcua.pipe;
@@ -1189,7 +1329,10 @@ mod tests {
         assert_eq!(p.pipe_name, Some("\\\\.\\pipe\\opc_ua_client_pipe".into()));
         assert_eq!(p.user_access_level, Some("AnyLocalUser".into()));
         for key in KNOWN_PIPE_KEYS {
-            assert!(!p.extra.contains_key(*key), "{key} should be typed, not in extra");
+            assert!(
+                !p.extra.contains_key(*key),
+                "{key} should be typed, not in extra"
+            );
         }
 
         assert_eq!(opcua.trigger_stop_ceiling_layers, Some(3));
@@ -1203,12 +1346,21 @@ mod tests {
         assert_eq!(laser.trigger_label, Some("Laser Emission Interlock".into()));
 
         let oxygen = &opcua.triggers["Chamber Oxygen Level"];
-        assert_eq!(oxygen.component, Some("process_chamber::gas_management::oxygen_sensor::1".into()));
+        assert_eq!(
+            oxygen.component,
+            Some("process_chamber::gas_management::oxygen_sensor::1".into())
+        );
         assert_eq!(oxygen.event, Some("SensorEvents".into()));
         assert_eq!(oxygen.trigger_label, Some("Chamber Oxygen Level".into()));
         for key in KNOWN_TRIGGER_KEYS {
-            assert!(!laser.extra.contains_key(*key), "{key} should be typed, not in extra");
-            assert!(!oxygen.extra.contains_key(*key), "{key} should be typed, not in extra");
+            assert!(
+                !laser.extra.contains_key(*key),
+                "{key} should be typed, not in extra"
+            );
+            assert!(
+                !oxygen.extra.contains_key(*key),
+                "{key} should be typed, not in extra"
+            );
         }
     }
 
@@ -1219,7 +1371,10 @@ mod tests {
     /// the deliberate asymmetry that only one trigger lost `Event`.
     #[test]
     fn opcua_missing_required_fixture_parses_gracefully() {
-        let config = Hdf5AdapterV1_0::open(OPCUA_MISSING_REQUIRED).unwrap().parse().unwrap();
+        let config = Hdf5AdapterV1_0::open(OPCUA_MISSING_REQUIRED)
+            .unwrap()
+            .parse()
+            .unwrap();
         let opcua = config.opcua.expect("OPCUA group present on this fixture");
 
         assert_eq!(opcua.client.machine_profile, None);
@@ -1230,9 +1385,16 @@ mod tests {
         assert_eq!(opcua.trigger_stop_ceiling_layers, None);
 
         let laser = &opcua.triggers["Laser Emission Interlock"];
-        assert_eq!(laser.event, None, "Event was deliberately removed from this trigger only");
+        assert_eq!(
+            laser.event, None,
+            "Event was deliberately removed from this trigger only"
+        );
         let oxygen = &opcua.triggers["Chamber Oxygen Level"];
-        assert_eq!(oxygen.event, Some("SensorEvents".into()), "the other trigger must be unaffected");
+        assert_eq!(
+            oxygen.event,
+            Some("SensorEvents".into()),
+            "the other trigger must be unaffected"
+        );
 
         // Untouched fields on both the client and the still-present trigger.
         assert!(!opcua.client.server_url.is_empty());
@@ -1282,8 +1444,10 @@ mod tests {
     /// once Phase 5 wires this reader into that pipeline.
     #[test]
     fn matches_python_golden_file() {
-        let golden_path =
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_output.json");
+        let golden_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/reference_output.json"
+        );
         let golden: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(golden_path).unwrap()).unwrap();
 
@@ -1291,6 +1455,9 @@ mod tests {
         let ours: serde_json::Value =
             serde_json::from_str(&reader.to_json(true, false).unwrap()).unwrap();
 
-        assert_eq!(ours, golden, "Rust reader output diverges from the Python golden file");
+        assert_eq!(
+            ours, golden,
+            "Rust reader output diverges from the Python golden file"
+        );
     }
 }

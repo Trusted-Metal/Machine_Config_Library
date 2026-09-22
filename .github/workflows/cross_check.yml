@@ -66,7 +66,7 @@ jobs:
           workspaces: rust
 
       - name: Build Rust release binary
-        run: cargo build --release
+        run: cargo build --release -p machine-config
         working-directory: rust
 
       # -----------------------------------------------------------------------
