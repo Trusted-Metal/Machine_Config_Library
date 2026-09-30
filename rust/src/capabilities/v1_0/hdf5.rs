@@ -454,9 +454,9 @@ impl Hdf5AdapterV1_0 {
     /// vocabulary `SetMode` already uses elsewhere at the field level.
     pub fn set_raw_group(&self, hdf5_path: &str, attrs: &ExtraAttrs) -> Result<()> {
         let f = H5File::open_rw(&self.path)?;
-        let grp = ensure_group(&f, hdf5_path)?;
+        let grp = Self::ensure_group(&f, hdf5_path)?;
         for (key, value) in attrs {
-            write_json_attr(&grp, key, value)?;
+            Self::write_json_attr(&grp, key, value)?;
         }
         Ok(())
     }
@@ -470,6 +470,67 @@ impl Hdf5AdapterV1_0 {
             };
         }
         Ok(current)
+    }
+
+    /// Inverse of `raw_to_json` — maps a `serde_json::Value` back through the
+    /// same `RawValue` dispatch `read_raw` uses, keeping encode/decode symmetric
+    /// for the raw-group escape hatch. Errors on Array/Object, matching
+    /// `read_raw`'s own "no catch-all" rule (see its doc comment) — this path
+    /// only ever round-trips scalar attribute values.
+    fn json_to_raw(value: &serde_json::Value) -> Result<RawValue> {
+        match value {
+            serde_json::Value::String(s) => Ok(RawValue::Str(s.clone())),
+            serde_json::Value::Bool(b) => Ok(RawValue::Int(*b as i64)), // matches writer.rs's wb convention
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Ok(RawValue::Int(i))
+                } else if let Some(f) = n.as_f64() {
+                    Ok(RawValue::Float(f))
+                } else {
+                    Err(MachineConfigError::Parse(format!(
+                        "attribute value is a number outside i64/f64 range: {n}"
+                    )))
+                }
+            }
+            // writer.rs's ws/wf/wi write "" for `None` rather than omitting the
+            // attribute — match that convention here so a JSON null round-trips
+            // the same way a Rust `None` already does elsewhere in this file.
+            serde_json::Value::Null => Ok(RawValue::Str(String::new())),
+            other => Err(MachineConfigError::Parse(format!(
+                "attribute value has unsupported JSON shape for HDF5 write: {other}"
+            ))),
+        }
+    }
+
+    /// Writes `value` as attribute `key` on `grp`, overwriting any existing
+    /// attribute of that name. `set_raw_group`'s own doc comment promises merge
+    /// semantics on an *existing* group — updating one field of an already-
+    /// authored rule, not just first-time writes into a brand-new group — so
+    /// this has to handle the attribute-already-exists case, unlike ws/wf/wi/wb
+    /// in writer.rs, which only ever write into a freshly-created file/group
+    /// (MCL's core `save()` always rebuilds the whole file from scratch, so
+    /// those helpers never had to worry about this).
+    fn write_json_attr(grp: &Group, key: &str, value: &serde_json::Value) -> Result<()> {
+        if grp.attr(key).is_ok() {
+            grp.delete_attr(key)?;
+        }
+        match Self::json_to_raw(value)? {
+            RawValue::Str(s) => {
+                let vlu: VarLenUnicode = s
+                    .parse()
+                    .map_err(|e| MachineConfigError::Parse(format!("VarLenUnicode: {e:?}")))?;
+                grp.new_attr::<VarLenUnicode>()
+                    .create(key)?
+                    .write_scalar(&vlu)?;
+            }
+            RawValue::Int(i) => {
+                grp.new_attr::<i64>().create(key)?.write_scalar(&i)?;
+            }
+            RawValue::Float(f) => {
+                grp.new_attr::<f64>().create(key)?.write_scalar(&f)?;
+            }
+        }
+        Ok(())
     }
 
     /// Parses and returns the canonical JSON representation.

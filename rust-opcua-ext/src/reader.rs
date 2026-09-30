@@ -1,0 +1,69 @@
+use crate::raw_group::RawGroupAccess;
+use crate::types::{ClientConfig, PipeConfig, TriggerConfig, TriggerRuleConfig};
+use machine_config::capabilities::v1_0::hdf5::{peek_file_version, Hdf5AdapterV1_0};
+use machine_config::capabilities::v1_1::hdf5::Hdf5AdapterV1_1;
+use machine_config::CapabilityError;
+use std::path::Path;
+
+fn io_err<T, E: std::fmt::Display>(r: Result<T, E>) -> Result<T, CapabilityError> {
+    r.map_err(|e| CapabilityError::IoError(e.to_string()))
+}
+
+pub fn read_opcua_config(
+    path: &Path,
+) -> Result<(PipeConfig, ClientConfig, TriggerConfig), CapabilityError> {
+    let version = peek_file_version(path).map_err(|e| CapabilityError::IoError(e.to_string()))?;
+    match version.as_str() {
+        "1.1" => read_via(&io_err(Hdf5AdapterV1_1::open(path))?),
+        _ => read_via(&io_err(Hdf5AdapterV1_0::open(path))?), // 1.0 default, matches MCL's own fallback convention
+    }
+}
+
+// Generic over anything exposing get_raw_group/list_raw_group_children —
+// worth promoting to a real shared trait once both adapters have the methods,
+// rather than duplicating this dispatch by hand each time a third version shows up.
+fn read_via(
+    adapter: &impl RawGroupAccess,
+) -> Result<(PipeConfig, ClientConfig, TriggerConfig), CapabilityError> {
+    let pipe = parse_attrs(&adapter.get_raw_group("OPCUA/Pipe")?)?;
+    let client = parse_attrs(&adapter.get_raw_group("OPCUA/Client")?)?;
+
+    let mut rules = Vec::new();
+    for rule_name in adapter.list_raw_group_children("OPCUA/Triggers")? {
+        for pair in rules.windows(2) {
+            if pair[0].rule_id == pair[1].rule_id {
+                return Err(CapabilityError::validation_error(format!(
+                    "duplicate rule_id on disk: {}",
+                    pair[0].rule_id
+                )));
+            }
+        }
+        let rule_attrs = adapter.get_raw_group(&format!("OPCUA/Triggers/{rule_name}"))?;
+        let mut rule: TriggerRuleConfig = parse_attrs(&rule_attrs)?;
+        for cond_name in
+            adapter.list_raw_group_children(&format!("OPCUA/Triggers/{rule_name}/Conditions"))?
+        {
+            let cond_attrs = adapter.get_raw_group(&format!(
+                "OPCUA/Triggers/{rule_name}/Conditions/{cond_name}"
+            ))?;
+            rule.conditions.push(parse_attrs(&cond_attrs)?);
+        }
+        rules.push(rule);
+    }
+    let triggers_attrs = adapter.get_raw_group("OPCUA/Triggers")?;
+    let mut triggers: TriggerConfig = parse_attrs(&triggers_attrs)?;
+    triggers.rules = rules;
+
+    Ok((pipe, client, triggers))
+}
+
+// Deserializes an ExtraAttrs (IndexMap<String, serde_json::Value>) into any
+// #[derive(Deserialize)] config struct via a JSON round-trip — cheap, and
+// keeps this file from hand-writing a field-by-field reader like MCL's own
+// reader.rs does for its typed core fields.
+fn parse_attrs<T: serde::de::DeserializeOwned>(
+    attrs: &machine_config::ExtraAttrs,
+) -> Result<T, CapabilityError> {
+    let value = serde_json::to_value(attrs).map_err(|e| CapabilityError::IoError(e.to_string()))?;
+    serde_json::from_value(value).map_err(|e| CapabilityError::IoError(e.to_string()))
+}

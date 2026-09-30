@@ -5,6 +5,7 @@
 //! clearbox-tauri, it's app-specific, not schema.
 
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaseSensitivity {
@@ -87,7 +88,13 @@ pub struct AtomicCondition {
 }
 
 impl AtomicCondition {
-    pub fn key(&self) -> SignalKey { /* unchanged */
+    pub fn key(&self) -> SignalKey { 
+        SignalKey {
+            event: self.event.clone(),
+            subsystem: self.subsystem.clone(),
+            component: self.component.clone(),
+            signal: self.signal.clone(),
+        }
     }
 }
 
@@ -111,7 +118,7 @@ pub enum TriggerActionKind {
     CaptureStart,
     CaptureStop,
 }
-// Room for AnnotateEvent/FlushToDisk/NotifyOperator/RunWebhook later — dispatch
+// NOTE: Room for AnnotateEvent/FlushToDisk/NotifyOperator/RunWebhook later — dispatch
 // mechanism only, not new capability until a consumer actually needs one.
 
 #[derive(Debug, Clone)]
@@ -131,9 +138,92 @@ pub struct CachedValue {
     pub raw: serde_json::Value,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
-// as_string()/as_f64() — unchanged from source.
+
+impl CachedValue {
+    fn as_string(&self) -> String {
+        match &self.raw {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        }
+    }
+    fn as_f64(&self) -> Option<f64> {
+        match &self.raw {
+            serde_json::Value::Number(n) => n.as_f64(),
+            serde_json::Value::String(s) => s.trim().parse().ok(),
+            serde_json::Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            _ => None,
+        }
+    }
+}
 
 pub fn evaluate_condition(condition: &Condition, cache: &HashMap<SignalKey, CachedValue>) -> bool {
-    /* unchanged — Atomic dispatches to evaluate_atomic; Compound And/Or over of.iter() */
+    match condition {
+        Condition::Atomic(c) => evaluate_atomic(c, cache),
+        Condition::Compound { combinator, of } => match combinator {
+            Combinator::And => of.iter().all(|c| evaluate_atomic(c, cache)),
+            Combinator::Or => of.iter().any(|c| evaluate_atomic(c, cache)),
+        },
+    }
 }
-// evaluate_atomic/evaluate_value — unchanged, ported verbatim.
+
+fn evaluate_atomic(condition: &AtomicCondition, cache: &HashMap<SignalKey, CachedValue>) -> bool {
+    if condition.event.is_some() && condition.subsystem.is_some() && condition.component.is_some() {
+        return evaluate_value(condition, cache.get(&condition.key()));
+    }
+    cache
+        .iter()
+        .filter(|(k, _)| k.signal == condition.signal)
+        .filter(|(k, _)| {
+            condition
+                .event
+                .as_deref()
+                .map_or(true, |e| k.event.as_deref() == Some(e))
+        })
+        .filter(|(k, _)| {
+            condition
+                .subsystem
+                .as_deref()
+                .map_or(true, |s| k.subsystem.as_deref() == Some(s))
+        })
+        .filter(|(k, _)| {
+            condition
+                .component
+                .as_deref()
+                .map_or(true, |c| k.component.as_deref() == Some(c))
+        })
+        .any(|(_, cached)| evaluate_value(condition, Some(cached)))
+}
+
+fn evaluate_value(condition: &AtomicCondition, cached: Option<&CachedValue>) -> bool {
+    let Some(cached) = cached else { return false };
+    match condition.evaluation_mode {
+        EvaluationMode::String => condition
+            .case_sensitivity
+            .values_match(&cached.as_string(), &condition.value),
+        EvaluationMode::Numeric => {
+            let (Some(actual), Some(expected)) =
+                (cached.as_f64(), condition.value.trim().parse::<f64>().ok())
+            else {
+                tracing::warn!(
+                    signal = %condition.signal,
+                    raw = %cached.raw,
+                    "Numeric condition on a non-numeric signal value — treating as unmatched"
+                );
+                return false;
+            };
+            let eps = if condition.epsilon > 0.0 {
+                condition.epsilon
+            } else {
+                EPSILON
+            };
+            match condition.comparison_op {
+                ComparisonOp::Equal => (actual - expected).abs() < eps,
+                ComparisonOp::NotEqual => (actual - expected).abs() >= eps,
+                ComparisonOp::LessThan => actual < expected,
+                ComparisonOp::LessThanOrEqual => actual <= expected,
+                ComparisonOp::GreaterThan => actual > expected,
+                ComparisonOp::GreaterThanOrEqual => actual >= expected,
+            }
+        }
+    }
+}

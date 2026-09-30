@@ -4,10 +4,8 @@
 //! MCL's LoadedConfig for it's own modeled types enables streamlined extension support
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// Generic attribute value that can be stored in HDF5
-#[cfg(feature = "opcua-client")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AttributeValue {
@@ -18,7 +16,6 @@ pub enum AttributeValue {
     Bool(bool),
 }
 
-#[cfg(feature = "opcua-client")]
 /// OPCUA configuration from /OPCUA/Client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
@@ -61,7 +58,6 @@ pub struct ClientConfig {
     pub sync_loop_interval_settled: u32,
 }
 
-#[cfg(feature = "opcua-client")]
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
@@ -88,7 +84,6 @@ impl Default for ClientConfig {
     }
 }
 
-#[cfg(feature = "opcua-client")]
 /// OPCUA configuration from /OPCUA/Pipe
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipeConfig {
@@ -111,7 +106,6 @@ pub struct PipeConfig {
     pub user_access_level: String,
 }
 
-#[cfg(feature = "opcua-client")]
 impl Default for PipeConfig {
     fn default() -> Self {
         Self {
@@ -128,7 +122,6 @@ impl Default for PipeConfig {
     }
 }
 
-#[cfg(feature = "opcua-client")]
 /// OPCUA configuration from /OPCUA/Triggers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TriggerConfig {
@@ -138,7 +131,6 @@ pub struct TriggerConfig {
     pub rules: Vec<TriggerRuleConfig>,
 }
 
-#[cfg(feature = "opcua-client")]
 impl Default for TriggerConfig {
     fn default() -> Self {
         Self {
@@ -150,7 +142,6 @@ impl Default for TriggerConfig {
     }
 }
 
-#[cfg(feature = "opcua-client")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Trigger configuration from /OPCUA/Triggers/{TriggerLabel}
 pub struct TriggerRuleConfig {
@@ -177,7 +168,6 @@ pub struct TriggerRuleConfig {
     pub rule_label: String,
 }
 
-#[cfg(feature = "opcua-client")]
 impl Default for TriggerRuleConfig {
     fn default() -> Self {
         Self {
@@ -195,7 +185,6 @@ impl Default for TriggerRuleConfig {
     }
 }
 
-#[cfg(feature = "opcua-client")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Trigger configuration from /OPCUA/Triggers/{TriggerLabel}
 pub struct TriggerConditionConfig {
@@ -227,7 +216,6 @@ pub struct TriggerConditionConfig {
     pub value: String,
 }
 
-#[cfg(feature = "opcua-client")]
 impl Default for TriggerConditionConfig {
     fn default() -> Self {
         Self {

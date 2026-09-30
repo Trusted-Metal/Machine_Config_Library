@@ -160,7 +160,11 @@ fn read_str(loc: &Location, key: &str) -> Result<Option<String>> {
         None => Ok(None),
         Some(RawValue::Str(s)) => {
             let trimmed = s.trim();
-            Ok(if trimmed.is_empty() { None } else { Some(trimmed.to_string()) })
+            Ok(if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            })
         }
         Some(RawValue::Int(i)) => Ok(Some(i.to_string())),
         Some(RawValue::Float(f)) => Ok(Some(f.to_string())),
@@ -281,7 +285,9 @@ fn collect_extra(loc: &Location, known: &[&str]) -> Result<ExtraAttrs> {
 }
 
 fn require_group(parent: &Group, path: &str) -> Result<Group> {
-    parent.group(path).map_err(|_| MachineConfigError::MissingGroup(path.to_string()))
+    parent
+        .group(path)
+        .map_err(|_| MachineConfigError::MissingGroup(path.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +322,10 @@ impl Hdf5AdapterV1_1 {
         let path = layout::correction_data_path_by_id(&tid);
         let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
         let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
-        Ok(CorrectionData { data: arr.into_raw_vec_and_offset().0, shape })
+        Ok(CorrectionData {
+            data: arr.into_raw_vec_and_offset().0,
+            shape,
+        })
     }
 
     pub fn get_inverse_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
@@ -325,7 +334,10 @@ impl Hdf5AdapterV1_1 {
         let path = layout::inverse_correction_data_path_by_id(&tid);
         let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
         let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
-        Ok(CorrectionData { data: arr.into_raw_vec_and_offset().0, shape })
+        Ok(CorrectionData {
+            data: arr.into_raw_vec_and_offset().0,
+            shape,
+        })
     }
 
     pub fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>> {
@@ -344,8 +356,107 @@ impl Hdf5AdapterV1_1 {
         collect_extra(&grp, &[])
     }
 
+    /// Lists the immediate child group names under an arbitrary HDF5 path.
+    /// Use alongside `get_raw_group` to walk a non-schema subtree (e.g. `OPCUA/Triggers/{rule}/Conditions`)
+    /// whose child names aren't known in advance.
+    pub fn list_raw_group_children(&self, hdf5_path: &str) -> Result<Vec<String>> {
+        let f = H5File::open(&self.path)?;
+        let grp = match f.group(hdf5_path) {
+            Ok(g) => g,
+            Err(_) => return Ok(Vec::new()),
+        };
+        Ok(grp.member_names()?)
+    }
+
+    /// Writes `attrs` onto the group at `hdf5_path`, creating it (and any
+    /// missing intermediate groups) if absent. Merges onto existing attrs —
+    /// doesn't clear ones not present in `attrs` — matching the Merge/Replace
+    /// vocabulary `SetMode` already uses elsewhere at the field level.
+    pub fn set_raw_group(&self, hdf5_path: &str, attrs: &ExtraAttrs) -> Result<()> {
+        let f = H5File::open_rw(&self.path)?;
+        let grp = Self::ensure_group(&f, hdf5_path)?;
+        for (key, value) in attrs {
+            Self::write_json_attr(&grp, key, value)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_group(f: &H5File, hdf5_path: &str) -> Result<Group> {
+        let mut current = f.group("/")?;
+        for segment in hdf5_path.split('/').filter(|s| !s.is_empty()) {
+            current = match current.group(segment) {
+                Ok(g) => g,
+                Err(_) => current.create_group(segment)?,
+            };
+        }
+        Ok(current)
+    }
+
+    /// Inverse of `raw_to_json` — maps a `serde_json::Value` back through the
+    /// same `RawValue` dispatch `read_raw` uses, keeping encode/decode symmetric
+    /// for the raw-group escape hatch. Errors on Array/Object, matching
+    /// `read_raw`'s own "no catch-all" rule (see its doc comment) — this path
+    /// only ever round-trips scalar attribute values.
+    fn json_to_raw(value: &serde_json::Value) -> Result<RawValue> {
+        match value {
+            serde_json::Value::String(s) => Ok(RawValue::Str(s.clone())),
+            serde_json::Value::Bool(b) => Ok(RawValue::Int(*b as i64)), // matches writer.rs's wb convention
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Ok(RawValue::Int(i))
+                } else if let Some(f) = n.as_f64() {
+                    Ok(RawValue::Float(f))
+                } else {
+                    Err(MachineConfigError::Parse(format!(
+                        "attribute value is a number outside i64/f64 range: {n}"
+                    )))
+                }
+            }
+            // writer.rs's ws/wf/wi write "" for `None` rather than omitting the
+            // attribute — match that convention here so a JSON null round-trips
+            // the same way a Rust `None` already does elsewhere in this file.
+            serde_json::Value::Null => Ok(RawValue::Str(String::new())),
+            other => Err(MachineConfigError::Parse(format!(
+                "attribute value has unsupported JSON shape for HDF5 write: {other}"
+            ))),
+        }
+    }
+
+    /// Writes `value` as attribute `key` on `grp`, overwriting any existing
+    /// attribute of that name. `set_raw_group`'s own doc comment promises merge
+    /// semantics on an *existing* group — updating one field of an already-
+    /// authored rule, not just first-time writes into a brand-new group — so
+    /// this has to handle the attribute-already-exists case, unlike ws/wf/wi/wb
+    /// in writer.rs, which only ever write into a freshly-created file/group
+    /// (MCL's core `save()` always rebuilds the whole file from scratch, so
+    /// those helpers never had to worry about this).
+    fn write_json_attr(grp: &Group, key: &str, value: &serde_json::Value) -> Result<()> {
+        if grp.attr(key).is_ok() {
+            grp.delete_attr(key)?;
+        }
+        match Self::json_to_raw(value)? {
+            RawValue::Str(s) => {
+                let vlu: VarLenUnicode = s
+                    .parse()
+                    .map_err(|e| MachineConfigError::Parse(format!("VarLenUnicode: {e:?}")))?;
+                grp.new_attr::<VarLenUnicode>().create(key)?.write_scalar(&vlu)?;
+            }
+            RawValue::Int(i) => {
+                grp.new_attr::<i64>().create(key)?.write_scalar(&i)?;
+            }
+            RawValue::Float(f) => {
+                grp.new_attr::<f64>().create(key)?.write_scalar(&f)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn to_json(&self, pretty: bool, include_binary: bool) -> Result<String> {
-        let config = if include_binary { self.parse_with_binary()? } else { self.parse()? };
+        let config = if include_binary {
+            self.parse_with_binary()?
+        } else {
+            self.parse()?
+        };
         if pretty {
             Ok(serde_json::to_string_pretty(&config)?)
         } else {
@@ -426,7 +537,12 @@ impl Hdf5AdapterV1_1 {
 
         let opcua = self.parse_opcua(f)?;
 
-        Ok(MachineConfig { meta, machine, optical_trains, opcua })
+        Ok(MachineConfig {
+            meta,
+            machine,
+            optical_trains,
+            opcua,
+        })
     }
 
     fn parse_train(
@@ -592,20 +708,26 @@ impl Hdf5AdapterV1_1 {
     }
 
     fn parse_power_characterization(&self, grp: &Group) -> Result<PowerCharacterization> {
-        let derivation_equation_constants = match grp.dataset(layout::DS_DERIVATION_EQUATION_CONSTANTS)
-        {
-            Ok(ds) => ds
-                .read_raw::<RawEquationConstant>()?
-                .into_iter()
-                .map(|r| EquationConstant { name: r.name.as_str().to_string(), value: r.value })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
+        let derivation_equation_constants =
+            match grp.dataset(layout::DS_DERIVATION_EQUATION_CONSTANTS) {
+                Ok(ds) => ds
+                    .read_raw::<RawEquationConstant>()?
+                    .into_iter()
+                    .map(|r| EquationConstant {
+                        name: r.name.as_str().to_string(),
+                        value: r.value,
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
         let characterization_points = match grp.dataset(layout::DS_CHARACTERIZATION_POINTS) {
             Ok(ds) => ds
                 .read_raw::<RawCalibrationPoint>()?
                 .into_iter()
-                .map(|r| CalibrationPoint { input_value: r.input_value, output_value: r.output_value })
+                .map(|r| CalibrationPoint {
+                    input_value: r.input_value,
+                    output_value: r.output_value,
+                })
                 .collect(),
             Err(_) => Vec::new(),
         };
@@ -673,10 +795,16 @@ impl Hdf5AdapterV1_1 {
         include_binary: bool,
     ) -> Result<ClearBox> {
         let (correction_data, inverse_correction_data) = if include_binary {
-            let cd = grp.dataset(layout::DS_CORRECTION_DATA)?.read::<f64, ndarray::Ix3>()?;
-            let icd =
-                grp.dataset(layout::DS_INVERSE_CORRECTION_DATA)?.read::<f64, ndarray::Ix3>()?;
-            (Some(nan_array3_to_nested(&cd)), Some(nan_array3_to_nested(&icd)))
+            let cd = grp
+                .dataset(layout::DS_CORRECTION_DATA)?
+                .read::<f64, ndarray::Ix3>()?;
+            let icd = grp
+                .dataset(layout::DS_INVERSE_CORRECTION_DATA)?
+                .read::<f64, ndarray::Ix3>()?;
+            (
+                Some(nan_array3_to_nested(&cd)),
+                Some(nan_array3_to_nested(&icd)),
+            )
         } else {
             (None, None)
         };
@@ -728,7 +856,10 @@ impl Hdf5AdapterV1_1 {
             Ok(ds) => ds
                 .read_raw::<RawEquationConstant>()?
                 .into_iter()
-                .map(|r| EquationConstant { name: r.name.as_str().to_string(), value: r.value })
+                .map(|r| EquationConstant {
+                    name: r.name.as_str().to_string(),
+                    value: r.value,
+                })
                 .collect(),
             Err(_) => Vec::new(),
         };
@@ -736,7 +867,10 @@ impl Hdf5AdapterV1_1 {
             Ok(ds) => ds
                 .read_raw::<RawCalibrationPoint>()?
                 .into_iter()
-                .map(|r| CalibrationPoint { input_value: r.input_value, output_value: r.output_value })
+                .map(|r| CalibrationPoint {
+                    input_value: r.input_value,
+                    output_value: r.output_value,
+                })
                 .collect(),
             Err(_) => Vec::new(),
         };
@@ -765,7 +899,11 @@ impl Hdf5AdapterV1_1 {
     }
 
     fn parse_sfcf(&self, ds: &Dataset, include_binary: bool) -> Result<ScanFieldCorrectionFile> {
-        let raw_bytes = if include_binary { Some(ds.read_raw::<u8>()?) } else { None };
+        let raw_bytes = if include_binary {
+            Some(ds.read_raw::<u8>()?)
+        } else {
+            None
+        };
         Ok(ScanFieldCorrectionFile {
             document_name: read_required_str(ds, "document_name")?,
             document_id: read_required_str(ds, "document_id")?,
@@ -849,7 +987,13 @@ impl Hdf5AdapterV1_1 {
             );
         }
 
-        Ok(Some(OpcuaConfig { client, pipe, triggers, triggers_enabled, trigger_stop_ceiling_layers }))
+        Ok(Some(OpcuaConfig {
+            client,
+            pipe,
+            triggers,
+            triggers_enabled,
+            trigger_stop_ceiling_layers,
+        }))
     }
 }
 
