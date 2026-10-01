@@ -21,7 +21,14 @@ pub fn write_opcua_config(
         }
         let rule_path = format!("OPCUA/Triggers/{}", rule.rule_label);
         adapter.set_raw_group(&rule_path, &to_attrs(rule)?)?;
+
+        let mut seen_conditions = std::collections::HashSet::new();
         for cond in &rule.conditions {
+            if !seen_conditions.insert(cond.condition_id) {
+                return Err(CapabilityError::validation_error(format!(
+                    "duplicate condition_id {} in rule '{}'", cond.condition_id, rule.rule_label
+                )));
+            }
             let cond_path = format!("{rule_path}/Conditions/{}", cond.condition_label);
             adapter.set_raw_group(&cond_path, &to_attrs(cond)?)?;
         }

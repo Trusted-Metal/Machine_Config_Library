@@ -28,16 +28,8 @@ fn read_via(
     let pipe = parse_attrs(&adapter.get_raw_group("OPCUA/Pipe")?)?;
     let client = parse_attrs(&adapter.get_raw_group("OPCUA/Client")?)?;
 
-    let mut rules = Vec::new();
+    let mut rules: Vec<TriggerRuleConfig> = Vec::new();
     for rule_name in adapter.list_raw_group_children("OPCUA/Triggers")? {
-        for pair in rules.windows(2) {
-            if pair[0].rule_id == pair[1].rule_id {
-                return Err(CapabilityError::validation_error(format!(
-                    "duplicate rule_id on disk: {}",
-                    pair[0].rule_id
-                )));
-            }
-        }
         let rule_attrs = adapter.get_raw_group(&format!("OPCUA/Triggers/{rule_name}"))?;
         let mut rule: TriggerRuleConfig = parse_attrs(&rule_attrs)?;
         for cond_name in
@@ -48,12 +40,31 @@ fn read_via(
             ))?;
             rule.conditions.push(parse_attrs(&cond_attrs)?);
         }
+        rule.conditions.sort_by_key(|c| c.condition_id);
+        for pair in rule.conditions.windows(2) {
+            if pair[0].condition_id == pair[1].condition_id {
+                return Err(CapabilityError::validation_error(format!(
+                    "duplicate condition_id {} in rule '{}'",
+                    pair[0].condition_id, rule.rule_label
+                )));
+            }
+        }
         rules.push(rule);
     }
+
+    rules.sort_by_key(|r| r.rule_id);
+    for pair in rules.windows(2) {
+        if pair[0].rule_id == pair[1].rule_id {
+            return Err(CapabilityError::validation_error(format!(
+                "duplicate rule_id on disk: {}",
+                pair[0].rule_id
+            )));
+        }
+    }
+
     let triggers_attrs = adapter.get_raw_group("OPCUA/Triggers")?;
     let mut triggers: TriggerConfig = parse_attrs(&triggers_attrs)?;
     triggers.rules = rules;
-
     Ok((pipe, client, triggers))
 }
 
