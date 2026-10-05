@@ -439,7 +439,9 @@ impl Hdf5AdapterV1_1 {
                 let vlu: VarLenUnicode = s
                     .parse()
                     .map_err(|e| MachineConfigError::Parse(format!("VarLenUnicode: {e:?}")))?;
-                grp.new_attr::<VarLenUnicode>().create(key)?.write_scalar(&vlu)?;
+                grp.new_attr::<VarLenUnicode>()
+                    .create(key)?
+                    .write_scalar(&vlu)?;
             }
             RawValue::Int(i) => {
                 grp.new_attr::<i64>().create(key)?.write_scalar(&i)?;
@@ -959,7 +961,7 @@ impl Hdf5AdapterV1_1 {
             extra: collect_extra(&pipe_grp, KNOWN_PIPE_KEYS)?,
         };
 
-        let triggers_grp = opcua_grp.group("Triggers")?;
+        let triggers_grp = opcua_grp.group("Trigger")?;
         let triggers_enabled = read_bool_from_float(&triggers_grp, "Triggers_Enabled")?;
         let trigger_stop_ceiling_layers = read_int(&triggers_grp, "Trigger_Stop_Ceiling_Layers")?;
 

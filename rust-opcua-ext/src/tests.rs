@@ -193,7 +193,7 @@ fn read_rejects_duplicate_condition_id_already_on_disk() {
     adapter
         .set_raw_group(
             "Extensions/TM_OPCUA/Trigger/Rule/Cond_B",
-            &crate::writer::to_attrs(&cond_a).unwrap(),
+            &crate::writer::to_attrs(&cond_b).unwrap(),
         )
         .unwrap();
 
@@ -242,7 +242,10 @@ fn missing_label_fallback_to_id_template() {
         ..Default::default()
     };
     adapter
-        .set_raw_group("Extensions/TM_OPCUA/Trigger/Some_Group_Name", &rule_attrs)
+        .set_raw_group(
+            "Extensions/TM_OPCUA/Trigger/Some_Group_Name",
+            &crate::writer::to_attrs(&rule).unwrap(),
+        )
         .unwrap();
 
     let (_, _, read_back) = read_opcua_config(tmp.path()).unwrap();
