@@ -3,7 +3,8 @@ pub mod reader;
 pub mod types;
 pub mod writer;
 
-#[cfg(test)] mod tests;
+#[cfg(test)]
+mod tests;
 
 pub use reader::read_opcua_config;
 pub use types::{
@@ -11,3 +12,4 @@ pub use types::{
     TriggerConfig, TriggerRuleConfig,
 };
 pub use writer::write_opcua_config;
+pub(crate) const OPCUA_ROOT: &str = "Extensions/TM_OPCUA";

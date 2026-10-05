@@ -1,5 +1,7 @@
 use crate::raw_group::RawGroupAccess;
-use crate::types::{ClientConfig, PipeConfig, TriggerConfig, TriggerRuleConfig};
+use crate::types::{
+    ClientConfig, PipeConfig, TriggerConditionConfig, TriggerConfig, TriggerRuleConfig,
+};
 use machine_config::capabilities::v1_0::hdf5::{peek_file_version, Hdf5AdapterV1_0};
 use machine_config::capabilities::v1_1::hdf5::Hdf5AdapterV1_1;
 use machine_config::CapabilityError;
@@ -25,20 +27,33 @@ pub fn read_opcua_config(
 fn read_via(
     adapter: &impl RawGroupAccess,
 ) -> Result<(PipeConfig, ClientConfig, TriggerConfig), CapabilityError> {
-    let pipe = parse_attrs(&adapter.get_raw_group("OPCUA/Pipe")?)?;
-    let client = parse_attrs(&adapter.get_raw_group("OPCUA/Client")?)?;
+    let pipe = parse_attrs(&adapter.get_raw_group(&format!("{}/Pipe", crate::OPCUA_ROOT))?)?;
+    let client = parse_attrs(&adapter.get_raw_group(&format!("{}/Client", crate::OPCUA_ROOT))?)?;
 
     let mut rules: Vec<TriggerRuleConfig> = Vec::new();
-    for rule_name in adapter.list_raw_group_children("OPCUA/Triggers")? {
-        let rule_attrs = adapter.get_raw_group(&format!("OPCUA/Triggers/{rule_name}"))?;
-        let mut rule: TriggerRuleConfig = parse_attrs(&rule_attrs)?;
-        for cond_name in
-            adapter.list_raw_group_children(&format!("OPCUA/Triggers/{rule_name}/Conditions"))?
-        {
-            let cond_attrs = adapter.get_raw_group(&format!(
-                "OPCUA/Triggers/{rule_name}/Conditions/{cond_name}"
-            ))?;
-            rule.conditions.push(parse_attrs(&cond_attrs)?);
+    for rule_name in adapter.list_raw_group_children(&format!("{}/Trigger", crate::OPCUA_ROOT))? {
+        let rule_path = format!("{}/Trigger/{rule_name}", crate::OPCUA_ROOT);
+        let mut rule: TriggerRuleConfig = parse_attrs(&adapter.get_raw_group(&rule_path)?)?;
+        if rule.rule_id == 0 {
+            return Err(CapabilityError::validation_error(format!(
+                "rule '{rule_name}' has no rule_id"
+            )));
+        }
+        if rule.rule_label.trim().is_empty() {
+            rule.rule_label = format!("Rule_{}", rule.rule_id);
+        }
+        for cond_name in adapter.list_raw_group_children(&rule_path)? {
+            let cond_attrs = adapter.get_raw_group(&format!("{rule_path}/{cond_name}"))?;
+            let mut condition: TriggerConditionConfig = parse_attrs(&cond_attrs)?;
+            if condition.condition_id == 0 {
+                return Err(CapabilityError::validation_error(format!(
+                    "condition '{cond_name}' in rule '{rule_name}' has no condition_id"
+                )));
+            }
+            if condition.condition_label.trim().is_empty() {
+                condition.condition_label = format!("Condition_{}", condition.condition_id);
+            }
+            rule.conditions.push(condition);
         }
         rule.conditions.sort_by_key(|c| c.condition_id);
         for pair in rule.conditions.windows(2) {
@@ -62,8 +77,8 @@ fn read_via(
         }
     }
 
-    let triggers_attrs = adapter.get_raw_group("OPCUA/Triggers")?;
-    let mut triggers: TriggerConfig = parse_attrs(&triggers_attrs)?;
+    let mut triggers: TriggerConfig =
+        parse_attrs(&adapter.get_raw_group(&format!("{}/Trigger", crate::OPCUA_ROOT))?)?;
     triggers.rules = rules;
     Ok((pipe, client, triggers))
 }
