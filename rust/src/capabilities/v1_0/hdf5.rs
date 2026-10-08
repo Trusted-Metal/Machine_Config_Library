@@ -1018,6 +1018,21 @@ impl Hdf5AdapterV1_0 {
             trigger_stop_ceiling_layers,
         }))
     }
+
+    pub fn remove_raw_group(&self, hdf5_path: &str) -> Result<()> {
+        let f = H5File::open_rw(&self.path)?;
+        let Some((parent, child)) = hdf5_path.rsplit_once('/') else {
+            return Ok(()); // no parent segment — nothing sensible to unlink at the root
+        };
+        let parent_grp = match f.group(parent) {
+            Ok(g) => g,
+            Err(_) => return Ok(()), // parent doesn't exist — nothing to remove
+        };
+        if parent_grp.member_names()?.iter().any(|n| n == child) {
+            parent_grp.unlink(child)?;
+        }
+        Ok(())
+    }
 }
 
 // v1.0's implementation of the ReaderAdapter contract — this impl is

@@ -13,10 +13,15 @@ pub fn write_opcua_config(
     adapter.set_raw_group(crate::OPCUA_ROOT, &opcua_attrs)?;
     adapter.set_raw_group(&format!("{}/Pipe", crate::OPCUA_ROOT), &to_attrs(pipe)?)?;
     adapter.set_raw_group(&format!("{}/Client", crate::OPCUA_ROOT), &to_attrs(client)?)?;
-    adapter.set_raw_group(
-        &format!("{}/Trigger", crate::OPCUA_ROOT),
-        &to_attrs(triggers)?,
-    )?;
+    let trigger_root = format!("{}/Trigger", crate::OPCUA_ROOT);
+    adapter.set_raw_group(&trigger_root, &to_attrs(triggers)?)?;
+
+    // Snapshot BEFORE writing anything new — a rule dropped from
+    // `triggers.rules` since the last write would otherwise silently survive
+    // on disk and reappear on the next read, since list_raw_group_children
+    // just reports whatever physically exists, not what the caller intended.
+    let existing_rule_names: std::collections::HashSet<String> =
+        adapter.list_raw_group_children(&trigger_root)?.into_iter().collect();
 
     let mut seen_rule_ids = std::collections::HashSet::new();
     let mut seen_rule_labels = std::collections::HashSet::new();
@@ -46,7 +51,10 @@ pub fn write_opcua_config(
                 rule.rule_label
             )));
         }
+
         let rule_path = format!("{}/Trigger/{}", crate::OPCUA_ROOT, rule.rule_label);
+        let existing_condition_names: std::collections::HashSet<String> =
+            adapter.list_raw_group_children(&rule_path)?.into_iter().collect();
         adapter.set_raw_group(&rule_path, &to_attrs(rule)?)?;
 
         let mut seen_condition_ids = std::collections::HashSet::new();
@@ -81,7 +89,16 @@ pub fn write_opcua_config(
             let cond_path = format!("{rule_path}/{}", cond.condition_label);
             adapter.set_raw_group(&cond_path, &to_attrs(cond)?)?;
         }
+
+        for stale in existing_condition_names.difference(&seen_condition_labels) {
+            adapter.remove_raw_group(&format!("{rule_path}/{stale}"))?;
+        }
     }
+
+    for stale in existing_rule_names.difference(&seen_rule_labels) {
+        adapter.remove_raw_group(&format!("{trigger_root}/{stale}"))?;
+    }
+    
     Ok(())
 }
 

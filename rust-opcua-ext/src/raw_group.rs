@@ -6,6 +6,7 @@ pub trait RawGroupAccess {
     fn get_raw_group(&self, hdf5_path: &str) -> Result<ExtraAttrs, CapabilityError>;
     fn list_raw_group_children(&self, hdf5_path: &str) -> Result<Vec<String>, CapabilityError>;
     fn set_raw_group(&self, hdf5_path: &str, attrs: &ExtraAttrs) -> Result<(), CapabilityError>;
+    fn remove_raw_group(&self, hdf5_path: &str) -> Result<(), CapabilityError>;
 }
 
 impl RawGroupAccess for Hdf5AdapterV1_0 {
@@ -18,6 +19,9 @@ impl RawGroupAccess for Hdf5AdapterV1_0 {
     fn set_raw_group(&self, p: &str, attrs: &ExtraAttrs) -> Result<(), CapabilityError> {
         Hdf5AdapterV1_0::set_raw_group(self, p, attrs).map_err(|e| CapabilityError::IoError(e.to_string()))
     }
+    fn remove_raw_group(&self, hdf5_path: &str) -> Result<(), CapabilityError> {
+        Hdf5AdapterV1_0::remove_raw_group(self, hdf5_path).map_err(|e| CapabilityError::IoError(e.to_string()))
+    }
 }
 
 impl RawGroupAccess for Hdf5AdapterV1_1 {
@@ -29,5 +33,8 @@ impl RawGroupAccess for Hdf5AdapterV1_1 {
     }
     fn set_raw_group(&self, p: &str, attrs: &ExtraAttrs) -> Result<(), CapabilityError> {
         Hdf5AdapterV1_1::set_raw_group(self, p, attrs).map_err(|e| CapabilityError::IoError(e.to_string()))
+    }
+    fn remove_raw_group(&self, hdf5_path: &str) -> Result<(), CapabilityError> {
+        Hdf5AdapterV1_1::remove_raw_group(self, hdf5_path).map_err(|e| CapabilityError::IoError(e.to_string()))
     }
 }

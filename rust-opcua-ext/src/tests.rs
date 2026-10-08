@@ -947,3 +947,103 @@ fn read_opcua_config_falls_back_to_v1_0_on_unrecognized_file_version() {
     .unwrap();
     assert!(read_opcua_config(tmp.path()).is_ok());
 }
+
+#[test]
+fn write_prunes_a_rule_removed_since_the_last_write() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    MockConfigBuilder::new(1).save(tmp.path()).unwrap();
+    let adapter = Hdf5AdapterV1_0::open(tmp.path()).unwrap();
+
+    let mut first = TriggerConfig::default();
+    first.rules.push(TriggerRuleConfig {
+        rule_id: 1,
+        rule_label: "A".into(),
+        ..Default::default()
+    });
+    first.rules.push(TriggerRuleConfig {
+        rule_id: 2,
+        rule_label: "B".into(),
+        ..Default::default()
+    });
+    write_opcua_config(
+        &adapter,
+        &PipeConfig::default(),
+        &ClientConfig::default(),
+        &first,
+    )
+    .unwrap();
+
+    let mut second = TriggerConfig::default(); // B removed
+    second.rules.push(TriggerRuleConfig {
+        rule_id: 1,
+        rule_label: "A".into(),
+        ..Default::default()
+    });
+    write_opcua_config(
+        &adapter,
+        &PipeConfig::default(),
+        &ClientConfig::default(),
+        &second,
+    )
+    .unwrap();
+
+    let (_, _, read_back) = read_opcua_config(tmp.path()).unwrap();
+    assert_eq!(read_back.rules.len(), 1);
+    assert_eq!(read_back.rules[0].rule_label, "A");
+}
+
+#[test]
+fn write_prunes_a_condition_removed_since_the_last_write() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    MockConfigBuilder::new(1).save(tmp.path()).unwrap();
+    let adapter = Hdf5AdapterV1_0::open(tmp.path()).unwrap();
+
+    let mut first = TriggerConfig::default();
+    first.rules.push(TriggerRuleConfig {
+        rule_id: 1,
+        rule_label: "Rule".into(),
+        conditions: vec![
+            TriggerConditionConfig {
+                condition_id: 1,
+                condition_label: "KeepMe".into(),
+                ..Default::default()
+            },
+            TriggerConditionConfig {
+                condition_id: 2,
+                condition_label: "RemoveMe".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    write_opcua_config(
+        &adapter,
+        &PipeConfig::default(),
+        &ClientConfig::default(),
+        &first,
+    )
+    .unwrap();
+
+    let mut second = TriggerConfig::default();
+    second.rules.push(TriggerRuleConfig {
+        rule_id: 1,
+        rule_label: "Rule".into(),
+        conditions: vec![TriggerConditionConfig {
+            condition_id: 1,
+            condition_label: "KeepMe".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    write_opcua_config(
+        &adapter,
+        &PipeConfig::default(),
+        &ClientConfig::default(),
+        &second,
+    )
+    .unwrap();
+
+    let (_, _, read_back) = read_opcua_config(tmp.path()).unwrap();
+    assert_eq!(read_back.rules[0].conditions.len(), 1);
+    assert_eq!(read_back.rules[0].conditions[0].condition_label, "KeepMe");
+}
