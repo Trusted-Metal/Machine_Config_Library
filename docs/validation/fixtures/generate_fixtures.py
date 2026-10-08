@@ -31,9 +31,9 @@ def generate_opcua_missing_required(opcua_source: Path, outdir: Path) -> None:
         del f["OPCUA/Client"].attrs["Root_Node"]
         del f["OPCUA/Pipe"].attrs["Configure_Client"]
         del f["OPCUA/Pipe"].attrs["Pipe_Name"]
-        del f["OPCUA/Triggers/Laser Emission Interlock"].attrs["Event"]
-        del f["OPCUA/Triggers"].attrs["Trigger_Stop_Ceiling_Layers"]
-        del f["OPCUA/Triggers"].attrs["Triggers_Enabled"]
+        del f["OPCUA/Trigger/Laser Emission Interlock"].attrs["Event"]
+        del f["OPCUA/Trigger"].attrs["Trigger_Stop_Ceiling_Layers"]
+        del f["OPCUA/Trigger"].attrs["Triggers_Enabled"]
 
 
 def generate(source: Path, outdir: Path, opcua_source: Path | None = None) -> None:

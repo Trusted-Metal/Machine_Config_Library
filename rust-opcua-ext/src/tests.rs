@@ -348,7 +348,7 @@ fn write_accepts_duplicate_condition_label_across_multiple_rules() {
         ..Default::default()
     };
 
-    let mut triggers = TriggerConfig {
+    let triggers = TriggerConfig {
         rules: vec![rule_a, rule_b],
         ..Default::default()
     };
@@ -396,7 +396,7 @@ fn write_accepts_duplicate_condition_ids_across_multiple_rules() {
         ..Default::default()
     };
 
-    let mut triggers = TriggerConfig {
+    let triggers = TriggerConfig {
         rules: vec![rule_a, rule_b],
         ..Default::default()
     };
@@ -661,7 +661,7 @@ fn round_trip_preserves_every_pipe_client_and_trigger_field() {
         priority: 1,
         rule_enabled: 1,
         rule_id: 1,
-        rule_label: "rule_a".into()
+        rule_label: "rule_a".into(),
     };
     let rule_b = TriggerRuleConfig {
         action: "CaptureStop".into(),
@@ -673,7 +673,7 @@ fn round_trip_preserves_every_pipe_client_and_trigger_field() {
         priority: 1,
         rule_enabled: 1,
         rule_id: 2,
-        rule_label: "rule_b".into()
+        rule_label: "rule_b".into(),
     };
     let trigger = TriggerConfig {
         triggers_enabled: 1,
@@ -684,79 +684,266 @@ fn round_trip_preserves_every_pipe_client_and_trigger_field() {
     write_opcua_config(&adapter, &pipe, &client, &trigger).unwrap();
     let (read_pipe, read_client, read_trigger) = read_opcua_config(tmp.path()).unwrap();
 
-    assert_eq!(read_pipe.buffer_size, pipe.buffer_size);
-    assert_eq!(read_pipe.configure_client, pipe.configure_client);
-    assert_eq!(read_pipe.inbound_rate_limit, pipe.inbound_rate_limit);
-    assert_eq!(read_pipe.max_inbound_message_size, pipe.max_inbound_message_size);
-    assert_eq!(read_pipe.min_integrity_level, pipe.min_integrity_level);
-    assert_eq!(read_pipe.pipe_enabled, pipe.pipe_enabled);
-    assert_eq!(read_pipe.pipe_name, pipe.pipe_name);
-    assert_eq!(read_pipe.user_access_level, pipe.user_access_level);
+    assert_eq!(read_pipe, pipe);
+    assert_eq!(read_client, client);
+    assert_eq!(read_trigger, trigger);
+}
 
-    assert_eq!(read_client.auth_mode, client.auth_mode);
-    assert_eq!(read_client.bfs_max_depth, client.bfs_max_depth);
-    assert_eq!(read_client.keep_alive_count, client.keep_alive_count);
-    assert_eq!(read_client.lifetime_count, client.lifetime_count);
-    assert_eq!(read_client.machine_profile, client.machine_profile);
-    assert_eq!(read_client.publish_interval, client.publish_interval);
-    assert_eq!(read_client.queue_policy, client.queue_policy);
-    assert_eq!(read_client.queue_size_data_change, client.queue_size_data_change);
-    assert_eq!(read_client.queue_size_events, client.queue_size_events);
-    assert_eq!(read_client.reconnect_interval, client.reconnect_interval);
-    assert_eq!(read_client.root_node, client.root_node);
-    assert_eq!(read_client.sampling_interval, client.sampling_interval);
-    assert_eq!(read_client.security_mode, client.security_mode);
-    assert_eq!(read_client.security_policy, client.security_policy);
-    assert_eq!(read_client.server_url, client.server_url);
-    assert_eq!(read_client.session_timeout, client.session_timeout);
-    assert_eq!(read_client.sync_loop_interval_initial, client.sync_loop_interval_initial);
-    assert_eq!(read_client.sync_loop_interval_settled, client.sync_loop_interval_settled);
+#[test]
+fn read_errors_on_missing_required_value_field() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    MockConfigBuilder::new(1).save(tmp.path()).unwrap();
+    let adapter = Hdf5AdapterV1_0::open(tmp.path()).unwrap();
+    write_opcua_config(
+        &adapter,
+        &PipeConfig::default(),
+        &ClientConfig::default(),
+        &TriggerConfig::default(),
+    )
+    .unwrap();
 
-    assert_eq!(read_trigger.triggers_enabled, trigger.triggers_enabled);
-    assert_eq!(read_trigger.trigger_stop_ceiling_layers, trigger.trigger_stop_ceiling_layers);
-    assert_eq!(read_trigger.rules.len(), 2);
-    assert_eq!(read_trigger.rules[0].action, rule_a.action);
-    assert_eq!(read_trigger.rules[0].combinator, rule_a.combinator);
-    assert_eq!(read_trigger.rules[0].cooldown_period, rule_a.cooldown_period);
-    assert_eq!(read_trigger.rules[0].description, rule_a.description);
-    assert_eq!(read_trigger.rules[0].max_fires_per_job, rule_a.max_fires_per_job);
-    assert_eq!(read_trigger.rules[0].priority, rule_a.priority);
-    assert_eq!(read_trigger.rules[0].rule_enabled, rule_a.rule_enabled);
-    assert_eq!(read_trigger.rules[0].rule_id, rule_a.rule_id);
-    assert_eq!(read_trigger.rules[0].rule_label, rule_a.rule_label);
-    assert_eq!(read_trigger.rules[1].action, rule_b.action);
-    assert_eq!(read_trigger.rules[1].combinator, rule_b.combinator);
-    assert_eq!(read_trigger.rules[1].cooldown_period, rule_b.cooldown_period);
-    assert_eq!(read_trigger.rules[1].description, rule_b.description);
-    assert_eq!(read_trigger.rules[1].max_fires_per_job, rule_b.max_fires_per_job);
-    assert_eq!(read_trigger.rules[1].priority, rule_b.priority);
-    assert_eq!(read_trigger.rules[1].rule_enabled, rule_b.rule_enabled);
-    assert_eq!(read_trigger.rules[1].rule_id, rule_b.rule_id);
-    assert_eq!(read_trigger.rules[1].rule_label, rule_b.rule_label);
-    
-    assert_eq!(read_trigger.rules[0].conditions.len(), 2);
-    assert_eq!(read_trigger.rules[0].conditions[0].case_sensitivity, cond_a.case_sensitivity);
-    assert_eq!(read_trigger.rules[0].conditions[0].comparison_operator, cond_a.comparison_operator);
-    assert_eq!(read_trigger.rules[0].conditions[0].component, cond_a.component);
-    assert_eq!(read_trigger.rules[0].conditions[0].condition_enabled, cond_a.condition_enabled);
-    assert_eq!(read_trigger.rules[0].conditions[0].condition_id, cond_a.condition_id);
-    assert_eq!(read_trigger.rules[0].conditions[0].condition_label, cond_a.condition_label);
-    assert_eq!(read_trigger.rules[0].conditions[0].epsilon, cond_a.epsilon);
-    assert_eq!(read_trigger.rules[0].conditions[0].evaluation_mode, cond_a.evaluation_mode);
-    assert_eq!(read_trigger.rules[0].conditions[0].event, cond_a.event);
-    assert_eq!(read_trigger.rules[0].conditions[0].signal, cond_a.signal);
-    assert_eq!(read_trigger.rules[0].conditions[0].subsystem, cond_a.subsystem);
-    assert_eq!(read_trigger.rules[0].conditions[0].value, cond_a.value);
-    assert_eq!(read_trigger.rules[0].conditions[1].case_sensitivity, cond_b.case_sensitivity);
-    assert_eq!(read_trigger.rules[0].conditions[1].comparison_operator, cond_b.comparison_operator);
-    assert_eq!(read_trigger.rules[0].conditions[1].component, cond_b.component);
-    assert_eq!(read_trigger.rules[0].conditions[1].condition_enabled, cond_b.condition_enabled);
-    assert_eq!(read_trigger.rules[0].conditions[1].condition_id, cond_b.condition_id);
-    assert_eq!(read_trigger.rules[0].conditions[1].condition_label, cond_b.condition_label);
-    assert_eq!(read_trigger.rules[0].conditions[1].epsilon, cond_b.epsilon);
-    assert_eq!(read_trigger.rules[0].conditions[1].evaluation_mode, cond_b.evaluation_mode);
-    assert_eq!(read_trigger.rules[0].conditions[1].event, cond_b.event);
-    assert_eq!(read_trigger.rules[0].conditions[1].signal, cond_b.signal);
-    assert_eq!(read_trigger.rules[0].conditions[1].subsystem, cond_b.subsystem);
-    assert_eq!(read_trigger.rules[0].conditions[1].value, cond_b.value);
+    let rule = TriggerRuleConfig {
+        rule_id: 1,
+        rule_label: "Rule".into(),
+        ..Default::default()
+    };
+    adapter
+        .set_raw_group(
+            "Extensions/TM_OPCUA/Trigger/Rule",
+            &crate::writer::to_attrs(&rule).unwrap(),
+        )
+        .unwrap();
+
+    let cond = TriggerConditionConfig {
+        condition_id: 1,
+        condition_label: "Cond".into(),
+        value: "irrelevant".into(),
+        ..Default::default()
+    };
+    let mut attrs = crate::writer::to_attrs(&cond).unwrap();
+    attrs.shift_remove("Value"); // the one condition field with no #[serde(default)]
+    adapter
+        .set_raw_group("Extensions/TM_OPCUA/Trigger/Rule/Cond", &attrs)
+        .unwrap();
+
+    assert!(matches!(
+        read_opcua_config(tmp.path()),
+        Err(CapabilityError::IoError(_))
+    ));
+}
+
+#[test]
+fn read_errors_on_missing_rule_enabled() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    MockConfigBuilder::new(1).save(tmp.path()).unwrap();
+    let adapter = Hdf5AdapterV1_0::open(tmp.path()).unwrap();
+    write_opcua_config(
+        &adapter,
+        &PipeConfig::default(),
+        &ClientConfig::default(),
+        &TriggerConfig::default(),
+    )
+    .unwrap();
+
+    let rule = TriggerRuleConfig {
+        rule_id: 1,
+        rule_label: "Rule".into(),
+        ..Default::default()
+    };
+    let mut attrs = crate::writer::to_attrs(&rule).unwrap();
+    attrs.shift_remove("Rule_Enabled");
+    adapter
+        .set_raw_group("Extensions/TM_OPCUA/Trigger/Rule", &attrs)
+        .unwrap();
+
+    assert!(matches!(
+        read_opcua_config(tmp.path()),
+        Err(CapabilityError::IoError(_))
+    ));
+}
+
+#[test]
+fn multi_rule_multi_condition_round_trip_is_independent_per_rule() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    MockConfigBuilder::new(1).save(tmp.path()).unwrap();
+    let adapter = Hdf5AdapterV1_0::open(tmp.path()).unwrap();
+
+    let triggers = TriggerConfig {
+        rules: vec![
+            TriggerRuleConfig {
+                rule_id: 3,
+                rule_label: "Third".into(),
+                conditions: vec![
+                    TriggerConditionConfig {
+                        condition_id: 2,
+                        condition_label: "C3b".into(),
+                        ..Default::default()
+                    },
+                    TriggerConditionConfig {
+                        condition_id: 1,
+                        condition_label: "C3a".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            TriggerRuleConfig {
+                rule_id: 1,
+                rule_label: "First".into(),
+                conditions: vec![TriggerConditionConfig {
+                    condition_id: 1,
+                    condition_label: "C1a".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            TriggerRuleConfig {
+                rule_id: 2,
+                rule_label: "Second".into(),
+                conditions: vec![
+                    TriggerConditionConfig {
+                        condition_id: 3,
+                        condition_label: "C2c".into(),
+                        ..Default::default()
+                    },
+                    TriggerConditionConfig {
+                        condition_id: 1,
+                        condition_label: "C2a".into(),
+                        ..Default::default()
+                    },
+                    TriggerConditionConfig {
+                        condition_id: 2,
+                        condition_label: "C2b".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    write_opcua_config(
+        &adapter,
+        &PipeConfig::default(),
+        &ClientConfig::default(),
+        &triggers,
+    )
+    .unwrap();
+    let (_, _, read_back) = read_opcua_config(tmp.path()).unwrap();
+
+    assert_eq!(
+        read_back
+            .rules
+            .iter()
+            .map(|r| r.rule_id)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(read_back.rules[0].conditions.len(), 1);
+    assert_eq!(read_back.rules[2].conditions.len(), 2);
+
+    let rule2 = &read_back.rules[1]; // rule_id 2, written with 3 conditions
+    assert_eq!(
+        rule2
+            .conditions
+            .iter()
+            .map(|c| c.condition_id)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert!(rule2.conditions.iter().all(|c| c.condition_label != "C1a")); // no leakage from rule 1
+}
+
+#[test]
+fn rule_with_zero_conditions_round_trips_cleanly() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    MockConfigBuilder::new(1).save(tmp.path()).unwrap();
+    let adapter = Hdf5AdapterV1_0::open(tmp.path()).unwrap();
+
+    let mut triggers = TriggerConfig::default();
+    triggers.rules.push(TriggerRuleConfig {
+        rule_id: 1,
+        rule_label: "AlwaysFire".into(),
+        action: "CaptureStart".into(),
+        rule_enabled: 1,
+        conditions: Vec::new(),
+        ..Default::default()
+    });
+
+    write_opcua_config(
+        &adapter,
+        &PipeConfig::default(),
+        &ClientConfig::default(),
+        &triggers,
+    )
+    .unwrap();
+    let (_, _, read_back) = read_opcua_config(tmp.path()).unwrap();
+
+    assert_eq!(read_back.rules.len(), 1);
+    assert!(read_back.rules[0].conditions.is_empty());
+}
+
+#[test]
+fn to_attrs_excludes_nested_vec_fields() {
+    let rule = TriggerRuleConfig {
+        rule_id: 1,
+        rule_label: "Rule".into(),
+        conditions: vec![TriggerConditionConfig {
+            condition_id: 1,
+            condition_label: "C".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let attrs = crate::writer::to_attrs(&rule).unwrap();
+
+    assert!(!attrs.contains_key("conditions"));
+    assert!(!attrs.contains_key("Conditions"));
+    assert!(attrs.contains_key("Rule_Id"));
+    assert!(attrs.contains_key("Rule_Label"));
+}
+
+#[test]
+fn flaglike_u32_and_string_agree_on_enabled_semantics() {
+    assert!(is_flag_enabled(&1u32));
+    assert!(!is_flag_enabled(&0u32));
+    assert!("true".is_enabled());
+    assert!(!"false".is_enabled());
+    assert!("TRUE".is_enabled()); // case-insensitivity, explicitly
+}
+
+#[test]
+fn attribute_value_untagged_enum_variant_fidelity() {
+    // Documents real behavior, not the "obviously correct" assumption:
+    // Float is tried before Int, so a JSON integer always round-trips as Float.
+    let round_tripped: AttributeValue =
+        serde_json::from_value(serde_json::to_value(AttributeValue::Int(5)).unwrap()).unwrap();
+    assert_eq!(round_tripped, AttributeValue::Float(5.0)); // NOT Int(5)
+
+    let s: AttributeValue =
+        serde_json::from_value(serde_json::to_value(AttributeValue::String("123".into())).unwrap())
+            .unwrap();
+    assert_eq!(s, AttributeValue::String("123".into())); // unambiguous, survives correctly
+
+    let b: AttributeValue =
+        serde_json::from_value(serde_json::to_value(AttributeValue::Bool(true)).unwrap()).unwrap();
+    assert_eq!(b, AttributeValue::Bool(true));
+}
+
+#[test]
+fn read_opcua_config_falls_back_to_v1_0_on_unrecognized_file_version() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    make_fixture(tmp.path(), "9.9"); // nonsense — not "1.0", not "1.1"
+    let adapter = Hdf5AdapterV1_0::open(tmp.path()).unwrap(); // v1.0 shape, matching the fallback
+
+    write_opcua_config(
+        &adapter,
+        &PipeConfig::default(),
+        &ClientConfig::default(),
+        &TriggerConfig::default(),
+    )
+    .unwrap();
+    assert!(read_opcua_config(tmp.path()).is_ok());
 }

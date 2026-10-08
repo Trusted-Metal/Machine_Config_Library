@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Generic attribute value that can be stored in HDF5
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum AttributeValue {
     String(String),
@@ -17,7 +17,7 @@ pub enum AttributeValue {
 }
 
 /// OPCUA configuration from /OPCUA/Client
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClientConfig {
     // CLIENT_GROUP
     /// Sets user identity token requirements for RBAC
@@ -103,7 +103,7 @@ impl Default for ClientConfig {
 }
 
 /// OPCUA configuration from /OPCUA/Pipe
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PipeConfig {
     // PIPE_GROUP
     /// Maximum size of by pipe buffer [Bytes]
@@ -149,7 +149,7 @@ impl Default for PipeConfig {
 }
 
 /// OPCUA configuration from /OPCUA/Trigger
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TriggerConfig {
     // TRIGGER_GROUP
     /// Global trigger gate
@@ -174,7 +174,7 @@ impl Default for TriggerConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Trigger configuration from /OPCUA/Trigger/{TriggerLabel}
 pub struct TriggerRuleConfig {
     // RULE_SUBGROUP
@@ -227,7 +227,7 @@ impl Default for TriggerRuleConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Trigger configuration from /OPCUA/Triggers/{TriggerLabel}
 pub struct TriggerConditionConfig {
     // CONDITION_SUBGROUP

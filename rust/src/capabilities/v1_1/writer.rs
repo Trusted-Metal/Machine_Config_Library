@@ -27,9 +27,12 @@ use crate::writer::WriterAdapter;
 // ---------------------------------------------------------------------------
 
 fn ws(grp: &Group, key: &str, val: &str) -> Result<()> {
-    let vlu: VarLenUnicode =
-        val.parse().map_err(|e| MachineConfigError::Parse(format!("VarLenUnicode: {e:?}")))?;
-    grp.new_attr::<VarLenUnicode>().create(key)?.write_scalar(&vlu)?;
+    let vlu: VarLenUnicode = val
+        .parse()
+        .map_err(|e| MachineConfigError::Parse(format!("VarLenUnicode: {e:?}")))?;
+    grp.new_attr::<VarLenUnicode>()
+        .create(key)?
+        .write_scalar(&vlu)?;
     Ok(())
 }
 
@@ -56,7 +59,9 @@ fn wi(grp: &Group, key: &str, val: Option<i64>) -> Result<()> {
 fn wb(grp: &Group, key: &str, val: Option<bool>) -> Result<()> {
     match val {
         Some(b) => {
-            grp.new_attr::<i64>().create(key)?.write_scalar(&(b as i64))?;
+            grp.new_attr::<i64>()
+                .create(key)?
+                .write_scalar(&(b as i64))?;
         }
         None => ws(grp, key, "")?,
     }
@@ -73,9 +78,12 @@ fn wb_if_true(grp: &Group, key: &str, val: bool) -> Result<()> {
 }
 
 fn ws_ds(ds: &Dataset, key: &str, val: &str) -> Result<()> {
-    let vlu: VarLenUnicode =
-        val.parse().map_err(|e| MachineConfigError::Parse(format!("VarLenUnicode: {e:?}")))?;
-    ds.new_attr::<VarLenUnicode>().create(key)?.write_scalar(&vlu)?;
+    let vlu: VarLenUnicode = val
+        .parse()
+        .map_err(|e| MachineConfigError::Parse(format!("VarLenUnicode: {e:?}")))?;
+    ds.new_attr::<VarLenUnicode>()
+        .create(key)?
+        .write_scalar(&vlu)?;
     Ok(())
 }
 
@@ -97,7 +105,9 @@ fn write_extra_value(grp: &Group, key: &str, val: &serde_json::Value) -> Result<
             }
         }
         serde_json::Value::Bool(b) => {
-            grp.new_attr::<i64>().create(key)?.write_scalar(&(*b as i64))?;
+            grp.new_attr::<i64>()
+                .create(key)?
+                .write_scalar(&(*b as i64))?;
         }
         other => ws(grp, key, &other.to_string())?,
     }
@@ -183,20 +193,44 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Model", &ma.model)?;
         ws(grp, "Serial_Number", &ma.serial_number)?;
         wf(grp, "Build_Plate_X_Dimension", ma.build_plate_x)?;
-        ws(grp, "Build_Plate_X_Dimension_unit", ma.build_plate_x_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Build_Plate_X_Dimension_unit",
+            ma.build_plate_x_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Build_Plate_Y_Dimension", ma.build_plate_y)?;
-        ws(grp, "Build_Plate_Y_Dimension_unit", ma.build_plate_y_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Build_Plate_Y_Dimension_unit",
+            ma.build_plate_y_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Build_Plate_Z_Dimension", ma.build_plate_z)?;
-        ws(grp, "Build_Plate_Z_Dimension_unit", ma.build_plate_z_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Build_Plate_Z_Dimension_unit",
+            ma.build_plate_z_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Build_Plate_Corner_Radius", ma.build_plate_radius)?;
         ws(
             grp,
             "Build_Plate_Corner_Radius_unit",
             ma.build_plate_radius_unit.as_deref().unwrap_or(""),
         )?;
-        ws(grp, "Gas_Flow_Direction", ma.gas_flow_direction.as_deref().unwrap_or(""))?;
-        ws(grp, "Recoat_Direction", ma.recoat_direction.as_deref().unwrap_or(""))?;
-        ws(grp, "Recoater_Blade_Type", ma.recoater_blade_type.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Gas_Flow_Direction",
+            ma.gas_flow_direction.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Recoat_Direction",
+            ma.recoat_direction.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Recoater_Blade_Type",
+            ma.recoater_blade_type.as_deref().unwrap_or(""),
+        )?;
         Ok(())
     }
 
@@ -210,7 +244,10 @@ impl<'a> Hdf5WriterV1_1<'a> {
             .iter()
             .enumerate()
             .filter_map(|(i, t)| {
-                t.optional_components.clearbox.as_ref().map(|cb| (layout::train_id(i), cb))
+                t.optional_components
+                    .clearbox
+                    .as_ref()
+                    .map(|cb| (layout::train_id(i), cb))
             })
             .collect();
 
@@ -241,7 +278,10 @@ impl<'a> Hdf5WriterV1_1<'a> {
             let train_grp = trains_grp.create_group(&tid)?;
             self.write_train_attrs(&train_grp, train)?;
 
-            self.write_scanner(&train_grp.create_group(layout::GROUP_SCANNER)?, &train.scanner)?;
+            self.write_scanner(
+                &train_grp.create_group(layout::GROUP_SCANNER)?,
+                &train.scanner,
+            )?;
             self.write_light_source(
                 &train_grp.create_group(layout::GROUP_LIGHT_SOURCE)?,
                 &train.light_source,
@@ -276,14 +316,34 @@ impl<'a> Hdf5WriterV1_1<'a> {
 
     fn write_train_attrs(&self, grp: &Group, t: &OpticalTrain) -> Result<()> {
         ws(grp, "ID", t.id.as_deref().unwrap_or(""))?;
-        ws(grp, "Beam_Profile_Type", t.beam_profile_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Beam_Waist_Definition", t.beam_waist_definition.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Beam_Profile_Type",
+            t.beam_profile_type.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Beam_Waist_Definition",
+            t.beam_waist_definition.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Beam_Waist_Major", t.beam_waist_major)?;
-        ws(grp, "Beam_Waist_Major_unit", t.beam_waist_major_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Beam_Waist_Major_unit",
+            t.beam_waist_major_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Beam_Waist_Minor", t.beam_waist_minor)?;
-        ws(grp, "Beam_Waist_Minor_unit", t.beam_waist_minor_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Beam_Waist_Minor_unit",
+            t.beam_waist_minor_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Beam_Waist_Offset_Z", t.beam_waist_offset_z)?;
-        ws(grp, "Beam_Waist_Offset_Z_unit", t.beam_waist_offset_z_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Beam_Waist_Offset_Z_unit",
+            t.beam_waist_offset_z_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Build_Plane_Offset_Major", t.build_plane_offset_major)?;
         ws(
             grp,
@@ -305,7 +365,11 @@ impl<'a> Hdf5WriterV1_1<'a> {
         wf(grp, "M2_Major", t.m2_major)?;
         wf(grp, "M2_Minor", t.m2_minor)?;
         wf(grp, "Major_Axis_Angle", t.major_axis_angle)?;
-        ws(grp, "Major_Axis_Angle_unit", t.major_axis_angle_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Major_Axis_Angle_unit",
+            t.major_axis_angle_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Rayleigh_Length_Major", t.rayleigh_length_major)?;
         ws(
             grp,
@@ -318,15 +382,29 @@ impl<'a> Hdf5WriterV1_1<'a> {
             "Rayleigh_Length_Minor_unit",
             t.rayleigh_length_minor_unit.as_deref().unwrap_or(""),
         )?;
-        ws(grp, "Scanner_Number", t.scanner_number.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Scanner_Number",
+            t.scanner_number.as_deref().unwrap_or(""),
+        )?;
         wb(grp, "Thermal_Lensing_Test_Passed", t.thermal_lensing_passed)?;
-        wf(grp, "Thermal_Lensing_Focal_Plane_Shift", t.thermal_lensing_focal_plane_shift)?;
+        wf(
+            grp,
+            "Thermal_Lensing_Focal_Plane_Shift",
+            t.thermal_lensing_focal_plane_shift,
+        )?;
         ws(
             grp,
             "Thermal_Lensing_Focal_Plane_Shift_unit",
-            t.thermal_lensing_focal_plane_shift_unit.as_deref().unwrap_or(""),
+            t.thermal_lensing_focal_plane_shift_unit
+                .as_deref()
+                .unwrap_or(""),
         )?;
-        wf(grp, "Thermal_Lensing_Threshold", t.thermal_lensing_threshold)?;
+        wf(
+            grp,
+            "Thermal_Lensing_Threshold",
+            t.thermal_lensing_threshold,
+        )?;
         ws(
             grp,
             "Thermal_Lensing_Threshold_unit",
@@ -340,22 +418,58 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Model", &s.model)?;
         ws(grp, "Serial_Number", &s.serial_number)?;
         wf(grp, "Working_Distance", s.working_distance)?;
-        ws(grp, "Working_Distance_unit", s.working_distance_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Working_Distance_unit",
+            s.working_distance_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Scan_Field_Size_X", s.scan_field_x)?;
-        ws(grp, "Scan_Field_Size_X_unit", s.scan_field_x_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Scan_Field_Size_X_unit",
+            s.scan_field_x_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Scan_Field_Size_Y", s.scan_field_y)?;
-        ws(grp, "Scan_Field_Size_Y_unit", s.scan_field_y_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Scan_Field_Size_Y_unit",
+            s.scan_field_y_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Scan_Field_Size_Z", s.scan_field_z)?;
-        ws(grp, "Scan_Field_Size_Z_unit", s.scan_field_z_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Scan_Field_Size_Z_unit",
+            s.scan_field_z_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Scan_Head_Offset_X", s.scan_head_offset_x)?;
-        ws(grp, "Scan_Head_Offset_X_unit", s.scan_head_offset_x_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Scan_Head_Offset_X_unit",
+            s.scan_head_offset_x_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Scan_Head_Offset_Y", s.scan_head_offset_y)?;
-        ws(grp, "Scan_Head_Offset_Y_unit", s.scan_head_offset_y_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Scan_Head_Offset_Y_unit",
+            s.scan_head_offset_y_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Scan_Head_Offset_Z", s.scan_head_offset_z)?;
-        ws(grp, "Scan_Head_Offset_Z_unit", s.scan_head_offset_z_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Scan_Head_Offset_Z_unit",
+            s.scan_head_offset_z_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Scan_Head_Rotation", s.scan_head_rotation)?;
-        ws(grp, "Scan_Head_Rotation_unit", s.scan_head_rotation_unit.as_deref().unwrap_or(""))?;
-        ws(grp, "Axis_Configuration", s.axis_configuration.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Scan_Head_Rotation_unit",
+            s.scan_head_rotation_unit.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Axis_Configuration",
+            s.axis_configuration.as_deref().unwrap_or(""),
+        )?;
         wb_if_true(grp, "Invert_Actual_X", s.invert_actual_x)?;
         wb_if_true(grp, "Invert_Actual_Y", s.invert_actual_y)?;
         wb_if_true(grp, "Invert_Commanded_X", s.invert_commanded_x)?;
@@ -376,17 +490,33 @@ impl<'a> Hdf5WriterV1_1<'a> {
     /// v1.1, regardless of what's on the model.
     fn write_axis(&self, grp: &Group, ax: &AxisConfig) -> Result<()> {
         wi(grp, "Actual_Bit_Resolution", ax.actual_bit_resolution)?;
-        ws(grp, "Actual_Bit_Resolution_unit", ax.actual_bit_resolution_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Actual_Bit_Resolution_unit",
+            ax.actual_bit_resolution_unit.as_deref().unwrap_or(""),
+        )?;
         wi(grp, "Commanded_Bit_Resolution", ax.commanded_bit_resolution)?;
         ws(
             grp,
             "Commanded_Bit_Resolution_unit",
             ax.commanded_bit_resolution_unit.as_deref().unwrap_or(""),
         )?;
-        ws(grp, "Control_Type", ax.control_type.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Control_Type",
+            ax.control_type.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Range_Of_Motion", ax.range_of_motion)?;
-        ws(grp, "Range_Of_Motion_unit", ax.range_of_motion_unit.as_deref().unwrap_or(""))?;
-        ws(grp, "Smoothing_Kernel", ax.smoothing_kernel.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Range_Of_Motion_unit",
+            ax.range_of_motion_unit.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Smoothing_Kernel",
+            ax.smoothing_kernel.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Smoothing_Parameters", ax.smoothing_parameters)?;
         Ok(())
     }
@@ -399,20 +529,36 @@ impl<'a> Hdf5WriterV1_1<'a> {
         grp: &Group,
         pc: Option<&PowerCharacterization>,
     ) -> Result<()> {
-        ws(grp, "Algorithm_Type", pc.and_then(|p| p.algorithm_type.as_deref()).unwrap_or(""))?;
-        ws(grp, "Algorithm_Equation", pc.and_then(|p| p.algorithm_equation.as_deref()).unwrap_or(""))?;
-        ws(grp, "Input_Type", pc.and_then(|p| p.input_type.as_deref()).unwrap_or(""))?;
+        ws(
+            grp,
+            "Algorithm_Type",
+            pc.and_then(|p| p.algorithm_type.as_deref()).unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Algorithm_Equation",
+            pc.and_then(|p| p.algorithm_equation.as_deref())
+                .unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Input_Type",
+            pc.and_then(|p| p.input_type.as_deref()).unwrap_or(""),
+        )?;
         ws(
             grp,
             "Units_Derived_Quantity",
-            pc.and_then(|p| p.units_derived_quantity.as_deref()).unwrap_or(""),
+            pc.and_then(|p| p.units_derived_quantity.as_deref())
+                .unwrap_or(""),
         )?;
 
         // UTF-8 — same shared convention as SynchronousSensor's own
         // Derivation_Equation_Constants (see `RawEquationConstant`'s doc
         // comment in `v1_1/hdf5.rs`).
         let empty: Vec<EquationConstant> = Vec::new();
-        let constants = pc.map(|p| &p.derivation_equation_constants).unwrap_or(&empty);
+        let constants = pc
+            .map(|p| &p.derivation_equation_constants)
+            .unwrap_or(&empty);
         let const_rows: Vec<RawEquationConstant> = constants
             .iter()
             .map(|c| -> Result<RawEquationConstant> {
@@ -434,10 +580,15 @@ impl<'a> Hdf5WriterV1_1<'a> {
             .create(layout::DS_DERIVATION_EQUATION_CONSTANTS)?;
 
         let empty_points: Vec<CalibrationPoint> = Vec::new();
-        let points = pc.map(|p| &p.characterization_points).unwrap_or(&empty_points);
+        let points = pc
+            .map(|p| &p.characterization_points)
+            .unwrap_or(&empty_points);
         let point_rows: Vec<RawCalibrationPoint> = points
             .iter()
-            .map(|p| RawCalibrationPoint { input_value: p.input_value, output_value: p.output_value })
+            .map(|p| RawCalibrationPoint {
+                input_value: p.input_value,
+                output_value: p.output_value,
+            })
             .collect();
         let point_arr = Array1::from(point_rows);
         grp.new_dataset_builder()
@@ -452,19 +603,46 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Model", &ls.model)?;
         ws(grp, "Serial_Number", &ls.serial_number)?;
         wf(grp, "Light_Wavelength", ls.wavelength)?;
-        ws(grp, "Light_Wavelength_unit", ls.wavelength_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Light_Wavelength_unit",
+            ls.wavelength_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Power_Max_Nominal", ls.power_max_nominal)?;
-        ws(grp, "Power_Max_Nominal_unit", ls.power_max_nominal_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Power_Max_Nominal_unit",
+            ls.power_max_nominal_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Power_Max_Actual", ls.power_max_actual)?;
-        ws(grp, "Power_Max_Actual_unit", ls.power_max_actual_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Power_Max_Actual_unit",
+            ls.power_max_actual_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Power_Min_Actual", ls.power_min_actual)?;
-        ws(grp, "Power_Min_Actual_unit", ls.power_min_actual_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Power_Min_Actual_unit",
+            ls.power_min_actual_unit.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Power_Min_Nominal", ls.power_min_nominal)?;
-        ws(grp, "Power_Min_Nominal_unit", ls.power_min_nominal_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Power_Min_Nominal_unit",
+            ls.power_min_nominal_unit.as_deref().unwrap_or(""),
+        )?;
         // Power_Bit_Resolution is always stored as a string in real HDF5 files.
-        let pbr_str = ls.power_bit_resolution.map(|v| v.to_string()).unwrap_or_default();
+        let pbr_str = ls
+            .power_bit_resolution
+            .map(|v| v.to_string())
+            .unwrap_or_default();
         ws(grp, "Power_Bit_Resolution", &pbr_str)?;
-        ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Power_Bit_Resolution_unit",
+            ls.power_bit_resolution_unit.as_deref().unwrap_or(""),
+        )?;
         // Change 4: Watts_To_Volts_Algorithm/Params are not written in v1.1 —
         // power_characterization is the only StableModel representation of
         // this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md), so
@@ -481,7 +659,11 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Model", &c.model)?;
         ws(grp, "Serial_Number", &c.serial_number)?;
         wf(grp, "Focal_Length", c.focal_length)?;
-        ws(grp, "Focal_Length_unit", c.focal_length_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Focal_Length_unit",
+            c.focal_length_unit.as_deref().unwrap_or(""),
+        )?;
         Ok(())
     }
 
@@ -489,9 +671,17 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(grp, "Manufacturer", &sc.manufacturer)?;
         ws(grp, "Model", &sc.model)?;
         ws(grp, "Serial_Number", &sc.serial_number)?;
-        ws(grp, "Communication_Protocol", sc.communication_protocol.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Communication_Protocol",
+            sc.communication_protocol.as_deref().unwrap_or(""),
+        )?;
         wf(grp, "Sample_Period", sc.sample_period)?;
-        ws(grp, "Sample_Period_unit", sc.sample_period_unit.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Sample_Period_unit",
+            sc.sample_period_unit.as_deref().unwrap_or(""),
+        )?;
         Ok(())
     }
 
@@ -501,21 +691,40 @@ impl<'a> Hdf5WriterV1_1<'a> {
     fn write_clearbox(&self, cb_root: &Group, tid: &str, cb: &ClearBox) -> Result<()> {
         let grp = cb_root.create_group(tid)?;
         ws(&grp, "Ip_Address", &cb.ip_address)?;
-        ws(&grp, "Serial_Number", cb.serial_number.as_deref().unwrap_or(""))?;
+        ws(
+            &grp,
+            "Serial_Number",
+            cb.serial_number.as_deref().unwrap_or(""),
+        )?;
         wi(&grp, "Data_Port", cb.data_port)?;
         wi(&grp, "Server_Port", cb.server_port)?;
         wi(&grp, "Actual_Timing_Offset", cb.actual_timing_offset)?;
         wi(&grp, "Commanded_Timing_Offset", cb.commanded_timing_offset)?;
-        ws(&grp, "Manufacturer", cb.manufacturer.as_deref().unwrap_or(""))?;
+        ws(
+            &grp,
+            "Manufacturer",
+            cb.manufacturer.as_deref().unwrap_or(""),
+        )?;
         ws(&grp, "Model", cb.model.as_deref().unwrap_or(""))?;
-        ws(&grp, "Firmware_Version", cb.firmware_version.as_deref().unwrap_or(""))?;
+        ws(
+            &grp,
+            "Firmware_Version",
+            cb.firmware_version.as_deref().unwrap_or(""),
+        )?;
 
         let cd_arr = nested_to_array3(&cb.correction_data);
         let shape = cd_arr.shape().to_owned();
-        let cd_ds = grp.new_dataset_builder().with_data(&cd_arr).create(layout::DS_CORRECTION_DATA)?;
+        let cd_ds = grp
+            .new_dataset_builder()
+            .with_data(&cd_arr)
+            .create(layout::DS_CORRECTION_DATA)?;
         ws_ds(&cd_ds, "dimensions", "H,W,D")?;
         ws_ds(&cd_ds, "dtype", "float64")?;
-        ws_ds(&cd_ds, "shape", &format!("{}x{}x{}", shape[0], shape[1], shape[2]))?;
+        ws_ds(
+            &cd_ds,
+            "shape",
+            &format!("{}x{}x{}", shape[0], shape[1], shape[2]),
+        )?;
 
         let icd_arr = nested_to_array3(&cb.inverse_correction_data);
         let icd_shape = icd_arr.shape().to_owned();
@@ -525,7 +734,11 @@ impl<'a> Hdf5WriterV1_1<'a> {
             .create(layout::DS_INVERSE_CORRECTION_DATA)?;
         ws_ds(&icd_ds, "dimensions", "H,W,D")?;
         ws_ds(&icd_ds, "dtype", "float64")?;
-        ws_ds(&icd_ds, "shape", &format!("{}x{}x{}", icd_shape[0], icd_shape[1], icd_shape[2]))?;
+        ws_ds(
+            &icd_ds,
+            "shape",
+            &format!("{}x{}x{}", icd_shape[0], icd_shape[1], icd_shape[2]),
+        )?;
 
         if !cb.synchronous_sensors.is_empty() {
             let sensors_grp = grp.create_group("Synchronous_Sensors")?;
@@ -547,20 +760,72 @@ impl<'a> Hdf5WriterV1_1<'a> {
 
     fn write_synchronous_sensor(&self, grp: &Group, sensor: &SynchronousSensor) -> Result<()> {
         wb(grp, "Enabled", sensor.enabled)?;
-        ws(grp, "Sensor_Name", sensor.sensor_name.as_deref().unwrap_or(""))?;
-        wf(grp, "Sensor_Output_Range_Low", sensor.sensor_output_range_low)?;
-        wf(grp, "Sensor_Output_Range_High", sensor.sensor_output_range_high)?;
-        ws(grp, "Sensor_Output_Space", sensor.sensor_output_space.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Model", sensor.sensor_model.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Manufacturer", sensor.sensor_manufacturer.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Scope", sensor.sensor_scope.as_deref().unwrap_or(""))?;
-        ws(grp, "Units_Derived_Quantity", sensor.units_derived_quantity.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Sensor_Name",
+            sensor.sensor_name.as_deref().unwrap_or(""),
+        )?;
+        wf(
+            grp,
+            "Sensor_Output_Range_Low",
+            sensor.sensor_output_range_low,
+        )?;
+        wf(
+            grp,
+            "Sensor_Output_Range_High",
+            sensor.sensor_output_range_high,
+        )?;
+        ws(
+            grp,
+            "Sensor_Output_Space",
+            sensor.sensor_output_space.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Sensor_Model",
+            sensor.sensor_model.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Sensor_Manufacturer",
+            sensor.sensor_manufacturer.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Sensor_Scope",
+            sensor.sensor_scope.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Units_Derived_Quantity",
+            sensor.units_derived_quantity.as_deref().unwrap_or(""),
+        )?;
         wi(grp, "Port_ID", sensor.port_id)?;
-        ws(grp, "Sensor_Type", sensor.sensor_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Input_Type", sensor.input_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Algorithm_Type", sensor.algorithm_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Algorithm_Equation", sensor.algorithm_equation.as_deref().unwrap_or(""))?;
-        ws(grp, "Calibration_Source", sensor.calibration_source.as_deref().unwrap_or(""))?;
+        ws(
+            grp,
+            "Sensor_Type",
+            sensor.sensor_type.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Input_Type",
+            sensor.input_type.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Algorithm_Type",
+            sensor.algorithm_type.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Algorithm_Equation",
+            sensor.algorithm_equation.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            grp,
+            "Calibration_Source",
+            sensor.calibration_source.as_deref().unwrap_or(""),
+        )?;
         wb(grp, "Calibration_Verified", sensor.calibration_verified)?;
         wf(grp, "Sample_Period", sensor.sample_period)?;
         ws(grp, "Metadata", sensor.metadata.as_deref().unwrap_or(""))?;
@@ -586,15 +851,22 @@ impl<'a> Hdf5WriterV1_1<'a> {
             })
             .collect::<Result<Vec<_>>>()?;
         let const_arr = Array1::from(const_rows);
-        grp.new_dataset_builder().with_data(&const_arr).create("Derivation_Equation_Constants")?;
+        grp.new_dataset_builder()
+            .with_data(&const_arr)
+            .create("Derivation_Equation_Constants")?;
 
         let point_rows: Vec<RawCalibrationPoint> = sensor
             .calibration_points
             .iter()
-            .map(|p| RawCalibrationPoint { input_value: p.input_value, output_value: p.output_value })
+            .map(|p| RawCalibrationPoint {
+                input_value: p.input_value,
+                output_value: p.output_value,
+            })
             .collect();
         let point_arr = Array1::from(point_rows);
-        grp.new_dataset_builder().with_data(&point_arr).create("Calibration_Points")?;
+        grp.new_dataset_builder()
+            .with_data(&point_arr)
+            .create("Calibration_Points")?;
 
         Ok(())
     }
@@ -613,9 +885,21 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws_ds(&ds, "document_id", &sfcf.document_id)?;
         wi_ds(&ds, "file_size", sfcf.file_size)?;
         ws_ds(&ds, "valid_as_of_date", &sfcf.valid_as_of_date)?;
-        ws_ds(&ds, "document_created_at", sfcf.document_created_at.as_deref().unwrap_or(""))?;
-        ws_ds(&ds, "document_type", sfcf.document_type.as_deref().unwrap_or(""))?;
-        ws_ds(&ds, "original_uri", sfcf.original_uri.as_deref().unwrap_or(""))?;
+        ws_ds(
+            &ds,
+            "document_created_at",
+            sfcf.document_created_at.as_deref().unwrap_or(""),
+        )?;
+        ws_ds(
+            &ds,
+            "document_type",
+            sfcf.document_type.as_deref().unwrap_or(""),
+        )?;
+        ws_ds(
+            &ds,
+            "original_uri",
+            sfcf.original_uri.as_deref().unwrap_or(""),
+        )?;
         Ok(())
     }
 
@@ -633,60 +917,134 @@ impl<'a> Hdf5WriterV1_1<'a> {
         ws(&client_grp, "Auth_Mode", &c.auth_mode)?;
         ws(&client_grp, "Security_Mode", &c.security_mode)?;
         ws(&client_grp, "Security_Policy", &c.security_policy)?;
-        client_grp.new_attr::<i64>().create("BFS_Max_Depth")?.write_scalar(&c.bfs_max_depth)?;
-        client_grp.new_attr::<i64>().create("Publish_Interval")?.write_scalar(&c.publish_interval)?;
-        client_grp.new_attr::<i64>().create("Sampling_Interval")?.write_scalar(&c.sampling_interval)?;
-        client_grp.new_attr::<i64>().create("Session_Timeout")?.write_scalar(&c.session_timeout)?;
+        client_grp
+            .new_attr::<i64>()
+            .create("BFS_Max_Depth")?
+            .write_scalar(&c.bfs_max_depth)?;
+        client_grp
+            .new_attr::<i64>()
+            .create("Publish_Interval")?
+            .write_scalar(&c.publish_interval)?;
+        client_grp
+            .new_attr::<i64>()
+            .create("Sampling_Interval")?
+            .write_scalar(&c.sampling_interval)?;
+        client_grp
+            .new_attr::<i64>()
+            .create("Session_Timeout")?
+            .write_scalar(&c.session_timeout)?;
         wi(&client_grp, "Keep_Alive_Count", c.keep_alive_count)?;
         wi(&client_grp, "Lifetime_Count", c.lifetime_count)?;
-        ws(&client_grp, "Machine_Profile", c.machine_profile.as_deref().unwrap_or(""))?;
-        ws(&client_grp, "Queue_Policy", c.queue_policy.as_deref().unwrap_or(""))?;
-        wi(&client_grp, "Queue_Size_Data_Change", c.queue_size_data_change)?;
+        ws(
+            &client_grp,
+            "Machine_Profile",
+            c.machine_profile.as_deref().unwrap_or(""),
+        )?;
+        ws(
+            &client_grp,
+            "Queue_Policy",
+            c.queue_policy.as_deref().unwrap_or(""),
+        )?;
+        wi(
+            &client_grp,
+            "Queue_Size_Data_Change",
+            c.queue_size_data_change,
+        )?;
         wi(&client_grp, "Queue_Size_Events", c.queue_size_events)?;
         wi(&client_grp, "Reconnect_Interval", c.reconnect_interval)?;
-        ws(&client_grp, "Root_Node", c.root_node.as_deref().unwrap_or(""))?;
-        wi(&client_grp, "Sync_Loop_Interval_Initial", c.sync_loop_interval_initial)?;
-        wi(&client_grp, "Sync_Loop_Interval_Settled", c.sync_loop_interval_settled)?;
+        ws(
+            &client_grp,
+            "Root_Node",
+            c.root_node.as_deref().unwrap_or(""),
+        )?;
+        wi(
+            &client_grp,
+            "Sync_Loop_Interval_Initial",
+            c.sync_loop_interval_initial,
+        )?;
+        wi(
+            &client_grp,
+            "Sync_Loop_Interval_Settled",
+            c.sync_loop_interval_settled,
+        )?;
         for (k, v) in &c.extra {
             write_extra_value(&client_grp, k, v)?;
         }
 
         let pipe_grp = opcua_grp.create_group("Pipe")?;
         let p = &opcua.pipe;
-        pipe_grp.new_attr::<i64>().create("Pipe_Enabled")?.write_scalar(&(p.pipe_enabled as i64))?;
-        pipe_grp.new_attr::<i64>().create("Buffer_Size")?.write_scalar(&p.buffer_size)?;
+        pipe_grp
+            .new_attr::<i64>()
+            .create("Pipe_Enabled")?
+            .write_scalar(&(p.pipe_enabled as i64))?;
+        pipe_grp
+            .new_attr::<i64>()
+            .create("Buffer_Size")?
+            .write_scalar(&p.buffer_size)?;
         wb(&pipe_grp, "Configure_Client", p.configure_client)?;
         wi(&pipe_grp, "Inbound_Rate_Limit", p.inbound_rate_limit)?;
-        wi(&pipe_grp, "Max_Inbound_Message_Size", p.max_inbound_message_size)?;
-        ws(&pipe_grp, "Min_Integrity_Level", p.min_integrity_level.as_deref().unwrap_or(""))?;
+        wi(
+            &pipe_grp,
+            "Max_Inbound_Message_Size",
+            p.max_inbound_message_size,
+        )?;
+        ws(
+            &pipe_grp,
+            "Min_Integrity_Level",
+            p.min_integrity_level.as_deref().unwrap_or(""),
+        )?;
         ws(&pipe_grp, "Pipe_Name", p.pipe_name.as_deref().unwrap_or(""))?;
-        ws(&pipe_grp, "User_Access_Level", p.user_access_level.as_deref().unwrap_or(""))?;
+        ws(
+            &pipe_grp,
+            "User_Access_Level",
+            p.user_access_level.as_deref().unwrap_or(""),
+        )?;
         for (k, v) in &p.extra {
             write_extra_value(&pipe_grp, k, v)?;
         }
 
-        let triggers_grp = opcua_grp.create_group("Triggers")?;
+        let triggers_grp = opcua_grp.create_group("Trigger")?;
         if let Some(te) = opcua.triggers_enabled {
             triggers_grp
                 .new_attr::<f64>()
                 .create("Triggers_Enabled")?
                 .write_scalar(&(if te { 1.0_f64 } else { 0.0_f64 }))?;
         }
-        wi(&triggers_grp, "Trigger_Stop_Ceiling_Layers", opcua.trigger_stop_ceiling_layers)?;
+        wi(
+            &triggers_grp,
+            "Trigger_Stop_Ceiling_Layers",
+            opcua.trigger_stop_ceiling_layers,
+        )?;
         for (name, trigger) in &opcua.triggers {
             let tg = triggers_grp.create_group(name)?;
             ws(&tg, "ID", trigger.id.as_deref().unwrap_or(""))?;
             ws(&tg, "Signal", trigger.signal.as_deref().unwrap_or(""))?;
             ws(&tg, "Subsystem", trigger.subsystem.as_deref().unwrap_or(""))?;
             wb(&tg, "Rule_Enabled", trigger.rule_enabled)?;
-            ws(&tg, "Start_Value", trigger.start_value.as_deref().unwrap_or(""))?;
-            ws(&tg, "Stop_Value", trigger.stop_value.as_deref().unwrap_or(""))?;
-            ws(&tg, "Case_Sensitivity", trigger.case_sensitivity.as_deref().unwrap_or(""))?;
+            ws(
+                &tg,
+                "Start_Value",
+                trigger.start_value.as_deref().unwrap_or(""),
+            )?;
+            ws(
+                &tg,
+                "Stop_Value",
+                trigger.stop_value.as_deref().unwrap_or(""),
+            )?;
+            ws(
+                &tg,
+                "Case_Sensitivity",
+                trigger.case_sensitivity.as_deref().unwrap_or(""),
+            )?;
             ws(&tg, "Component", trigger.component.as_deref().unwrap_or(""))?;
             wi(&tg, "Cooldown_Period", trigger.cooldown_period)?;
             ws(&tg, "Event", trigger.event.as_deref().unwrap_or(""))?;
             wi(&tg, "Max_Fires_Per_Job", trigger.max_fires_per_job)?;
-            ws(&tg, "Trigger_Label", trigger.trigger_label.as_deref().unwrap_or(""))?;
+            ws(
+                &tg,
+                "Trigger_Label",
+                trigger.trigger_label.as_deref().unwrap_or(""),
+            )?;
             for (k, v) in &trigger.extra {
                 write_extra_value(&tg, k, v)?;
             }
@@ -705,15 +1063,23 @@ fn consolidate_field<T: Clone + PartialEq>(
     getter: impl Fn(&ClearBox) -> T,
     fmt: impl Fn(&T) -> String,
 ) -> Result<T> {
-    let values: Vec<(String, T)> =
-        trains_with_clearbox.iter().map(|(tid, cb)| (tid.clone(), getter(cb))).collect();
+    let values: Vec<(String, T)> = trains_with_clearbox
+        .iter()
+        .map(|(tid, cb)| (tid.clone(), getter(cb)))
+        .collect();
     let first = values[0].1.clone();
     if values.iter().all(|(_, v)| *v == first) {
         return Ok(first);
     }
-    let detail =
-        values.iter().map(|(tid, v)| format!("{tid}={}", fmt(v))).collect::<Vec<_>>().join(", ");
-    Err(MachineConfigError::ConsolidateConflict { field: field_name, detail })
+    let detail = values
+        .iter()
+        .map(|(tid, v)| format!("{tid}={}", fmt(v)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(MachineConfigError::ConsolidateConflict {
+        field: field_name,
+        detail,
+    })
 }
 
 impl<'a> WriterAdapter for Hdf5WriterV1_1<'a> {
