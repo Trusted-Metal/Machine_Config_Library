@@ -20,8 +20,10 @@ pub fn write_opcua_config(
     // `triggers.rules` since the last write would otherwise silently survive
     // on disk and reappear on the next read, since list_raw_group_children
     // just reports whatever physically exists, not what the caller intended.
-    let existing_rule_names: std::collections::HashSet<String> =
-        adapter.list_raw_group_children(&trigger_root)?.into_iter().collect();
+    let existing_rule_names: std::collections::HashSet<String> = adapter
+        .list_raw_group_children(&trigger_root)?
+        .into_iter()
+        .collect();
 
     let mut seen_rule_ids = std::collections::HashSet::new();
     let mut seen_rule_labels = std::collections::HashSet::new();
@@ -53,12 +55,14 @@ pub fn write_opcua_config(
         }
 
         let rule_path = format!("{}/Trigger/{}", crate::OPCUA_ROOT, rule.rule_label);
-        let existing_condition_names: std::collections::HashSet<String> =
-            adapter.list_raw_group_children(&rule_path)?.into_iter().collect();
+        let existing_condition_names: std::collections::HashSet<String> = adapter
+            .list_raw_group_children(&rule_path)?
+            .into_iter()
+            .collect();
         adapter.set_raw_group(&rule_path, &to_attrs(rule)?)?;
 
         let mut seen_condition_ids = std::collections::HashSet::new();
-        let mut seen_condition_labels = std::collections::HashSet::new(); // reset per rule — only needs to be unique among siblings
+        let mut seen_condition_labels = std::collections::HashSet::new();
         for cond in &rule.conditions {
             if cond.condition_id == 0 {
                 return Err(CapabilityError::validation_error(format!(
@@ -98,7 +102,7 @@ pub fn write_opcua_config(
     for stale in existing_rule_names.difference(&seen_rule_labels) {
         adapter.remove_raw_group(&format!("{trigger_root}/{stale}"))?;
     }
-    
+
     Ok(())
 }
 

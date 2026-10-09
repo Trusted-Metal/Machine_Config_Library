@@ -140,7 +140,7 @@ impl Default for PipeConfig {
             configure_client: 0,
             inbound_rate_limit: 100,
             max_inbound_message_size: 4096,
-            min_integrity_level: "medium".into(),
+            min_integrity_level: "Medium".into(),
             pipe_enabled: 0,
             pipe_name: r"\\.\pipe\opc_ua_client_pipe".into(),
             user_access_level: "AnyLocalUser".into(),
@@ -149,7 +149,7 @@ impl Default for PipeConfig {
 }
 
 /// OPCUA configuration from /OPCUA/Trigger
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct TriggerConfig {
     // TRIGGER_GROUP
     /// Global trigger gate
@@ -163,18 +163,7 @@ pub struct TriggerConfig {
     pub rules: Vec<TriggerRuleConfig>,
 }
 
-impl Default for TriggerConfig {
-    fn default() -> Self {
-        Self {
-            // TRIGGER_GROUP
-            triggers_enabled: 0,
-            trigger_stop_ceiling_layers: 0,
-            rules: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 /// Trigger configuration from /OPCUA/Trigger/{TriggerLabel}
 pub struct TriggerRuleConfig {
     // RULE_SUBGROUP
@@ -210,24 +199,7 @@ pub struct TriggerRuleConfig {
     pub rule_label: String,
 }
 
-impl Default for TriggerRuleConfig {
-    fn default() -> Self {
-        Self {
-            action: String::new(),
-            combinator: String::new(),
-            conditions: Vec::new(),
-            cooldown_period: 0,
-            description: String::new(),
-            max_fires_per_job: 0,
-            priority: 0,
-            rule_enabled: 0,
-            rule_id: 0,
-            rule_label: String::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 /// Trigger configuration from /OPCUA/Triggers/{TriggerLabel}
 pub struct TriggerConditionConfig {
     // CONDITION_SUBGROUP
@@ -260,7 +232,7 @@ pub struct TriggerConditionConfig {
     #[serde(rename = "Event", default)]
     pub event: String,
     /// Signal for which this rule applies
-    #[serde(rename = "Signal", default)]
+    #[serde(rename = "Signal")]
     pub signal: String,
     /// Subsystem [component group] for which this rule applies
     #[serde(rename = "Subsystem", default)]
@@ -268,25 +240,6 @@ pub struct TriggerConditionConfig {
     /// Value that requests rule evaluation
     #[serde(rename = "Value")]
     pub value: String,
-}
-
-impl Default for TriggerConditionConfig {
-    fn default() -> Self {
-        Self {
-            case_sensitivity: String::new(),
-            comparison_operator: String::new(),
-            component: String::new(),
-            condition_enabled: 0,
-            condition_id: 0,
-            condition_label: String::new(),
-            epsilon: 0.0,
-            evaluation_mode: String::new(),
-            event: String::new(),
-            signal: String::new(),
-            subsystem: String::new(),
-            value: String::new(),
-        }
-    }
 }
 
 /// Simplifies repeated checks for (opcua-config) flag guards

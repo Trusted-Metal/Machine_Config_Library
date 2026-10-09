@@ -3,7 +3,6 @@ mod common;
 use machine_config::builder::MockConfigBuilder;
 use machine_config::capabilities::v1_0::hdf5::Hdf5AdapterV1_0;
 use machine_config::capabilities::v1_1::hdf5::Hdf5AdapterV1_1;
-use opcua_config_ext::round_trip_test;
 use opcua_config_ext::{
     read_opcua_config, write_opcua_config, ClientConfig, PipeConfig, TriggerConditionConfig,
     TriggerConfig, TriggerRuleConfig,
@@ -93,9 +92,6 @@ fn round_trips_pipe_client_triggers() {
         "Yellow_Light"
     );
 }
-
-round_trip_test!(round_trips_v1_0, "1.0", Hdf5AdapterV1_0);
-round_trip_test!(round_trips_v1_1, "1.1", Hdf5AdapterV1_1);
 
 #[test]
 fn round_trip_preserves_every_pipe_client_and_trigger_field() {

@@ -2,7 +2,6 @@ use super::*;
 use crate::reader::read_opcua_config;
 use machine_config::builder::MockConfigBuilder;
 use machine_config::capabilities::v1_0::hdf5::Hdf5AdapterV1_0;
-use machine_config::capabilities::v1_1::hdf5::Hdf5AdapterV1_1;
 use machine_config::CapabilityError;
 
 #[test]

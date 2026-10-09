@@ -17,7 +17,7 @@ pub fn read_opcua_config(
     let version = peek_file_version(path).map_err(|e| CapabilityError::IoError(e.to_string()))?;
     match version.as_str() {
         "1.1" => read_via(&io_err(Hdf5AdapterV1_1::open(path))?),
-        _ => read_via(&io_err(Hdf5AdapterV1_0::open(path))?), // 1.0 default, matches MCL's own fallback convention
+        _ => read_via(&io_err(Hdf5AdapterV1_0::open(path))?),
     }
 }
 

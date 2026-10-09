@@ -2,8 +2,8 @@ use machine_config::builder::MockConfigBuilder;
 use machine_config::capabilities::v1_0::hdf5::Hdf5AdapterV1_0;
 use machine_config::CapabilityError;
 use opcua_config_ext::{
-    write_opcua_config, ClientConfig, PipeConfig, TriggerConditionConfig, TriggerConfig,
-    TriggerRuleConfig,
+    read_opcua_config, write_opcua_config, ClientConfig, PipeConfig, TriggerConditionConfig,
+    TriggerConfig, TriggerRuleConfig,
 };
 
 #[test]
