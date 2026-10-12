@@ -1,10 +1,9 @@
 // Not itself a test file — pulled in via `mod common;`. Cargo only treats
 // files directly under tests/ as independent test binaries; a tests/common/
 // subdirectory is the standard way to share code between them.
-use opcua_config_ext::{
-    read_opcua_config, write_opcua_config, ClientConfig, PipeConfig, TriggerConditionConfig,
-    TriggerConfig, TriggerRuleConfig,
-};
+// read_opcua_config/write_opcua_config/the config types are used inside round_trip_test!'s
+// body, but that macro expands at its *call site* (roundtrip.rs), which already imports them
+// itself — nothing in this file uses them directly, so importing them here too is unused.
 use machine_config::builder::MockConfigBuilder;
 
 pub fn make_fixture(path: &std::path::Path, file_version: &str) {

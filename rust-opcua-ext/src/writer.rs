@@ -11,10 +11,69 @@ pub fn write_opcua_config(
     let mut opcua_attrs = ExtraAttrs::new();
     opcua_attrs.insert("Opcua_Schema_Version".into(), "1.2".into());
     adapter.set_raw_group(crate::OPCUA_ROOT, &opcua_attrs)?;
-    adapter.set_raw_group(&format!("{}/Pipe", crate::OPCUA_ROOT), &to_attrs(pipe)?)?;
     adapter.set_raw_group(&format!("{}/Client", crate::OPCUA_ROOT), &to_attrs(client)?)?;
+    validate_enum(
+        "Auth_Mode",
+        &client.auth_mode,
+        &["Anonymous", "UsernamePassword", "Certificate"],
+    )?;
+    validate_enum_ci(
+        "Machine_Profile",
+        &client.machine_profile,
+        &["Aconity", "Eos"],
+    )?;
+    validate_enum(
+        "Queue_Policy",
+        &client.queue_policy,
+        &["DiscardOldest", "KeepOldest"],
+    )?;
+    validate_enum(
+        "Security_Mode",
+        &client.security_mode,
+        &["None", "Sign", "SignAndEncrypt"],
+    )?;
+    validate_enum(
+        "Security_Policy",
+        &client.security_policy,
+        &[
+            "Basic256Sha256",
+            "ECC_nistP256",
+            "ECC_nistP384",
+            "ECC_brainpoolP256r1",
+            "ECC_brainpoolP384r1",
+        ],
+    )?;
+
+    adapter.set_raw_group(&format!("{}/Pipe", crate::OPCUA_ROOT), &to_attrs(pipe)?)?;
+    validate_bool_u32("Configure_Client", pipe.configure_client)?;
+    // Case-insensitive pending verification — see the doc comment on this field for why.
+    validate_enum_ci(
+        "Min_Integrity_Level",
+        &pipe.min_integrity_level,
+        &[
+            "Untrusted",
+            "Low",
+            "Medium",
+            "High",
+            "System",
+            "ProtectedProcess",
+        ],
+    )?;
+    validate_bool_u32("Pipe_Enabled", pipe.pipe_enabled)?;
+    validate_enum(
+        "User_Access_Level",
+        &pipe.user_access_level,
+        &[
+            "CurrentUserOnly",
+            "CurrentUserAndAdmins",
+            "AnyLocalUser",
+            "Unrestricted",
+        ],
+    )?;
+
     let trigger_root = format!("{}/Trigger", crate::OPCUA_ROOT);
     adapter.set_raw_group(&trigger_root, &to_attrs(triggers)?)?;
+    validate_bool_u32("Triggers_Enabled", triggers.triggers_enabled)?;
 
     // Snapshot BEFORE writing anything new — a rule dropped from
     // `triggers.rules` since the last write would otherwise silently survive
@@ -39,7 +98,6 @@ pub fn write_opcua_config(
                 rule.rule_id
             )));
         }
-        validate_label(&rule.rule_label, "rule_label")?;
         if !seen_rule_ids.insert(rule.rule_id) {
             return Err(CapabilityError::validation_error(format!(
                 "duplicate rule_id: {}",
@@ -53,6 +111,10 @@ pub fn write_opcua_config(
                 rule.rule_label
             )));
         }
+        validate_enum("Action", &rule.action, &["CaptureStart", "CaptureStop"])?;
+        validate_enum("Combinator", &rule.combinator, &["And", "Or"])?;
+        validate_bool_u32("Rule_Enabled", rule.rule_enabled)?;
+        validate_label(&rule.rule_label, "rule_label")?;
 
         let rule_path = format!("{}/Trigger/{}", crate::OPCUA_ROOT, rule.rule_label);
         let existing_condition_names: std::collections::HashSet<String> = adapter
@@ -76,7 +138,6 @@ pub fn write_opcua_config(
                     cond.condition_id, rule.rule_label
                 )));
             }
-            validate_label(&cond.condition_label, "condition_label")?;
             if !seen_condition_ids.insert(cond.condition_id) {
                 return Err(CapabilityError::validation_error(format!(
                     "duplicate condition_id {} in rule '{}'",
@@ -90,6 +151,35 @@ pub fn write_opcua_config(
                     cond.condition_label, rule.rule_label
                 )));
             }
+            validate_enum(
+                "Case_Sensitivity",
+                &cond.case_sensitivity,
+                &[
+                    "Exact",
+                    "ExactCaseSensitive",
+                    "Contains",
+                    "ContainsCaseSensitive",
+                ],
+            )?;
+            validate_enum(
+                "Comparison_Operator",
+                &cond.comparison_operator,
+                &[
+                    "Equal",
+                    "GreaterThan",
+                    "LessThan",
+                    "GreaterThanOrEqual",
+                    "LessThanOrEqual",
+                ],
+            )?;
+            validate_bool_u32("Condition_Enabled", cond.condition_enabled)?;
+            validate_label(&cond.condition_label, "condition_label")?;
+            validate_enum(
+                "Evaluation_Mode",
+                &cond.evaluation_mode,
+                &["String", "Numeric"],
+            )?;
+
             let cond_path = format!("{rule_path}/{}", cond.condition_label);
             adapter.set_raw_group(&cond_path, &to_attrs(cond)?)?;
         }
@@ -123,7 +213,7 @@ pub(crate) fn to_attrs<T: serde::Serialize>(v: &T) -> Result<ExtraAttrs, Capabil
     Ok(attrs)
 }
 
-fn validate_label(label: &str, what: &str) -> Result<(), CapabilityError> {
+pub(crate) fn validate_label(label: &str, what: &str) -> Result<(), CapabilityError> {
     if label.contains('/') {
         return Err(CapabilityError::validation_error(format!(
             "{what} '{label}' contains '/', which HDF5 reads as a path separator \
@@ -133,6 +223,44 @@ fn validate_label(label: &str, what: &str) -> Result<(), CapabilityError> {
     if label.contains('\0') {
         return Err(CapabilityError::validation_error(format!(
             "{what} '{label}' contains a NUL byte, which HDF5 group names cannot contain"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_enum(field: &str, value: &str, valid: &[&str]) -> Result<(), CapabilityError> {
+    if value.is_empty() || valid.contains(&value) {
+        return Ok(());
+    }
+    Err(CapabilityError::validation_error(format!(
+        "{field} '{value}' is not one of the recognized values ({}) — set it explicitly before writing",
+        valid.join(", ")
+    )))
+}
+
+/// Case-insensitive variant — only `machine_profile` actually needs this. Its real downstream
+/// consumer (`MachineProfile.Resolve` in client-proj) compares via `.ToUpperInvariant()`, so any
+/// casing of a recognized value is accepted, and anything else (not just empty) falls back to
+/// Aconity rather than erroring. Every other enum field's real consumer does exact-string
+/// matching, so this stays a dedicated exception rather than the default behavior.
+pub(crate) fn validate_enum_ci(
+    field: &str,
+    value: &str,
+    valid: &[&str],
+) -> Result<(), CapabilityError> {
+    if value.is_empty() || valid.iter().any(|v| v.eq_ignore_ascii_case(value)) {
+        return Ok(());
+    }
+    Err(CapabilityError::validation_error(format!(
+        "{field} '{value}' is not one of the recognized values ({}, case-insensitive) — set it explicitly before writing",
+        valid.join(", ")
+    )))
+}
+
+pub(crate) fn validate_bool_u32(field: &str, value: u32) -> Result<(), CapabilityError> {
+    if value > 1 {
+        return Err(CapabilityError::validation_error(format!(
+            "{field} = {value} is not a valid bool-as-u32 (expected 0 or 1)"
         )));
     }
     Ok(())

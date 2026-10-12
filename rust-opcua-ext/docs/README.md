@@ -99,5 +99,91 @@ MCL core's own fallback convention.
 
 ## Field value ranges
 
+Cross-references `CLIENT_CONFIG.md`/client-proj source for what the value actually means
+downstream — this crate only reads/writes these strings, it never interprets them.
+
+### `PipeConfig`
+
 | Field | Evaluated Type | Default | Range |
-| `auth_mode` | `enum` | `Certificate` | `Anonymous, UsernamePassword, Certificate` |
+| --- | --- | --- | --- |
+| `buffer_size` | `u32` | `65536` | — |
+| `configure_client` | `u32 (bool)` | `0` | `0` / `1` |
+| `inbound_rate_limit` | `i32` | `100` | `-1` = unlimited |
+| `max_inbound_message_size` | `u32` | `4096` | — |
+| `min_integrity_level` | `enum [String]` (case-insensitive, casing unverified) | `ProtectedProcess` | `Untrusted` / `Low` / `Medium` / `High` / `System` / `ProtectedProcess` |
+| `pipe_enabled` | `u32 (bool)` | `0` | `0` / `1` |
+| `pipe_name` | `String` (format) | `\\.\pipe\opc_ua_client_pipe` | must start with `\\.\pipe\` |
+| `user_access_level` | `enum [String]` | `CurrentUserOnly` | `CurrentUserOnly` / `CurrentUserAndAdmins` / `AnyLocalUser` / `Unrestricted` |
+
+### `ClientConfig`
+
+| Field | Evaluated Type | Default | Range |
+| --- | --- | --- | --- |
+| `auth_mode` | `enum [String]` | `Anonymous` | `Anonymous` / `UsernamePassword` / `Certificate` |
+| `bfs_max_depth` | `u32` | `16` | - |
+| `keep_alive_count` | `u32` | `240` | — |
+| `lifetime_count` | `u32` | `2400` | — |
+| `machine_profile` | `enum [String]` (case-insensitive) | `""` (empty -> Aconity) | `Aconity` / `Eos` |
+| `publish_interval` | `u32` | `250` | — |
+| `queue_policy` | `enum [String]` | `DiscardOldest` | `DiscardOldest` / `KeepOldest` |
+| `queue_size_data_change` | `u32` | `10` | real default is profile-dependent (`50` Aconity / `10` static) — not yet reflected in code, open |
+| `queue_size_events` | `u32` | `10` | dormant path, not consumed by any live code yet |
+| `reconnect_interval` | `u32` | `1000` | — |
+| `root_node` | `String` (3-mode format) | `""` (auto-discovery) | see field doc comment for the three resolution modes |
+| `sampling_interval` | `i32` | `250` | real default is profile-dependent (`50` Aconity / `-1` static, "server-determined") — not yet reflected in code, open |
+| `security_mode` | `enum [String]` | `SignAndEncrypt` | `None` / `Sign` / `SignAndEncrypt` |
+| `security_policy` | `enum [String]` | `Basic256Sha256` | `Basic256Sha256` / `ECC_nistP256` / `ECC_nistP384` / `ECC_brainpoolP256r1` / `ECC_brainpoolP384r1` — empty lets the SDK auto-select |
+| `server_url` | `String` (format) | `""` | `opc.tcp://IP_ADDR:PORT/PRODUCT_NAME/APPLICATION_NAME` |
+| `session_timeout` | `u32` | `60000` | — |
+| `sync_loop_interval_initial` | `u32` | `1000` | — |
+| `sync_loop_interval_settled` | `u32` | `30000` | — |
+
+### `TriggerConfig`
+
+| Field | Evaluated Type | Default | Range |
+| --- | --- | --- | --- |
+| `triggers_enabled` | `u32 (bool)`, strict | `0` | `0` / `1` |
+| `trigger_stop_ceiling_layers` | `u32` | `0` (unset) | no compiled fallback — see `TRIGGER_SYSTEM.md` |
+
+### `TriggerRuleConfig`
+
+| Field | Evaluated Type | Default | Range |
+| --- | --- | --- | --- |
+| `action`, strict | `enum [String]` | — | `CaptureStart` / `CaptureStop` |
+| `combinator` | `enum [String]` | `""` | `And` / `Or` |
+| `cooldown_period` | `u32` | `0` | — |
+| `description` | `String` | `""` | free text |
+| `max_fires_per_job` | `u32` | `0` | `0` = unlimited |
+| `priority` | `u32` | `0` | — |
+| `rule_enabled`, strict | `u32 (bool)` | — | `0` / `1` |
+| `rule_id`, strict | `u32` | — | nonzero required, unique across all rules |
+| `rule_label`, strict | `String` | — | nonzero length, no `/` or NUL, unique across all rules |
+
+### `TriggerConditionConfig`
+
+| Field | Evaluated Type | Default | Range |
+| --- | --- | --- | --- |
+| `case_sensitivity` | `enum [String]` | `""` | `Exact` / `Contains` / `ExactCaseSensitive` / `ContainsCaseSensitive` |
+| `comparison_operator` | `enum [String]` | `""` | `Equal` / `GreaterThan` / `LessThan` / `GreaterThanOrEqual` / `LessThanOrEqual` |
+| `component` | `String` | `""` | free text |
+| `condition_enabled`, strict | `u32 (bool)` | — | `0` / `1` |
+| `condition_id`, strict | `u32` | — | nonzero required, unique within its rule |
+| `condition_label`, strict | `String` | — | no `/` or NUL, unique within its rule |
+| `epsilon` | `f64` | `0.0` | — |
+| `evaluation_mode` | `enum [String]` | `""` | `String` / `Numeric` |
+| `event` | `String` | `""` | free text |
+| `signal`, strict | `String` | — | nonzero length required |
+| `subsystem` | `String` | `""` | free text |
+| `value`, strict | `String` | — | nonzero length required |
+
+## Container deployment: required overrides
+
+`PipeConfig`'s `user_access_level`/`min_integrity_level` default to the strictest posture
+(`CurrentUserOnly`/`ProtectedProcess`). **A container deployment must override both explicitly
+in this machine's config** — typically `user_access_level = AnyLocalUser`,
+`min_integrity_level = Medium` — or the pipe-listener and OPC UA client containers will fail to
+communicate, since they commonly run under different container UIDs with no shared "current
+user" identity. This is deliberate: the strict default fails visibly and traces directly to
+these two fields, rather than silently under-restricting every non-container install to
+accommodate the container case. See each field's own doc comment in `types.rs` for the full
+reasoning and the current open question on `min_integrity_level`'s real casing.

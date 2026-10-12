@@ -117,7 +117,7 @@ fn round_trip_preserves_every_pipe_client_and_trigger_field() {
         lifetime_count: 1200,
         machine_profile: "EOS".into(),
         publish_interval: 100,
-        queue_policy: "DropYoungest".into(),
+        queue_policy: "KeepOldest".into(),
         queue_size_data_change: 100,
         queue_size_events: 1000,
         reconnect_interval: 100,
