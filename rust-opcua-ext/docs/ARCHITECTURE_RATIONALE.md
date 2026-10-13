@@ -59,3 +59,11 @@ every reversal would have meant re-templating and re-validating in four language
 knowing whether the new shape was right. Building this as a small, independently-versioned crate
 let the schema find its actual shape through iterative testing, cheaply, before any commitment to
 the cross-language cost that rolling it into core would require.
+
+## Current status
+
+See [MAINTENANCE_OPTIONS.md](./MAINTENANCE_OPTIONS.md)'s "Current direction" section for the
+decided policy this reasoning has settled into: single-crate indefinitely, collision avoidance
+between concurrent features handled by branching rather than a crate split, and the actual
+crate-split trigger [Option C] narrowed to a wholly new, unrelated extension domain [e.g. MQTT]
+rather than ordinary in-crate parallelism.
