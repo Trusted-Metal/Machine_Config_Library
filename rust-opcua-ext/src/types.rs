@@ -22,7 +22,7 @@ pub struct ClientConfig {
     // CLIENT_GROUP
     /// Sets the user identity token type required for authentication.
     /// OPC-UA's UserTokenType governs how identity is proven, not authorization/RBAC.
-    /// Range: `[Anonymous, UsernamePassword, Certificate]`
+    /// Range: `[Anonymous / UsernamePassword / Certificate]`
     #[serde(rename = "Auth_Mode")]
     pub auth_mode: String,
     /// Sets search depth for address space discovery and subscription
@@ -35,14 +35,14 @@ pub struct ClientConfig {
     #[serde(rename = "Lifetime_Count")]
     pub lifetime_count: u32,
     /// OEM/Make specifier which selects browse strategy and other subsets of client processes/properties
-    /// Range: `[Aconity, Eos]`
+    /// Range: `[Aconity / Eos]`
     #[serde(rename = "Machine_Profile")]
     pub machine_profile: String,
     /// Time between batch dispatch from server to client [ms]
     #[serde(rename = "Publish_Interval")]
     pub publish_interval: u32,
     /// Queue filtering policy to prevent buffer overflow
-    /// Range: { DropOldest, KeepOldest, other behaviors in-development }
+    /// Range: `[DropOldest / KeepOldest / other behaviors in-development]`
     #[serde(rename = "Queue_Policy")]
     pub queue_policy: String,
     /// Maximum number of data change items
@@ -59,22 +59,22 @@ pub struct ClientConfig {
     /// `ns=2;s=500300`, `nsu=<uri>;s=<id>`), no browsing needed; (2) non-empty, no `=` ->
     /// fleet container BrowseName, browsed for under ObjectsFolder; (3) empty -> auto-discovery
     /// (tries the default `"MachineFleet"` BrowseName first, else single-candidate discovery).
-    /// For an EOS profile this should be mode 1 (NodeId format) — falling through to mode 2's
+    /// For an EOS profile this should be mode 1 (NodeId format) - falling through to mode 2's
     /// Aconity-shaped fleet lookup for EOS is a real, previously-recurring misconfiguration.
     #[serde(rename = "Root_Node")]
     pub root_node: String,
-    /// How often existing subscriptions are polled [ms]. Real default is profile-dependent:
+    /// How often existing subscriptions are polled `[ms]`. Real default is profile-dependent:
     /// `50` for Aconity, `-1` ("server-negotiated"), `0` ("as fast as possible") for EOS/static-address-
-    /// space profiles — i32 specifically to allow that `-1` sentinel.
+    /// space profiles - i32 specifically to allow that `-1` sentinel.
     #[serde(rename = "Sampling_Interval")]
     pub sampling_interval: i32,
     /// Secure level of data in transport.
-    /// Range: `None` / `Sign` / `SignAndEncrypt`
+    /// Range: `[None / Sign / SignAndEncrypt]`
     #[serde(rename = "Security_Mode")]
     pub security_mode: String,
     /// Level of encryption for client-server connection.
-    /// Range: `Basic256Sha256` / `ECC_nistP256` / `ECC_nistP384` / `ECC_brainpoolP256r1` /
-    /// `ECC_brainpoolP384r1` — empty lets the SDK auto-select the strongest policy the server
+    /// Range: `[Basic256Sha256 / ECC_nistP256 / ECC_nistP384 / ECC_brainpoolP256r1 /
+    /// ECC_brainpoolP384r1`] - empty lets the SDK auto-select the strongest policy the server
     /// supports, which is the real client-proj default (not a pinned value).
     #[serde(rename = "Security_Policy")]
     pub security_policy: String,
@@ -154,7 +154,7 @@ pub struct PipeConfig {
     #[serde(rename = "Max_Inbound_Message_Size")]
     pub max_inbound_message_size: u32,
     /// Minimum client process integrity level accepted by pipe.
-    /// Range: [Untrusted, Low, Medium, High, System, ProtectedProcess]
+    /// Range: `[Untrusted / Low / Medium / High / System / ProtectedProcess]`
     /// (the real winnt.h-documented range - nothing above `ProtectedProcess` is a named level).
     /// An unrecognized value fails toward `ProtectedProcess`, the strictest option - matching
     /// `user_access_level`'s fail-safe direction below.
@@ -168,7 +168,7 @@ pub struct PipeConfig {
     #[serde(rename = "Pipe_Name")]
     pub pipe_name: String,
     /// DACL restriction based on user level.
-    /// Range: [CurrentUserOnly, CurrentUserAndAdmins, AnyLocalUser, Unrestricted].
+    /// Range: `[CurrentUserOnly / CurrentUserAndAdmins / AnyLocalUser / Unrestricted]`
     /// Stored/documented PascalCase; every consumer normalizes to lowercase before matching.
     /// An unrecognized value fails safe downstream (capture's `PipeSecurity::from` falls back
     /// to `CurrentUserOnly`, the strictest option).
@@ -213,17 +213,17 @@ pub struct TriggerConfig {
 pub struct TriggerRuleConfig {
     // RULE_SUBGROUP
     /// Determines what automation capture performs based if rule evaluates.
-    /// Range: `CaptureStart` / `CaptureStop`
+    /// Range: `[CaptureStart / CaptureStop]`
     #[serde(rename = "Action")]
     pub action: String,
     /// Determines whether hybrid evaluation is active.
-    /// Range: `And` / `Or`
+    /// Range: `[And / Or]`
     #[serde(rename = "Combinator", default)]
     pub combinator: String,
     /// Conditions for rule evaluation
     #[serde(default)]
     pub conditions: Vec<TriggerConditionConfig>,
-    /// Minimum time between trigger firing consecutively [ms]
+    /// Minimum time between trigger firing consecutively `[ms]
     #[serde(rename = "Cooldown_Period", default)]
     pub cooldown_period: u32,
     /// Operator-facing notes for internal justification for rule existence
@@ -252,11 +252,11 @@ pub struct TriggerRuleConfig {
 pub struct TriggerConditionConfig {
     // CONDITION_SUBGROUP
     /// Affects how strictly to evaluate rule based on matching signal name.
-    /// Range: `Exact` / `Contains` / `ExactCaseSensitive` / `ContainsCaseSensitive`
+    /// Range: `[Exact / Contains / ExactCaseSensitive / ContainsCaseSensitive`]
     #[serde(rename = "Case_Sensitivity", default)]
     pub case_sensitivity: String,
     /// Numeric specific equivalent to case_sensitivity.
-    /// Range: `Equal` / `GreaterThan` / `LessThan` / `GreaterThanOrEqual` / `LessThanOrEqual`
+    /// Range: `[Equal / GreaterThan / LessThan / GreaterThanOrEqual / LessThanOrEqual]`
     #[serde(rename = "Comparison_Operator", default)]
     pub comparison_operator: String,
     /// Component for which this rule applies
@@ -266,7 +266,7 @@ pub struct TriggerConditionConfig {
     /// Bool-as-u32: `1` enables this condition for its rule, `0` disables it.
     #[serde(rename = "Condition_Enabled")]
     pub condition_enabled: u32,
-    /// Stable identifier for this condition within its rule — never assume
+    /// Stable identifier for this condition within its rule - never assume
     /// `conditions` is in the same order the HDF5 group was written in.
     #[serde(rename = "Condition_Id", default)]
     pub condition_id: u32,
@@ -277,7 +277,7 @@ pub struct TriggerConditionConfig {
     #[serde(rename = "Epsilon", default)]
     pub epsilon: f64,
     /// Determines trigger evaluation logic.
-    /// Range: `String` / `Numeric`
+    /// Range: `[String / Numeric]`
     #[serde(rename = "Evaluation_Mode", default)]
     pub evaluation_mode: String,
     /// Event type for which this rule applies
@@ -286,7 +286,7 @@ pub struct TriggerConditionConfig {
     /// Signal for which this rule applies
     #[serde(rename = "Signal")]
     pub signal: String,
-    /// Subsystem [component group] for which this rule applies
+    /// Subsystem `[component group]` for which this rule applies
     #[serde(rename = "Subsystem", default)]
     pub subsystem: String,
     /// Value that requests rule evaluation
