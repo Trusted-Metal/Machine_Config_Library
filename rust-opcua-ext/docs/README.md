@@ -133,7 +133,7 @@ downstream - this crate only reads/writes these strings, it never interprets the
 | `sampling_interval` | `i32` | `250` | real default is profile-dependent [`50` Aconity / `-1` static, "server-negotiated / `0` is unlimited] |
 | `security_mode` | `enum [String]` | `SignAndEncrypt` | `None` / `Sign` / `SignAndEncrypt` |
 | `security_policy` | `enum [String]` | `Basic256Sha256` | `Basic256Sha256` / `ECC_nistP256` / `ECC_nistP384` / `ECC_brainpoolP256r1` / `ECC_brainpoolP384r1` - empty lets the SDK auto-select |
-| `server_url` | `String` [format] | `""` | `opc.tcp://IP_ADDR:PORT/PRODUCT_NAME/APPLICATION_NAME` |
+| `server_url` | `String` [format] | `""` | `opc.tcp://IP_ADDR:PORT/CONFIG_TEMPLATE_ID/SERVER_INSTANCE_NAME` |
 | `session_timeout` | `u32` | `60000` | - |
 | `sync_loop_interval_initial` | `u32` | `1000` | - |
 | `sync_loop_interval_settled` | `u32` | `30000` | - |
@@ -175,6 +175,9 @@ downstream - this crate only reads/writes these strings, it never interprets the
 | `signal`, strict | `String` | - | nonzero length required |
 | `subsystem` | `String` | `""` | free text |
 | `value`, strict | `String` | - | nonzero length required |
+
+**Note: Capture handles evaluation-mode processing once the config is consumed**
+**CaseSesnsitivty is bound to mode String, ComparisonOperator/Epsilon are bound to mode Numeric**
 
 ## Container deployment: required overrides
 
