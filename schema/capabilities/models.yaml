@@ -188,8 +188,3 @@ models:
       - { id: thermal_lensing_focal_plane_shift_unit, type: string, nullable: true }
       - { id: thermal_lensing_threshold, type: number, nullable: true }
       - { id: thermal_lensing_threshold_unit, type: string, nullable: true }
-
-  Opcua:
-    extra: true
-    fields:
-      - { id: triggers_enabled, type: boolean, nullable: true }

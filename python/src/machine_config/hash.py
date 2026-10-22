@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 
 from machine_config.capabilities.v1_0.hdf5 import Hdf5AdapterV1_0
+from machine_config.extension_contract import canonical_digest
 from machine_config.models import MachineConfig
 
 # _config_to_dict() is a pure data transformation (never touches self.path or
@@ -46,6 +47,12 @@ def compute_configuration_hash(config: MachineConfig) -> str:
     keys; arrays keep their existing element order.
     """
     d = _DICT_BUILDER._config_to_dict(config, include_binary=False)
+    # Extension content enters the hash as one canonical digest per extension; configs without
+    # extensions hash exactly as before.
+    if config.extensions:
+        d["extensions"] = {
+            name: canonical_digest(tree) for name, tree in config.extensions.items()
+        }
     d["meta"].pop("configuration_hash", None)
     d["meta"].pop("export_date", None)
     canonical = json.dumps(

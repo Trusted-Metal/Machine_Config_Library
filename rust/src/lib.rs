@@ -4,6 +4,7 @@
 pub mod builder;
 pub mod capabilities;
 pub mod error;
+pub mod extensions;
 pub mod hash;
 pub mod models;
 pub mod power_characterization;
@@ -17,6 +18,11 @@ pub use error::MachineConfigError;
 pub use models::*;
 pub use reader::MachineConfigReader;
 pub use writer::MachineConfigWriter;
+
+// Extension contract: core carries extension data as opaque trees; extension libraries depend on
+// `mcf-extension-contract` directly and never on core.
+pub use mcf_extension_contract as extension_contract;
+pub use mcf_extension_contract::{canonical_digest, ExtensionTree, EXTENSION_CONTRACT_VERSION};
 
 // Stable model facade (open/create a MachineConfigFile session, get/set with
 // SetMode). Curated, not `pub use capabilities::*` — a wildcard would also

@@ -93,7 +93,7 @@ impl MockConfigBuilder {
             meta,
             machine,
             optical_trains,
-            opcua: None,
+            extensions: Default::default(),
         }
     }
 

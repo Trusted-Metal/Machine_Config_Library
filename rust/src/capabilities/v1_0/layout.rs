@@ -3,10 +3,10 @@
 pub const FILE_VERSION: &str = "1.0";
 pub const ROOT_MACHINE: &str = "Machine";
 pub const ROOT_OPTICAL_TRAINS: &str = "Machine/Optical_Trains";
+/// File_Version 1.0 has no Extensions group: the one extension it can hold lives at the root as `OPCUA/`.
 pub const ROOT_OPCUA: &str = "OPCUA";
-pub const OPCUA_CLIENT: &str = "OPCUA/Client";
-pub const OPCUA_PIPE: &str = "OPCUA/Pipe";
-pub const OPCUA_TRIGGERS: &str = "OPCUA/Triggers";
+/// The extension name core exposes the legacy `OPCUA/` group under.
+pub const LEGACY_OPCUA_EXTENSION_NAME: &str = "TM_OPCUA";
 pub const TRAIN_ID_PREFIX: &str = "Optical_Train_";
 pub const GROUP_SCANNER: &str = "Scanner";
 pub const GROUP_LIGHT_SOURCE: &str = "Light_Source";

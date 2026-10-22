@@ -16,18 +16,13 @@ const (
 	RootOpticalTrains = "Machine/Optical_Trains"
 
 	// RootExtensions holds every v1.1 optional, cross-cutting section
-	// (ClearBox, TM_OPCUA). Present only if at least one of them exists —
+	// (ClearBox, plus every opaque extension tree). Present only if at least one of them exists —
 	// never written as an empty placeholder group.
 	RootExtensions = "Extensions"
 	// GroupClearBoxRoot is Change 1's relocated ClearBox home: one shared
 	// Output_Path/Software_Trigger_Delay (Consolidate) plus one <train_id>
 	// subgroup per train that has a ClearBox.
 	GroupClearBoxRoot = "Extensions/ClearBox"
-	// RootOPCUA is Change 2's relocated OPCUA home (was root-level "OPCUA").
-	RootOPCUA    = "Extensions/TM_OPCUA"
-	OpcuaClient  = "Extensions/TM_OPCUA/Client"
-	OpcuaPipe    = "Extensions/TM_OPCUA/Pipe"
-	OpcuaTrigger = "Extensions/TM_OPCUA/Triggers"
 
 	TrainIDPrefix = "Optical_Train_"
 	GroupScanner  = "Scanner"
@@ -95,3 +90,7 @@ func ClearboxPathByID(tid string) string {
 func ClearboxPowerCharacterizationPathByID(tid string) string {
 	return ClearboxPathByID(tid) + "/" + GroupPowerCharacterization
 }
+
+// ModelledExtensionNames are the Extensions/ groups core models itself and therefore never exposes
+// as opaque extension trees.
+var ModelledExtensionNames = map[string]struct{}{"ClearBox": {}}

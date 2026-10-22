@@ -3,10 +3,10 @@ export const FILE_VERSION = '1.0';
 
 export const ROOT_MACHINE = 'Machine';
 export const ROOT_OPTICAL_TRAINS = 'Machine/Optical_Trains';
+/** File_Version 1.0 has no Extensions group: the one extension it can hold lives at the root as `OPCUA/`. */
 export const ROOT_OPCUA = 'OPCUA';
-export const OPCUA_CLIENT = 'OPCUA/Client';
-export const OPCUA_PIPE = 'OPCUA/Pipe';
-export const OPCUA_TRIGGERS = 'OPCUA/Triggers';
+/** The extension name core exposes the legacy `OPCUA/` group under. */
+export const LEGACY_OPCUA_EXTENSION_NAME = 'TM_OPCUA';
 
 export const TRAIN_ID_PREFIX = 'Optical_Train_';
 export const GROUP_SCANNER = 'Scanner';

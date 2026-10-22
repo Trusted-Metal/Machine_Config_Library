@@ -12,7 +12,7 @@
 | S-04 | Write modified config and verify field change survives roundtrip | PASS |
 | S-05 | Full binary roundtrip with correction hash verification | PASS |
 | S-06 | Build synthetic config with MockConfigBuilder and verify fields | PASS |
-| S-07 | OPCUA config roundtrip | PASS |
+| S-07 | OPCUA extension tree roundtrip | PASS |
 | S-08 | Drastic field change to real file, verify adapter pipeline | PASS |
 | S-09 | Public type export surface | PASS |
 | AV-01 | Reader rejects unknown File_Version with typed error | PASS |

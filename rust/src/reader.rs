@@ -13,6 +13,7 @@ use crate::models::{CorrectionData, ExtraAttrs, MachineConfig};
 
 pub use crate::capabilities::v1_0::hdf5::peek_file_version;
 
+
 /// Version-agnostic reader adapter — mirrors `Hdf5AdapterV1_0`'s full public
 /// surface, so the version-agnostic `MachineConfigReader` path never loses
 /// capability relative to using an adapter directly.
@@ -90,6 +91,7 @@ impl MachineConfigReader {
     pub fn parse_with_binary(&self) -> Result<MachineConfig> {
         Ok(Self::with_validated_hash(self.backend.parse_with_binary()?))
     }
+
 
     fn with_validated_hash(mut config: MachineConfig) -> MachineConfig {
         let recomputed = crate::hash::compute_configuration_hash(&config);
@@ -313,28 +315,31 @@ mod tests {
     }
 
     #[test]
-    fn reference_fixture_has_no_opcua() {
+    fn reference_fixture_has_no_extensions() {
         let config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
-        assert!(config.opcua.is_none());
+        assert!(config.extensions.is_empty());
     }
 
     #[test]
-    fn opcua_fixture_parses_client_pipe_and_triggers() {
+    fn opcua_fixture_exposes_the_legacy_group_as_an_extension_tree() {
         let config = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
-        let opcua = config.opcua.expect("OPCUA group present on this fixture");
-
-        assert!(!opcua.client.server_url.is_empty());
-        assert!(opcua.client.bfs_max_depth > 0);
-        assert_eq!(opcua.triggers_enabled, Some(true));
-        assert_eq!(opcua.trigger_stop_ceiling_layers, Some(3));
-        assert_eq!(opcua.client.machine_profile, Some("Aconity".into()));
-        assert_eq!(opcua.pipe.pipe_name, Some("\\\\.\\pipe\\opc_ua_client_pipe".into()));
-        assert!(opcua.triggers.contains_key("Laser Emission Interlock"));
-
-        let trigger = &opcua.triggers["Laser Emission Interlock"];
-        assert!(trigger.signal.is_some());
-        assert_eq!(trigger.trigger_label, Some("Laser Emission Interlock".into()));
-        assert!(!trigger.extra.contains_key("Trigger_Label"));
+        assert_eq!(config.extensions.keys().collect::<Vec<_>>(), ["TM_OPCUA"]);
+        let tree = &config.extensions["TM_OPCUA"];
+        assert_eq!(
+            tree.children.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["Client", "Pipe", "Triggers"]
+        );
+        let client = &tree.children["Client"];
+        assert!(!client.attrs["Server_URL"].as_str().unwrap().is_empty());
+        assert_eq!(client.attrs["BFS_Max_Depth"].as_i64(), Some(16));
+        assert_eq!(client.attrs["Machine_Profile"].as_str(), Some("Aconity"));
+        let pipe = &tree.children["Pipe"];
+        assert_eq!(pipe.attrs["Pipe_Name"].as_str(), Some("\\\\.\\pipe\\opc_ua_client_pipe"));
+        let triggers = &tree.children["Triggers"];
+        assert_eq!(triggers.attrs["Trigger_Stop_Ceiling_Layers"].as_i64(), Some(3));
+        let laser = &triggers.children["Laser Emission Interlock"];
+        assert_eq!(laser.attrs["Event"].as_str(), Some("SensorEvents"));
+        assert_eq!(laser.attrs["Trigger_Label"].as_str(), Some("Laser Emission Interlock"));
     }
 
     #[test]

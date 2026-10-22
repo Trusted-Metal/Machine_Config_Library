@@ -27,7 +27,10 @@ from machine_config import (
     MachineConfigReader,
     MachineConfigWriter,
     MockConfigBuilder,
-    OpcuaConfig,
+    Attr,
+    ExtensionContractError,
+    ExtensionTree,
+    canonical_digest,
     OpticalTrain,
     OptionalComponents,
     ScanFieldCorrectionFile,
@@ -294,41 +297,30 @@ def run_s06(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     return True, "2-laser build OK, center≈2.0, roundtrip OK"
 
 
-# S-07: OPCUA configuration round-trip: read, write, re-read, verify OPCUA data preserved
+# S-07: Extension round-trip: read, write, re-read, verify the opaque extension tree is preserved
 # ID:          S-07
-# Title:       Read, write, and re-read OPCUA fixture
+# Title:       Read, write, and re-read the OPCUA fixture's extension tree
 # Category:    happy-path
-# Layer:       reader + writer (OPCUA path)
+# Layer:       reader + writer (extension path)
 # Precondition: fixtures/reference_config_opcua.h5
 # Action:      Read → write to temp → read temp
-# Expected:    opcua.client.server_url unchanged
-#              opcua.client.session_timeout unchanged
-#              opcua.triggers_enabled unchanged
-#              All trigger names preserved
-#              "Chamber Oxygen Level" trigger: signal, subsystem, rule_enabled,
-#              start_value, stop_value all unchanged
-# Rationale:   OPCUA is an optional complex subgraph. Silent data loss in triggers
-#              would not be caught by scalar field checks.
+# Expected:    The legacy OPCUA group is exposed as the opaque "TM_OPCUA" extension tree.
+#              Its canonical digest is identical before and after the round trip.
+#              Client/Server_URL and the trigger groups are preserved with their stored dtypes.
+# Rationale:   Core no longer models OPC UA: it carries the extension verbatim. Silent loss
+#              or retyping anywhere in the tree would not be caught by scalar field checks.
 def run_s07(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     path = Path(fixtures_dir) / "reference_config_opcua.h5"
     if not path.exists():
         return False, f"OPCUA fixture not found: {path}"
 
     cfg = MachineConfigReader(path).parse()
-    if cfg.opcua is None:
-        return False, "opcua is None after reading OPCUA fixture"
-
-    orig_url = cfg.opcua.client.server_url
-    orig_timeout = cfg.opcua.client.session_timeout
-    orig_triggers_enabled = cfg.opcua.triggers_enabled
-    orig_trigger_names = set(cfg.opcua.triggers)
-    # Newly-promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — a
-    # representative subset, proving the low-level roundtrip works through
-    # the public MachineConfigReader/Writer API too, not just in unit tests.
-    orig_machine_profile = cfg.opcua.client.machine_profile
-    orig_root_node = cfg.opcua.client.root_node
-    orig_pipe_name = cfg.opcua.pipe.pipe_name
-    orig_ceiling_layers = cfg.opcua.trigger_stop_ceiling_layers
+    tree = cfg.extensions.get("TM_OPCUA")
+    if tree is None:
+        return False, "TM_OPCUA extension missing after reading the OPCUA fixture"
+    orig_digest = canonical_digest(tree)
+    orig_triggers = set(tree.children["Triggers"].children)
+    orig_url = tree.children["Client"].attrs["Server_URL"]
 
     with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
         tmp = f.name
@@ -336,43 +328,18 @@ def run_s07(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     MachineConfigWriter(cfg).write(tmp)
     rb = MachineConfigReader(tmp).parse()
 
-    if rb.opcua is None:
-        return False, "opcua is None after roundtrip"
-    if rb.opcua.client.server_url != orig_url:
-        return False, f"server_url changed: {orig_url!r} → {rb.opcua.client.server_url!r}"
-    if rb.opcua.client.session_timeout != orig_timeout:
-        return False, f"session_timeout changed: {orig_timeout} → {rb.opcua.client.session_timeout}"
-    if rb.opcua.triggers_enabled != orig_triggers_enabled:
-        return False, f"triggers_enabled changed: {orig_triggers_enabled} → {rb.opcua.triggers_enabled}"
+    rb_tree = rb.extensions.get("TM_OPCUA")
+    if rb_tree is None:
+        return False, "TM_OPCUA extension missing after roundtrip"
+    if canonical_digest(rb_tree) != orig_digest:
+        return False, "extension digest changed across the roundtrip"
+    if set(rb_tree.children["Triggers"].children) != orig_triggers:
+        return False, "trigger groups changed across the roundtrip"
+    rb_url = rb_tree.children["Client"].attrs["Server_URL"]
+    if rb_url != orig_url:
+        return False, f"Server_URL changed: {orig_url!r} -> {rb_url!r}"
 
-    rb_names = set(rb.opcua.triggers)
-    if rb_names != orig_trigger_names:
-        return False, f"trigger names changed: missing={orig_trigger_names - rb_names}"
-
-    co = "Chamber Oxygen Level"
-    if co in cfg.opcua.triggers:
-        ot, rt = cfg.opcua.triggers[co], rb.opcua.triggers[co]
-        if ot.signal != rt.signal or ot.subsystem != rt.subsystem:
-            return False, f"'{co}' signal/subsystem changed"
-        if ot.event != rt.event or ot.trigger_label != rt.trigger_label:
-            return False, f"'{co}' event/trigger_label changed"
-
-    if rb.opcua.client.machine_profile != orig_machine_profile:
-        return False, f"machine_profile changed: {orig_machine_profile!r} -> {rb.opcua.client.machine_profile!r}"
-    if rb.opcua.client.root_node != orig_root_node:
-        return False, f"root_node changed: {orig_root_node!r} -> {rb.opcua.client.root_node!r}"
-    if rb.opcua.pipe.pipe_name != orig_pipe_name:
-        return False, f"pipe_name changed: {orig_pipe_name!r} -> {rb.opcua.pipe.pipe_name!r}"
-    if rb.opcua.trigger_stop_ceiling_layers != orig_ceiling_layers:
-        return False, (
-            f"trigger_stop_ceiling_layers changed: {orig_ceiling_layers!r} -> "
-            f"{rb.opcua.trigger_stop_ceiling_layers!r}"
-        )
-
-    return True, (
-        f"OPCUA roundtrip OK: {len(orig_trigger_names)} triggers, url={orig_url!r}, "
-        f"machine_profile={orig_machine_profile!r}"
-    )
+    return True, f"extension roundtrip OK: {len(orig_triggers)} trigger groups, digest={orig_digest[:16]}..."
 
 
 # S-08: Drastic change: add new train, modify build_plate_x, clearbox, scan_head_rotation using real AconityMIDI file
@@ -859,81 +826,67 @@ def run_av11(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     )
 
 
-# AV-12: capabilities facade .opcua() returns Ok with the newly-promoted
-# typed fields readable, when every required field is present.
+# AV-12: capabilities session preserves extensions across open -> edit -> save
 # ID:          AV-12
-# Title:       Facade .opcua() happy path with all required fields present
+# Title:       Extension tree survives a capabilities-facade edit session
 # Category:    happy-path (capabilities facade)
 # Layer:       capabilities facade (v1.0)
 # Precondition: fixtures/reference_config_opcua.h5
-# Action:      open_machine_config(path).opcua()
-# Expected:    Ok, with the promoted fields readable from the returned model.
-# Rationale:   Nothing before this scenario exercised the `capabilities`
-#              facade at all — S-07 above only goes through the plain
-#              MachineConfigReader/Writer. See OPCUA_FIELD_PROMOTION_PLAN.md's
-#              "Validation-app coverage" section for why this is a real
-#              public-API guarantee, not just a unit-test concern.
+# Action:      open_machine_config(path), edit the scanner, save to a temp file, re-read
+# Expected:    The TM_OPCUA extension tree's canonical digest is unchanged.
+# Rationale:   Nothing else exercises extensions through the `capabilities` session API: an
+#              edit session must never drop data core has no model for.
 def run_av12(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     path = Path(fixtures_dir) / "reference_config_opcua.h5"
+    before = canonical_digest(MachineConfigReader(path).parse().extensions["TM_OPCUA"])
+
     opened = open_machine_config(path)
     if not opened.ok:
         return False, f"open_machine_config failed: {opened.error}"
+    train = opened.value.optical_train(0)
+    if not train.ok:
+        return False, f"optical_train(0) failed: {train.error}"
+    scanner = train.value.get_scanner()
+    edited = train.value.set_scanner({**scanner, "working_distance": 77.5})
+    if not edited.ok:
+        return False, f"set_scanner failed: {edited.error}"
 
-    result = opened.value.opcua()
-    if not result.ok:
-        return False, f"opcua() failed on fully-populated fixture: {result.error}"
+    with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
+        tmp = f.name
+    saved = opened.value.save(tmp)
+    if not saved.ok:
+        return False, f"save failed: {saved.error}"
+    opened.value.close()
 
-    model = result.value.get_model()
-    return True, (
-        f"opcua() Ok: machine_profile={model['client']['machine_profile']!r}, "
-        f"root_node={model['client']['root_node']!r}, "
-        f"pipe_name={model['pipe']['pipe_name']!r}, "
-        f"triggers_enabled={model['triggers_enabled']!r}, "
-        f"trigger_stop_ceiling_layers={model['trigger_stop_ceiling_layers']!r}"
-    )
+    after = canonical_digest(MachineConfigReader(tmp).parse().extensions["TM_OPCUA"])
+    if after != before:
+        return False, f"extension digest changed across the session: {before[:16]}... -> {after[:16]}..."
+    return True, f"extension survived the edit session, digest={after[:16]}..."
 
 
-# AV-13: capabilities facade .opcua() returns Err(ValidationError) with
-# `details` naming exactly the seven missing required fields, when OPCUA is
-# present but incomplete.
+# AV-13: the writer rejects an invalid extension tree before creating any file
 # ID:          AV-13
-# Title:       Facade returns Err(ValidationError) with the correct details list
-# Category:    error-contract (capabilities facade)
-# Layer:       capabilities facade (v1.0)
-# Precondition: docs/validation/fixtures/opcua_missing_required.h5 (Phase 0) —
-#               deliberately removes all seven required attributes, with
-#               Event removed from only one of the two triggers.
-# Action:      open_machine_config(path).opcua()
-# Expected:    Err with code="ValidationError"; details names exactly the
-#              seven missing items, including the trigger-qualified
-#              "Laser Emission Interlock.Event" and not "Chamber Oxygen Level".
-# Rationale:   Proves the required-field check via a real external-consumer-
-#              style app, not just unit tests — same category of protection
-#              S-09 already provides for other public-surface regressions.
+# Title:       Invalid extension tree is rejected without leaving a partial file
+# Category:    error-contract
+# Layer:       writer + extension contract
+# Precondition: fixtures/reference_config.h5
+# Action:      Attach an extension with an out-of-range u8 attribute and write
+# Expected:    The write raises ExtensionContractError naming the offending attribute,
+#              and no output file is created.
+# Rationale:   Validation is part of the stable extension contract; a rejected config must
+#              never leave a half-written file behind.
 def run_av13(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
-    fixture = av_fixture(fixtures_dir, "opcua_missing_required.h5")
-    opened = open_machine_config(fixture)
-    if not opened.ok:
-        return False, f"open_machine_config failed: {opened.error}"
+    cfg = MachineConfigReader(Path(fixtures_dir) / "reference_config.h5").parse()
+    cfg = replace(cfg, extensions={"Bad": ExtensionTree(attrs={"A": Attr("u8", 999)})})
+    cfg.meta.file_version = "1.1"
 
-    result = opened.value.opcua()
-    if result.ok:
-        return False, "opcua() returned Ok on a fixture missing required fields"
-
-    if result.error.code != "ValidationError":
-        return False, f"wrong error code: {result.error.code}"
-
-    expected = {
-        "Machine_Profile",
-        "Root_Node",
-        "Configure_Client",
-        "Pipe_Name",
-        "Triggers_Enabled",
-        "Trigger_Stop_Ceiling_Layers",
-        "Laser Emission Interlock.Event",
-    }
-    actual = set(result.error.details or [])
-    if actual != expected:
-        return False, f"details mismatch: got {sorted(actual)}, expected {sorted(expected)}"
-
-    return True, f"ValidationError with details={sorted(actual)}"
+    out = Path(tempfile.mkdtemp()) / "never.h5"
+    try:
+        MachineConfigWriter(cfg).write(out)
+    except ExtensionContractError as e:
+        if "@A" not in e.path:
+            return False, f"error path does not name the attribute: {e.path!r}"
+        if out.exists():
+            return False, "a file was created despite the rejected extension"
+        return True, f"ExtensionContractError at {e.path!r}, no file created"
+    return False, "writer accepted an out-of-range extension attribute"

@@ -13,7 +13,6 @@ import type {
   Collimator,
   ScannerCard,
   ClearBox,
-  OpcuaConfig,
   CorrectionData,
 } from "../models.js";
 
@@ -31,7 +30,6 @@ export type CollimatorModel = Collimator & { extra?: Record<string, unknown> };
 export type ScannerCardModel = ScannerCard & { extra?: Record<string, unknown> };
 export type ClearBoxModel = ClearBox & { extra?: Record<string, unknown> };
 export type OpticalTrainModel = OpticalTrain & { extra?: Record<string, unknown> };
-export type OpcuaModel = OpcuaConfig & { extra?: Record<string, unknown> };
 
 export interface MetaHandle {
   getModel(): MetaModel;
@@ -66,17 +64,12 @@ export interface TrainCollection {
   get(index: number): Result<TrainHandle, CapabilityError>;
   [Symbol.iterator](): Iterator<TrainHandle>;
 }
-export interface OpcuaHandle {
-  getModel(): OpcuaModel;
-  setModel(model: OpcuaModel, mode?: SetMode): Result<void, CapabilityError>;
-}
 export interface MachineConfigFile {
   fileVersion(): string;
   meta(): MetaHandle;
   machine(): MachineHandle;
   opticalTrains(): TrainCollection;
   opticalTrain(index: number): Result<TrainHandle, CapabilityError>;
-  opcua(): Result<OpcuaHandle, CapabilityError>;
   getCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;
   getInverseCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;
   isValid(): boolean;

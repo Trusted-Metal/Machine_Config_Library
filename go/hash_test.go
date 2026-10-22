@@ -143,8 +143,8 @@ func TestIntegerFieldNamesSmokeTest(t *testing.T) {
 	names := machineconfig.IntegerFieldNames()
 
 	for _, want := range []string{
-		"bfs_max_depth", "data_port", "file_size", "port_id",
-		"actual_bit_resolution", "trigger_stop_ceiling_layers",
+		"data_port", "file_size", "port_id",
+		"actual_bit_resolution",
 	} {
 		if _, ok := names[want]; !ok {
 			t.Errorf("expected %q to be classified as integer-typed", want)

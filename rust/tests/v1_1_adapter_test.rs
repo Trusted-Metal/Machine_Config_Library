@@ -102,8 +102,8 @@ fn test_v1_1_read() {
     }
 
     // Change 2: OPCUA relocated, contents unaffected.
-    let opcua = cfg.opcua.as_ref().expect("OPCUA present");
-    assert!(opcua.client.machine_profile.is_some());
+    let opcua = cfg.extensions.get("TM_OPCUA").expect("OPCUA present");
+    assert!(opcua.children["Client"].attrs.contains_key("Machine_Profile"));
 
     // Change 3: ClearBox Power_Characterization — train 1 LINEAR, train 2 POLYNOMIAL.
     let cb0 = cfg.optical_trains[0].optional_components.clearbox.as_ref().unwrap();

@@ -64,6 +64,7 @@ use crate::power_characterization::{
     forward_power_characterization_coefficients, forward_power_characterization_points,
 };
 use crate::reader::ReaderAdapter;
+use crate::extensions::read_extension_tree;
 
 const SCHEMA_VERSION: &str = "v1";
 
@@ -75,53 +76,6 @@ const KNOWN_ROOT_KEYS: &[&str] = &[
     "File_Version",
     "Export_Date",
     "Configuration_Hash",
-];
-
-const KNOWN_CLIENT_KEYS: &[&str] = &[
-    "Server_URL",
-    "Auth_Mode",
-    "Security_Mode",
-    "Security_Policy",
-    "BFS_Max_Depth",
-    "Publish_Interval",
-    "Sampling_Interval",
-    "Session_Timeout",
-    "Keep_Alive_Count",
-    "Lifetime_Count",
-    "Machine_Profile",
-    "Queue_Policy",
-    "Queue_Size_Data_Change",
-    "Queue_Size_Events",
-    "Reconnect_Interval",
-    "Root_Node",
-    "Sync_Loop_Interval_Initial",
-    "Sync_Loop_Interval_Settled",
-];
-
-const KNOWN_PIPE_KEYS: &[&str] = &[
-    "Pipe_Enabled",
-    "Buffer_Size",
-    "Configure_Client",
-    "Inbound_Rate_Limit",
-    "Max_Inbound_Message_Size",
-    "Min_Integrity_Level",
-    "Pipe_Name",
-    "User_Access_Level",
-];
-
-const KNOWN_TRIGGER_KEYS: &[&str] = &[
-    "ID",
-    "Signal",
-    "Subsystem",
-    "Rule_Enabled",
-    "Start_Value",
-    "Stop_Value",
-    "Case_Sensitivity",
-    "Component",
-    "Cooldown_Period",
-    "Event",
-    "Max_Fires_Per_Job",
-    "Trigger_Label",
 ];
 
 // ---------------------------------------------------------------------------
@@ -277,25 +231,6 @@ fn read_bool_from_int(loc: &Location, key: &str) -> Result<Option<bool>> {
         Some(1) => Ok(Some(true)),
         Some(other) => Err(MachineConfigError::Parse(format!(
             "attribute '{key}' has value {other}; expected 0 or 1 (Rule 8)"
-        ))),
-    }
-}
-
-/// For `pipe_enabled`, which Python reads as `bool(int(attrs.get(key, default)))`
-/// — any non-zero value is `true`, not just `1` (unlike `read_bool_from_int`).
-fn read_required_bool_from_int(loc: &Location, key: &str, default: i64) -> Result<bool> {
-    Ok(read_required_int(loc, key, default)? != 0)
-}
-
-/// Converts HDF5 float `0.0`/`1.0` to `bool` (used only for `Triggers_Enabled`,
-/// which is stored as float64, not int — see §3.10).
-fn read_bool_from_float(loc: &Location, key: &str) -> Result<Option<bool>> {
-    match read_float(loc, key)? {
-        None => Ok(None),
-        Some(v) if v == 0.0 => Ok(Some(false)),
-        Some(v) if v == 1.0 => Ok(Some(true)),
-        Some(other) => Err(MachineConfigError::Parse(format!(
-            "attribute '{key}' has value {other}; expected 0.0 or 1.0"
         ))),
     }
 }
@@ -498,9 +433,14 @@ impl Hdf5AdapterV1_0 {
             .map(|tid| self.parse_train(f, tid, include_binary))
             .collect::<Result<Vec<_>>>()?;
 
-        let opcua = self.parse_opcua(f)?;
+        // v1.0 stores the TM_OPCUA extension at the root as `OPCUA/`.
+        let mut extensions = std::collections::BTreeMap::new();
+        if let Ok(grp) = f.group(layout::ROOT_OPCUA) {
+            let name = layout::LEGACY_OPCUA_EXTENSION_NAME;
+            extensions.insert(name.to_string(), read_extension_tree(&grp, name)?);
+        }
 
-        Ok(MachineConfig { meta, machine, optical_trains, opcua })
+        Ok(MachineConfig { meta, machine, optical_trains, extensions })
     }
 
     fn parse_train(&self, f: &H5File, train_id: &str, include_binary: bool) -> Result<OpticalTrain> {
@@ -808,86 +748,6 @@ impl Hdf5AdapterV1_0 {
         })
     }
 
-    /// Parses the optional `OPCUA` group tree. Returns `Ok(None)` if the file
-    /// has no `OPCUA` group (most machine configs).
-    fn parse_opcua(&self, f: &H5File) -> Result<Option<OpcuaConfig>> {
-        let opcua_grp = match f.group(layout::ROOT_OPCUA) {
-            Ok(g) => g,
-            Err(_) => return Ok(None),
-        };
-
-        let client_grp = opcua_grp.group("Client")?;
-        let client = OpcuaClientConfig {
-            server_url: read_required_str(&client_grp, "Server_URL")?,
-            auth_mode: read_required_str(&client_grp, "Auth_Mode")?,
-            security_mode: read_required_str(&client_grp, "Security_Mode")?,
-            security_policy: read_required_str(&client_grp, "Security_Policy")?,
-            bfs_max_depth: read_required_int(&client_grp, "BFS_Max_Depth", 0)?,
-            publish_interval: read_required_int(&client_grp, "Publish_Interval", 0)?,
-            sampling_interval: read_required_int(&client_grp, "Sampling_Interval", 0)?,
-            session_timeout: read_required_int(&client_grp, "Session_Timeout", 0)?,
-            keep_alive_count: read_int(&client_grp, "Keep_Alive_Count")?,
-            lifetime_count: read_int(&client_grp, "Lifetime_Count")?,
-            machine_profile: read_str(&client_grp, "Machine_Profile")?,
-            queue_policy: read_str(&client_grp, "Queue_Policy")?,
-            queue_size_data_change: read_int(&client_grp, "Queue_Size_Data_Change")?,
-            queue_size_events: read_int(&client_grp, "Queue_Size_Events")?,
-            reconnect_interval: read_int(&client_grp, "Reconnect_Interval")?,
-            root_node: read_str(&client_grp, "Root_Node")?,
-            sync_loop_interval_initial: read_int(&client_grp, "Sync_Loop_Interval_Initial")?,
-            sync_loop_interval_settled: read_int(&client_grp, "Sync_Loop_Interval_Settled")?,
-            extra: collect_extra(&client_grp, KNOWN_CLIENT_KEYS)?,
-        };
-
-        let pipe_grp = opcua_grp.group("Pipe")?;
-        let pipe = OpcuaPipeConfig {
-            pipe_enabled: read_required_bool_from_int(&pipe_grp, "Pipe_Enabled", 0)?,
-            buffer_size: read_required_int(&pipe_grp, "Buffer_Size", 0)?,
-            configure_client: read_bool_from_int(&pipe_grp, "Configure_Client")?,
-            inbound_rate_limit: read_int(&pipe_grp, "Inbound_Rate_Limit")?,
-            max_inbound_message_size: read_int(&pipe_grp, "Max_Inbound_Message_Size")?,
-            min_integrity_level: read_str(&pipe_grp, "Min_Integrity_Level")?,
-            pipe_name: read_str(&pipe_grp, "Pipe_Name")?,
-            user_access_level: read_str(&pipe_grp, "User_Access_Level")?,
-            extra: collect_extra(&pipe_grp, KNOWN_PIPE_KEYS)?,
-        };
-
-        let triggers_grp = opcua_grp.group("Triggers")?;
-        let triggers_enabled = read_bool_from_float(&triggers_grp, "Triggers_Enabled")?;
-        let trigger_stop_ceiling_layers = read_int(&triggers_grp, "Trigger_Stop_Ceiling_Layers")?;
-
-        let mut triggers = IndexMap::new();
-        for name in triggers_grp.member_names()? {
-            let tg = triggers_grp.group(&name)?;
-            let extra = collect_extra(&tg, KNOWN_TRIGGER_KEYS)?;
-            triggers.insert(
-                name,
-                OpcuaTrigger {
-                    id: read_str(&tg, "ID")?,
-                    signal: read_str(&tg, "Signal")?,
-                    subsystem: read_str(&tg, "Subsystem")?,
-                    rule_enabled: read_bool_from_int(&tg, "Rule_Enabled")?,
-                    start_value: read_str(&tg, "Start_Value")?,
-                    stop_value: read_str(&tg, "Stop_Value")?,
-                    case_sensitivity: read_str(&tg, "Case_Sensitivity")?,
-                    component: read_str(&tg, "Component")?,
-                    cooldown_period: read_int(&tg, "Cooldown_Period")?,
-                    event: read_str(&tg, "Event")?,
-                    max_fires_per_job: read_int(&tg, "Max_Fires_Per_Job")?,
-                    trigger_label: read_str(&tg, "Trigger_Label")?,
-                    extra,
-                },
-            );
-        }
-
-        Ok(Some(OpcuaConfig {
-            client,
-            pipe,
-            triggers,
-            triggers_enabled,
-            trigger_stop_ceiling_layers,
-        }))
-    }
 }
 
 // v1.0's implementation of the ReaderAdapter contract — this impl is
@@ -932,11 +792,7 @@ mod tests {
         concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_config.h5");
     const REFERENCE_OPCUA: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_config_opcua.h5");
-    const OPCUA_MISSING_REQUIRED: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../docs/validation/fixtures/opcua_missing_required.h5"
-    );
-    const SYNTHETIC: &str =
+        const SYNTHETIC: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/synthetic_2laser.h5");
     const REFERENCE_SENSORS: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -1082,8 +938,8 @@ mod tests {
     fn combined_opcua_and_synchronous_sensors_fixture_has_both() {
         let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA_SENSORS).unwrap().parse().unwrap();
 
-        let opcua = config.opcua.as_ref().expect("OPCUA present on the combined fixture");
-        assert!(!opcua.client.server_url.is_empty());
+        let opcua = config.extensions.get("TM_OPCUA").expect("OPCUA present on the combined fixture");
+        assert!(!opcua.children["Client"].attrs["Server_URL"].as_str().unwrap().is_empty());
 
         let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
         assert_eq!(cb.synchronous_sensors.len(), 1);
@@ -1135,110 +991,37 @@ mod tests {
     }
 
     #[test]
-    fn reference_fixture_has_no_opcua() {
+    fn reference_fixture_has_no_extensions() {
         let config = Hdf5AdapterV1_0::open(REFERENCE).unwrap().parse().unwrap();
-        assert!(config.opcua.is_none());
+        assert!(config.extensions.is_empty());
     }
 
     #[test]
-    fn opcua_fixture_parses_client_pipe_and_triggers() {
+    fn opcua_fixture_exposes_the_legacy_group_as_an_extension_tree() {
         let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
-        let opcua = config.opcua.expect("OPCUA group present on this fixture");
-
-        assert!(!opcua.client.server_url.is_empty());
-        assert!(opcua.client.bfs_max_depth > 0);
-        assert_eq!(opcua.triggers_enabled, Some(true));
-        assert!(opcua.triggers.contains_key("Laser Emission Interlock"));
-
-        let trigger = &opcua.triggers["Laser Emission Interlock"];
-        assert!(trigger.signal.is_some());
-        // Trigger_Label is now a typed field, not swept into `extra`.
-        assert_eq!(trigger.trigger_label, Some("Laser Emission Interlock".into()));
-        assert!(!trigger.extra.contains_key("Trigger_Label"));
-    }
-
-    /// Every one of the 22 newly-promoted fields (plus the new
-    /// `trigger_stop_ceiling_layers`), checked against the real values in
-    /// `reference_config_opcua.h5` — verified directly via h5py before writing
-    /// this test. Also confirms none of them still land in `extra`.
-    #[test]
-    fn opcua_fixture_promoted_fields_have_real_values() {
-        let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
-        let opcua = config.opcua.expect("OPCUA group present on this fixture");
-
-        let c = &opcua.client;
-        assert_eq!(c.keep_alive_count, Some(240));
-        assert_eq!(c.lifetime_count, Some(2400));
-        assert_eq!(c.machine_profile, Some("Aconity".into()));
-        assert_eq!(c.queue_policy, Some("DropOldest".into()));
-        assert_eq!(c.queue_size_data_change, Some(100));
-        assert_eq!(c.queue_size_events, Some(7200));
-        assert_eq!(c.reconnect_interval, Some(10000));
-        assert_eq!(c.root_node, Some("MachineFleet".into()));
-        assert_eq!(c.sync_loop_interval_initial, Some(1000));
-        assert_eq!(c.sync_loop_interval_settled, Some(30000));
-        for key in KNOWN_CLIENT_KEYS {
-            assert!(!c.extra.contains_key(*key), "{key} should be typed, not in extra");
-        }
-
-        let p = &opcua.pipe;
-        assert_eq!(p.configure_client, Some(true));
-        assert_eq!(p.inbound_rate_limit, Some(-1));
-        assert_eq!(p.max_inbound_message_size, Some(65536));
-        assert_eq!(p.min_integrity_level, Some("0x2000".into()));
-        assert_eq!(p.pipe_name, Some("\\\\.\\pipe\\opc_ua_client_pipe".into()));
-        assert_eq!(p.user_access_level, Some("AnyLocalUser".into()));
-        for key in KNOWN_PIPE_KEYS {
-            assert!(!p.extra.contains_key(*key), "{key} should be typed, not in extra");
-        }
-
-        assert_eq!(opcua.trigger_stop_ceiling_layers, Some(3));
-
-        let laser = &opcua.triggers["Laser Emission Interlock"];
-        assert_eq!(laser.case_sensitivity, Some("Exact".into()));
-        assert_eq!(laser.component, Some("machine_state_indicator".into()));
-        assert_eq!(laser.cooldown_period, Some(0));
-        assert_eq!(laser.event, Some("SensorEvents".into()));
-        assert_eq!(laser.max_fires_per_job, Some(0));
-        assert_eq!(laser.trigger_label, Some("Laser Emission Interlock".into()));
-
-        let oxygen = &opcua.triggers["Chamber Oxygen Level"];
-        assert_eq!(oxygen.component, Some("process_chamber::gas_management::oxygen_sensor::1".into()));
-        assert_eq!(oxygen.event, Some("SensorEvents".into()));
-        assert_eq!(oxygen.trigger_label, Some("Chamber Oxygen Level".into()));
-        for key in KNOWN_TRIGGER_KEYS {
-            assert!(!laser.extra.contains_key(*key), "{key} should be typed, not in extra");
-            assert!(!oxygen.extra.contains_key(*key), "{key} should be typed, not in extra");
-        }
-    }
-
-    /// `opcua_missing_required.h5` (Phase 0) deletes all seven Phase-2-required
-    /// attributes. The reader stays permissive (facade-only enforcement — see
-    /// OPCUA_FIELD_PROMOTION_PLAN.md): parsing must still succeed, the removed
-    /// fields read back `None`, and everything else is unaffected — including
-    /// the deliberate asymmetry that only one trigger lost `Event`.
-    #[test]
-    fn opcua_missing_required_fixture_parses_gracefully() {
-        let config = Hdf5AdapterV1_0::open(OPCUA_MISSING_REQUIRED).unwrap().parse().unwrap();
-        let opcua = config.opcua.expect("OPCUA group present on this fixture");
-
-        assert_eq!(opcua.client.machine_profile, None);
-        assert_eq!(opcua.client.root_node, None);
-        assert_eq!(opcua.pipe.configure_client, None);
-        assert_eq!(opcua.pipe.pipe_name, None);
-        assert_eq!(opcua.triggers_enabled, None);
-        assert_eq!(opcua.trigger_stop_ceiling_layers, None);
-
-        let laser = &opcua.triggers["Laser Emission Interlock"];
-        assert_eq!(laser.event, None, "Event was deliberately removed from this trigger only");
-        let oxygen = &opcua.triggers["Chamber Oxygen Level"];
-        assert_eq!(oxygen.event, Some("SensorEvents".into()), "the other trigger must be unaffected");
-
-        // Untouched fields on both the client and the still-present trigger.
-        assert!(!opcua.client.server_url.is_empty());
-        assert_eq!(opcua.client.keep_alive_count, Some(240));
-        assert_eq!(opcua.pipe.buffer_size, 65536);
-        assert_eq!(laser.trigger_label, Some("Laser Emission Interlock".into()));
+        assert_eq!(config.extensions.keys().collect::<Vec<_>>(), ["TM_OPCUA"]);
+        let tree = &config.extensions["TM_OPCUA"];
+        assert_eq!(
+            tree.children.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["Client", "Pipe", "Triggers"]
+        );
+        let client = &tree.children["Client"];
+        assert_eq!(client.attrs["BFS_Max_Depth"].as_i64(), Some(16));
+        assert_eq!(client.attrs["Queue_Policy"].as_str(), Some("DropOldest"));
+        assert_eq!(client.attrs["Reconnect_Interval"].as_i64(), Some(10000));
+        let pipe = &tree.children["Pipe"];
+        assert_eq!(pipe.attrs["Min_Integrity_Level"].as_str(), Some("0x2000"));
+        assert_eq!(pipe.attrs["User_Access_Level"].as_str(), Some("AnyLocalUser"));
+        let triggers = &tree.children["Triggers"];
+        assert_eq!(triggers.attrs["Trigger_Stop_Ceiling_Layers"].as_i64(), Some(3));
+        assert_eq!(triggers.attrs["Triggers_Enabled"].as_i64(), Some(1));
+        let oxygen = &triggers.children["Chamber Oxygen Level"];
+        assert_eq!(oxygen.attrs["Start_Value"].as_str(), Some("700"));
+        assert_eq!(oxygen.attrs["Stop_Value"].as_str(), Some("1000"));
+        assert_eq!(
+            oxygen.attrs["Component"].as_str(),
+            Some("process_chamber::gas_management::oxygen_sensor::1")
+        );
     }
 
     #[test]

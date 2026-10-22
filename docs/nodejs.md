@@ -111,12 +111,12 @@ See `schema/capabilities/` and [USAGE.md](../USAGE.md).
 All types are fully exported from the package root:
 
 ```typescript
-import type { MachineConfig, OpticalTrain, ClearBox, OpcuaConfig } from './dist/index.js';
+import type { MachineConfig, OpticalTrain, ClearBox, ExtensionTree } from './dist/index.js';
 ```
 
 `models.ts` defines the full interface tree — `MachineConfig`, `OpticalTrain`, `Scanner`,
 `AxisConfig`, `LightSource`, `Collimator`, `ScannerCard`, `ClearBox`,
-`ScanFieldCorrectionFile`, `OpcuaConfig` and friends — with snake_case field names
+`ScanFieldCorrectionFile`, `ExtensionTree` and friends — with snake_case field names
 throughout, mirroring Python's model.
 
 ---
@@ -141,12 +141,9 @@ for (const [i, train] of config.optical_trains.entries()) {
   );
 }
 
-// OPCUA — populated only when the HDF5 file has an OPCUA group
-if (config.opcua) {
-  console.log(config.opcua.client.server_url);
-  for (const [name, trigger] of Object.entries(config.opcua.triggers)) {
-    console.log(`${name}: signal=${trigger.signal}`);
-  }
+// Extensions (e.g. OPC UA) — opaque trees, interpreted by the matching extension library
+for (const name of Object.keys(config.extensions ?? {})) {
+  console.log(`extension: ${name}`);
 }
 ```
 
@@ -241,29 +238,28 @@ console.log('Peak correction:', cd.data[(128 * 257 + 128) * 2].toFixed(4)); // �
 
 ---
 
-## Use case 8 — Read OPCUA telemetry configuration
+## Use case 8 — Read an extension (OPC UA) tree
 
-OPCUA data lives in a separate `OPCUA` group absent in most files. `parse()` returns
-`config.opcua` when present, `undefined` otherwise. Use `getRawGroup()` for ad-hoc inspection:
+Core has no OPC UA model. Every group under `Extensions/` that core does not model (and, in
+`File_Version` 1.0, the legacy root `OPCUA/` group, exposed as `TM_OPCUA`) is returned verbatim in
+`config.extensions`, and written back unchanged. Pack and unpack it with the extension's own
+library (see `docs/EXTENSION_CONTRACT.md`); `getRawGroup()` remains for ad-hoc attribute inspection:
 
 ```typescript
-import { MachineConfigReader } from './dist/index.js';
+import { MachineConfigReader, canonicalDigest } from './dist/index.js';
 
-// Typed path through the model
 const config = await new MachineConfigReader('fixtures/reference_config_opcua.h5').parse();
-if (config.opcua) {
-  console.log(config.opcua.client.server_url);
-  console.log(config.opcua.triggers_enabled);
-  for (const [name, t] of Object.entries(config.opcua.triggers)) {
-    console.log(name, t.signal, t.subsystem);
-  }
+const opcua = config.extensions?.TM_OPCUA;
+if (opcua) {
+  console.log(Object.keys(opcua.children));                  // ['Client', 'Pipe', 'Triggers']
+  console.log(opcua.children.Client.attrs.Server_URL);       // { dtype: 'utf8', value: '...' }
+  console.log(canonicalDigest(opcua));                       // identical in Node and Rust
 }
 
 // Raw attribute map for any HDF5 path — returns {} (not an error) if absent
 const reader = new MachineConfigReader('fixtures/reference_config_opcua.h5');
 const clientAttrs = await reader.getRawGroup('OPCUA/Client');
 console.log(clientAttrs['Server_URL']);
-console.log(clientAttrs['Auth_Mode']);
 
 const missing = await reader.getRawGroup('does/not/exist');  // {}
 ```

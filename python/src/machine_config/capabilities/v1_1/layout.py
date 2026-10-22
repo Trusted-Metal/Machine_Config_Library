@@ -14,10 +14,8 @@ ROOT_MACHINE = "Machine"
 ROOT_OPTICAL_TRAINS = "Machine/Optical_Trains"
 ROOT_EXTENSIONS = "Extensions"
 GROUP_CLEARBOX = "Extensions/ClearBox"
-ROOT_OPCUA = "Extensions/TM_OPCUA"
-OPCUA_CLIENT = "Extensions/TM_OPCUA/Client"
-OPCUA_PIPE = "Extensions/TM_OPCUA/Pipe"
-OPCUA_TRIGGERS = "Extensions/TM_OPCUA/Triggers"
+# Group names under Extensions/ that core still models and therefore never exposes as extension trees.
+MODELLED_EXTENSION_NAMES = frozenset({"ClearBox"})
 
 TRAIN_ID_PREFIX = "Optical_Train_"
 GROUP_SCANNER = "Scanner"

@@ -21,10 +21,8 @@ inline constexpr const char* ROOT_MACHINE = "Machine";
 inline constexpr const char* ROOT_OPTICAL_TRAINS = "Machine/Optical_Trains";
 inline constexpr const char* ROOT_EXTENSIONS = "Extensions";
 inline constexpr const char* GROUP_CLEARBOX = "Extensions/ClearBox";
-inline constexpr const char* ROOT_OPCUA = "Extensions/TM_OPCUA";
-inline constexpr const char* OPCUA_CLIENT = "Extensions/TM_OPCUA/Client";
-inline constexpr const char* OPCUA_PIPE = "Extensions/TM_OPCUA/Pipe";
-inline constexpr const char* OPCUA_TRIGGERS = "Extensions/TM_OPCUA/Triggers";
+// Extensions/ groups core models itself and therefore never exposes as opaque extension trees.
+inline bool isModelledExtensionName(const std::string& name) { return name == "ClearBox"; }
 
 inline constexpr const char* TRAIN_ID_PREFIX = "Optical_Train_";
 inline constexpr const char* GROUP_SCANNER = "Scanner";

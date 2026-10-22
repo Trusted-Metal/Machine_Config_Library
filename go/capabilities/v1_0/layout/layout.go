@@ -6,7 +6,10 @@ const (
 	FileVersion                   = "1.0"
 	RootMachine                   = "Machine"
 	RootOpticalTrains             = "Machine/Optical_Trains"
-	RootOPCUA                     = "OPCUA"
+	// File_Version 1.0 has no Extensions group: the one extension it can hold lives at the root as OPCUA/.
+	RootOPCUA = "OPCUA"
+	// LegacyOpcuaExtensionName is the extension name core exposes the legacy OPCUA/ group under.
+	LegacyOpcuaExtensionName      = "TM_OPCUA"
 	TrainIDPrefix                 = "Optical_Train_"
 	GroupScanner                  = "Scanner"
 	GroupLightSource              = "Light_Source"

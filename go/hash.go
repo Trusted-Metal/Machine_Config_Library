@@ -58,6 +58,7 @@ import (
 	"strconv"
 	"strings"
 
+	"machine-config-go/extension"
 	"machine-config-go/internal/models"
 )
 
@@ -93,6 +94,19 @@ func CanonicalizeForHash(cfg *MachineConfig) ([]byte, error) {
 	if err := json.Unmarshal(raw, &generic); err != nil {
 		return nil, err
 	}
+	// Extension content enters the hash as one canonical digest per extension; configs without
+	// extensions hash exactly as before.
+	if len(cfg.Extensions) > 0 {
+		digests := make(map[string]any, len(cfg.Extensions))
+		for name, tree := range cfg.Extensions {
+			d, err := extension.Digest(tree)
+			if err != nil {
+				return nil, fmt.Errorf("extension %q: %w", name, err)
+			}
+			digests[name] = d
+		}
+		generic["extensions"] = digests
+	}
 	if meta, ok := generic["meta"].(map[string]any); ok {
 		delete(meta, "configuration_hash")
 		delete(meta, "export_date")
@@ -110,6 +124,7 @@ func CanonicalizeForHash(cfg *MachineConfig) ([]byte, error) {
 // carries. Does not mutate cfg.
 func sanitizeForHash(cfg *MachineConfig) *MachineConfig {
 	sanitized := *cfg
+	sanitized.Extensions = nil // hashed as digests, not as raw trees
 	trains := make([]models.OpticalTrain, len(cfg.OpticalTrains))
 	for i, train := range cfg.OpticalTrains {
 		trains[i] = train

@@ -21,7 +21,7 @@ Node.js uses Ajv, Rust enforces it implicitly via `serde`, and C++ uses pboettch
   - [scanner_card](#scanner_card)
   - [optional_components.clearbox](#optional_componentsclearbox)
   - [scan_field_correction_file](#scan_field_correction_file)
-- [opcua (non-schema, HDF5 only)](#opcua-non-schema-hdf5-only)
+- [extensions](#extensions)
 - [Conventions](#conventions)
 
 ---
@@ -37,8 +37,8 @@ Node.js uses Ajv, Rust enforces it implicitly via `serde`, and C++ uses pboettch
 ```
 
 `optical_trains` must have between 1 and 6 items (schema constraint). All other top-level keys
-are disallowed by the schema — OPCUA data lives outside the canonical JSON and is accessed via
-the model's `opcua` field or `get_raw_group()`.
+are disallowed by the schema — OPCUA data is carried as an opaque extension tree
+(`extensions["TM_OPCUA"]`) or inspected with `get_raw_group()`.
 
 ---
 
@@ -278,27 +278,20 @@ Optional (`object | null`). Present when a ClearBox correction file is attached 
 
 ---
 
-## opcua (non-schema, HDF5 only)
+## extensions
 
-OPCUA telemetry configuration is stored in a separate `OPCUA/` HDF5 group tree and is **not
-part of the JSON schema**. It does not appear in `export-json` output. It is accessed through
-the model's `opcua` field (when populated) or via `get_raw_group()`.
+Optional top-level object keyed by extension name (a group under `Extensions/`, or the legacy
+root-level `OPCUA/` group exposed as `TM_OPCUA`). Core does not interpret an extension: each value
+is an opaque tree `{attrs, children, datasets}` whose attributes are `{dtype, value}` objects
+(`i64`/`u64` as decimal strings). The schema only requires each extension to be an object; the tree
+shape, dtypes and names are defined and enforced by the extension contract
+(`docs/EXTENSION_CONTRACT.md`). The property is omitted when a file has no extensions.
 
-**HDF5 group structure:**
+`TM_OPCUA` is decoded into a typed model by the separate
+[mcf-ext-opcua](https://github.com/Trusted-Metal/mcf-ext-opcua) library (Node and Rust only
+today); core carries it opaquely and does not interpret it.
 
-```
-OPCUA/
-  Client/          attributes: Server_URL, Auth_Mode, Security_Mode, Security_Policy,
-                               BFS_Max_Depth, Publish_Interval, Sampling_Interval,
-                               Session_Timeout, + any extra attributes
-  Pipe/            attributes: Pipe_Enabled (int 0/1), Buffer_Size, + extras
-  Triggers/        attribute:  Triggers_Enabled (float64 0.0/1.0)
-    <trigger_name>/  attributes: ID, Signal, Subsystem, Rule_Enabled (int 0/1),
-                                 Start_Value, Stop_Value, + extras
-```
-
-All languages model this identically: `OpcuaConfig { client, pipe, triggers, triggers_enabled }`.
-Unknown attributes on any group are collected into the `extra` map and round-tripped verbatim.
+Core's typed `opcua` property no longer exists in any language.
 
 ---
 

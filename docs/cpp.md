@@ -129,9 +129,9 @@ for (size_t i = 0; i < config.optical_trains.size(); ++i) {
               << ", " << s.scan_head_offset_y.value_or(0.0) << ")\n";
 }
 
-// OPCUA — populated only when the file has an OPCUA group
-if (config.opcua) {
-    std::cout << config.opcua->client.server_url << "\n";
+// OPCUA — carried verbatim as the opaque "TM_OPCUA" extension when the file has the group
+if (config.extensions.count("TM_OPCUA")) {
+    std::cout << config.extensions.at("TM_OPCUA").children.size() << " groups\n";
 }
 ```
 
@@ -227,6 +227,9 @@ assert(peak > 1.9 && peak < 2.1);
 
 ## Use case 8 — Read OPCUA telemetry configuration
 
+Core no longer models OPC UA: the group is returned verbatim as the opaque `extensions["TM_OPCUA"]`
+tree (see `docs/EXTENSION_CONTRACT.md`) for a separate extension library to interpret.
+
 ```cpp
 #include "machine_config/reader.hpp"
 using namespace machine_config;
@@ -234,15 +237,13 @@ using namespace machine_config;
 MachineConfigReader reader{"fixtures/reference_config_opcua.h5"};
 auto config = reader.parse();
 
-if (config.opcua) {
-    const auto& opc = *config.opcua;
-    std::cout << opc.client.server_url << "\n";
-    std::cout << opc.client.auth_mode << "\n";
-    for (const auto& [name, trigger] : opc.triggers) {
-        std::cout << name << ": signal=" << trigger.signal.value_or("") << "\n";
-    }
-    if (opc.triggers_enabled)
-        std::cout << "Triggers enabled: " << *opc.triggers_enabled << "\n";
+if (auto it = config.extensions.find("TM_OPCUA"); it != config.extensions.end()) {
+    const extension::Tree& opc = it->second;
+    const auto& url = opc.children.at("Client").attrs.at("Server_URL");   // {dtype "utf8", value}
+    std::cout << std::get<std::string>(url.value) << "\n";
+    for (const auto& [name, trigger] : opc.children.at("Triggers").children)
+        std::cout << name << "\n";
+    std::cout << extension::canonicalDigest(opc) << "\n";   // identical in every language
 }
 
 // getRawGroup() — raw attribute map for any HDF5 path; {} if absent, never throws
@@ -463,8 +464,8 @@ Expected: `100% tests passed, 0 tests failed out of 79`
 | File | Tests | Coverage |
 |---|---|---|
 | `test_models.cpp` | 6 | JSON serialisation, nlohmann ADL round-trips |
-| `test_reader.cpp` | 43 | Root attrs, machine, optical trains, scanner, ClearBox scalars, binary data, OPCUA (absent + all fields), synthetic fixture, `getRawGroup()` |
-| `test_writer.cpp` | 8 | Scalar roundtrip, OPCUA roundtrip (field values + trigger content), OPCUA from-scratch construction, schema spot-check |
+| `test_reader.cpp` | 43 | Root attrs, machine, optical trains, scanner, ClearBox scalars, binary data, OPCUA group as an extension, synthetic fixture, `getRawGroup()` |
+| `test_writer.cpp` | 8 | Scalar roundtrip, extension-carrying roundtrip, schema spot-check |
 | `test_builder.cpp` | 6 | 1/2-laser roundtrip, plate dims, correction grid shape + value, no-clearbox |
 | `test_schema.cpp` | 3 | Reference fixture validates, MockBuilder output validates, empty object fails |
 | `test_capabilities.cpp` | 8 | Stable model facade: open/create, `SetMode`, `fileVersion`, `save` |

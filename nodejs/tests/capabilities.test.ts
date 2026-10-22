@@ -15,6 +15,7 @@ import {
 } from '../src/capabilities/index.js';
 import { MachineConfigReader } from '../src/reader.js';
 import { MachineConfigWriter } from '../src/writer.js';
+import { canonicalDigest } from '../src/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(__dirname, '..', '..', 'fixtures', 'reference_config.h5');
@@ -25,15 +26,6 @@ const FIXTURE_OPCUA = join(
   '..',
   'fixtures',
   'reference_config_opcua.h5',
-);
-const FIXTURE_OPCUA_MISSING_REQUIRED = join(
-  __dirname,
-  '..',
-  '..',
-  'docs',
-  'validation',
-  'fixtures',
-  'opcua_missing_required.h5',
 );
 
 describe('capability facade (File_Version 1.0)', () => {
@@ -163,87 +155,21 @@ describe('capability facade (File_Version 1.0)', () => {
     opened.value.close();
   });
 
-  it('opcua NotPresent vs present', async () => {
-    const noOpc = await openMachineConfig(FIXTURE);
-    expect(noOpc.ok).toBe(true);
-    if (!noOpc.ok) return;
-    const missing = noOpc.value.opcua();
-    expect(missing.ok).toBe(false);
-    if (!missing.ok) expect(missing.error.code).toBe('NotPresent');
-    noOpc.value.close();
-
-    const withOpc = await openMachineConfig(FIXTURE_OPCUA);
-    expect(withOpc.ok).toBe(true);
-    if (!withOpc.ok) return;
-    const present = withOpc.value.opcua();
-    expect(present.ok).toBe(true);
-    if (present.ok) {
-      const model = present.value.getModel();
-      expect(model).toBeTruthy();
-    }
-    withOpc.value.close();
-  });
-
-  it('opcua() Ok when all required fields present on reference_opcua fixture', async () => {
-    const opened = await openMachineConfig(FIXTURE_OPCUA);
-    expect(opened.ok).toBe(true);
-    if (!opened.ok) return;
-    const result = opened.value.opcua();
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      const model = result.value.getModel();
-      expect(model.client.machine_profile).not.toBeNull();
-      expect(Object.values(model.triggers).every((t) => t.event != null)).toBe(true);
-    }
-    opened.value.close();
-  });
-
-  it('opcua() reports all seven missing required fields at once', async () => {
-    const opened = await openMachineConfig(FIXTURE_OPCUA_MISSING_REQUIRED);
-    expect(opened.ok).toBe(true);
-    if (!opened.ok) return;
-    const result = opened.value.opcua();
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.code).toBe('ValidationError');
-
-    const expected = new Set([
-      'Machine_Profile',
-      'Root_Node',
-      'Configure_Client',
-      'Pipe_Name',
-      'Triggers_Enabled',
-      'Trigger_Stop_Ceiling_Layers',
-      'Laser Emission Interlock.Event',
-    ]);
-    expect(new Set(result.error.details)).toEqual(expected);
-    expect(result.error.details?.some((d) => d.startsWith('Chamber Oxygen Level'))).toBe(false);
-    opened.value.close();
-  });
-
-  it('opcua() never reports an optional field, even when genuinely absent', async () => {
-    // opcua_missing_required.h5 only clears the 7 required fields — every
-    // optional field is still present there, so absence of an optional field
-    // from `details` would be trivially true. Also clear an optional field
-    // (keep_alive_count) in memory, re-write to a temp file, and confirm
-    // `details` still names exactly the same 7 items, not 8.
+  it('save/reopen keeps the OPCUA extension tree of a v1.0 file', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mcl-cap-opcua-'));
-    const out = join(dir, 'missing_required_plus_optional.h5');
+    const out = join(dir, 'opcua.h5');
     try {
-      const reader = new MachineConfigReader(FIXTURE_OPCUA_MISSING_REQUIRED);
-      const config = await reader.parse();
-      config.opcua!.client.keep_alive_count = null;
-      await new MachineConfigWriter(config).write(out);
-
-      const opened = await openMachineConfig(out);
+      const original = await new MachineConfigReader(FIXTURE_OPCUA).parse();
+      const opened = await openMachineConfig(FIXTURE_OPCUA);
       expect(opened.ok).toBe(true);
       if (!opened.ok) return;
-      const result = opened.value.opcua();
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.details?.some((d) => d.includes('Keep_Alive_Count'))).toBe(false);
-      expect(result.error.details).toHaveLength(7);
+      expect(isOk(await opened.value.save(out))).toBe(true);
       opened.value.close();
+
+      const again = await new MachineConfigReader(out).parse();
+      expect(canonicalDigest(again.extensions!.TM_OPCUA)).toBe(
+        canonicalDigest(original.extensions!.TM_OPCUA),
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

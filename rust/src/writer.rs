@@ -101,6 +101,9 @@ impl<'a> MachineConfigWriter<'a> {
     /// fallback-on-error (see `hash.rs`).
     pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let fv = self.resolved_file_version();
+        // Hashing digests every extension tree, so contract violations must surface as an error
+        // before it, not as a panic inside it.
+        crate::extensions::validate_extension_trees(&self.config.extensions)?;
         // Every adapter stamps config.meta.file_version verbatim as the
         // on-disk File_Version attribute — if target_version overrides the
         // adapter choice, the config handed to the adapter must reflect that
@@ -263,6 +266,21 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_opcua_extension_tree() {
+        let orig = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
+        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+        MachineConfigWriter::new(&orig).write(tmp.path()).unwrap();
+        let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
+
+        assert_eq!(
+            crate::canonical_digest(&rt.extensions["TM_OPCUA"]).unwrap(),
+            crate::canonical_digest(&orig.extensions["TM_OPCUA"]).unwrap()
+        );
+        let client = &rt.extensions["TM_OPCUA"].children["Client"];
+        assert_eq!(client.attrs["Server_URL"], orig.extensions["TM_OPCUA"].children["Client"].attrs["Server_URL"]);
+    }
+
+    #[test]
     fn roundtrip_correction_data_sha256() {
         use crate::models::CorrectionData;
         use std::collections::hash_map::DefaultHasher;
@@ -297,42 +315,6 @@ mod tests {
             cd_hash(&rt_inv),
             "Inverse_Correction_Data hash changed across write roundtrip"
         );
-    }
-
-    #[test]
-    fn roundtrip_opcua_fields() {
-        let orig = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
-        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
-        MachineConfigWriter::new(&orig).write(tmp.path()).unwrap();
-        let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
-
-        let orig_opcua = orig.opcua.as_ref().unwrap();
-        let rt_opcua = rt.opcua.as_ref().unwrap();
-        assert_eq!(orig_opcua.client.server_url, rt_opcua.client.server_url);
-        assert_eq!(orig_opcua.client.bfs_max_depth, rt_opcua.client.bfs_max_depth);
-        assert_eq!(orig_opcua.client.extra, rt_opcua.client.extra);
-        assert_eq!(orig_opcua.pipe.buffer_size, rt_opcua.pipe.buffer_size);
-        assert_eq!(orig_opcua.triggers_enabled, rt_opcua.triggers_enabled);
-        assert_eq!(orig_opcua.triggers.len(), rt_opcua.triggers.len());
-
-        // Spot-check a representative subset of the newly-promoted fields
-        // through the public MachineConfigWriter facade specifically — the
-        // exhaustive 22-field check lives on the capabilities-layer copy of
-        // this test (capabilities::v1_0::writer::tests::roundtrip_opcua_fields).
-        assert_eq!(orig_opcua.client.machine_profile, rt_opcua.client.machine_profile);
-        assert_eq!(orig_opcua.client.root_node, rt_opcua.client.root_node);
-        assert_eq!(orig_opcua.pipe.configure_client, rt_opcua.pipe.configure_client);
-        assert_eq!(orig_opcua.pipe.pipe_name, rt_opcua.pipe.pipe_name);
-        assert_eq!(orig_opcua.trigger_stop_ceiling_layers, rt_opcua.trigger_stop_ceiling_layers);
-        assert_eq!(orig_opcua.trigger_stop_ceiling_layers, Some(3));
-
-        let orig_t = &orig_opcua.triggers["Laser Emission Interlock"];
-        let rt_t = &rt_opcua.triggers["Laser Emission Interlock"];
-        assert_eq!(orig_t.signal, rt_t.signal);
-        assert_eq!(orig_t.rule_enabled, rt_t.rule_enabled);
-        assert_eq!(orig_t.extra, rt_t.extra);
-        assert_eq!(orig_t.event, rt_t.event);
-        assert_eq!(orig_t.trigger_label, rt_t.trigger_label);
     }
 
     #[test]

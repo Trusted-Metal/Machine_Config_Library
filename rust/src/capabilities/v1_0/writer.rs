@@ -10,7 +10,8 @@ use ndarray::Array1;
 
 use super::hdf5::{RawCalibrationPoint, RawEquationConstant};
 use super::layout;
-use crate::error::Result;
+use crate::error::{MachineConfigError, Result};
+use crate::extensions::{validate_extension_trees, write_extension_tree};
 use crate::models::*;
 use crate::power_characterization::{
     backward_flat_fields_coefficients, backward_flat_fields_points,
@@ -132,6 +133,7 @@ impl<'a> Hdf5WriterV1_0<'a> {
 
     /// Writes the config to `path`, creating or overwriting the file.
     pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        self.validate_extensions()?;
         let f = H5File::create(path)?;
         // Root group opened at "/" so ws/wf/wi/wb helpers work uniformly.
         let root = f.group("/")?;
@@ -168,8 +170,22 @@ impl<'a> Hdf5WriterV1_0<'a> {
             }
         }
 
-        if let Some(opcua) = &self.config.opcua {
-            self.write_opcua(&f, opcua)?;
+        // v1.0 stores the TM_OPCUA extension at the root as `OPCUA/`.
+        if let Some(tree) = self.config.extensions.get(layout::LEGACY_OPCUA_EXTENSION_NAME) {
+            write_extension_tree(&root, layout::ROOT_OPCUA, tree)?;
+        }
+        Ok(())
+    }
+
+    /// Runs before the output file is created, so a rejected config never leaves a partial file.
+    fn validate_extensions(&self) -> Result<()> {
+        validate_extension_trees(&self.config.extensions)?;
+        for name in self.config.extensions.keys() {
+            if name != layout::LEGACY_OPCUA_EXTENSION_NAME {
+                return Err(MachineConfigError::InvalidExtension(format!(
+                    "File_Version 1.0 has no Extensions group; cannot write extension \"{name}\""
+                )));
+            }
         }
         Ok(())
     }
@@ -491,82 +507,6 @@ impl<'a> Hdf5WriterV1_0<'a> {
         Ok(())
     }
 
-    // ------------------------------------------------------------------
-    // OPCUA
-    // ------------------------------------------------------------------
-
-    fn write_opcua(&self, f: &H5File, opcua: &OpcuaConfig) -> Result<()> {
-        // Client
-        let opcua_grp = f.create_group("OPCUA")?;
-        let client_grp = opcua_grp.create_group("Client")?;
-        let c = &opcua.client;
-        ws(&client_grp, "Server_URL", &c.server_url)?;
-        ws(&client_grp, "Auth_Mode", &c.auth_mode)?;
-        ws(&client_grp, "Security_Mode", &c.security_mode)?;
-        ws(&client_grp, "Security_Policy", &c.security_policy)?;
-        client_grp.new_attr::<i64>().create("BFS_Max_Depth")?.write_scalar(&c.bfs_max_depth)?;
-        client_grp.new_attr::<i64>().create("Publish_Interval")?.write_scalar(&c.publish_interval)?;
-        client_grp.new_attr::<i64>().create("Sampling_Interval")?.write_scalar(&c.sampling_interval)?;
-        client_grp.new_attr::<i64>().create("Session_Timeout")?.write_scalar(&c.session_timeout)?;
-        wi(&client_grp, "Keep_Alive_Count", c.keep_alive_count)?;
-        wi(&client_grp, "Lifetime_Count", c.lifetime_count)?;
-        ws(&client_grp, "Machine_Profile", c.machine_profile.as_deref().unwrap_or(""))?;
-        ws(&client_grp, "Queue_Policy", c.queue_policy.as_deref().unwrap_or(""))?;
-        wi(&client_grp, "Queue_Size_Data_Change", c.queue_size_data_change)?;
-        wi(&client_grp, "Queue_Size_Events", c.queue_size_events)?;
-        wi(&client_grp, "Reconnect_Interval", c.reconnect_interval)?;
-        ws(&client_grp, "Root_Node", c.root_node.as_deref().unwrap_or(""))?;
-        wi(&client_grp, "Sync_Loop_Interval_Initial", c.sync_loop_interval_initial)?;
-        wi(&client_grp, "Sync_Loop_Interval_Settled", c.sync_loop_interval_settled)?;
-        for (k, v) in &c.extra {
-            write_extra_value(&client_grp, k, v)?;
-        }
-
-        // Pipe
-        let pipe_grp = opcua_grp.create_group("Pipe")?;
-        let p = &opcua.pipe;
-        pipe_grp.new_attr::<i64>().create("Pipe_Enabled")?.write_scalar(&(p.pipe_enabled as i64))?;
-        pipe_grp.new_attr::<i64>().create("Buffer_Size")?.write_scalar(&p.buffer_size)?;
-        wb(&pipe_grp, "Configure_Client", p.configure_client)?;
-        wi(&pipe_grp, "Inbound_Rate_Limit", p.inbound_rate_limit)?;
-        wi(&pipe_grp, "Max_Inbound_Message_Size", p.max_inbound_message_size)?;
-        ws(&pipe_grp, "Min_Integrity_Level", p.min_integrity_level.as_deref().unwrap_or(""))?;
-        ws(&pipe_grp, "Pipe_Name", p.pipe_name.as_deref().unwrap_or(""))?;
-        ws(&pipe_grp, "User_Access_Level", p.user_access_level.as_deref().unwrap_or(""))?;
-        for (k, v) in &p.extra {
-            write_extra_value(&pipe_grp, k, v)?;
-        }
-
-        // Triggers
-        let triggers_grp = opcua_grp.create_group("Triggers")?;
-        // `Triggers_Enabled` is stored as float64, not int — see §3.10.
-        if let Some(te) = opcua.triggers_enabled {
-            triggers_grp
-                .new_attr::<f64>()
-                .create("Triggers_Enabled")?
-                .write_scalar(&(if te { 1.0_f64 } else { 0.0_f64 }))?;
-        }
-        wi(&triggers_grp, "Trigger_Stop_Ceiling_Layers", opcua.trigger_stop_ceiling_layers)?;
-        for (name, trigger) in &opcua.triggers {
-            let tg = triggers_grp.create_group(name)?;
-            ws(&tg, "ID", trigger.id.as_deref().unwrap_or(""))?;
-            ws(&tg, "Signal", trigger.signal.as_deref().unwrap_or(""))?;
-            ws(&tg, "Subsystem", trigger.subsystem.as_deref().unwrap_or(""))?;
-            wb(&tg, "Rule_Enabled", trigger.rule_enabled)?;
-            ws(&tg, "Start_Value", trigger.start_value.as_deref().unwrap_or(""))?;
-            ws(&tg, "Stop_Value", trigger.stop_value.as_deref().unwrap_or(""))?;
-            ws(&tg, "Case_Sensitivity", trigger.case_sensitivity.as_deref().unwrap_or(""))?;
-            ws(&tg, "Component", trigger.component.as_deref().unwrap_or(""))?;
-            wi(&tg, "Cooldown_Period", trigger.cooldown_period)?;
-            ws(&tg, "Event", trigger.event.as_deref().unwrap_or(""))?;
-            wi(&tg, "Max_Fires_Per_Job", trigger.max_fires_per_job)?;
-            ws(&tg, "Trigger_Label", trigger.trigger_label.as_deref().unwrap_or(""))?;
-            for (k, v) in &trigger.extra {
-                write_extra_value(&tg, k, v)?;
-            }
-        }
-        Ok(())
-    }
 }
 
 // v1.0's implementation of the WriterAdapter contract — this impl is
@@ -947,7 +887,7 @@ mod tests {
         // confirms both survive re-reading. See SYNCHRONOUS_SENSOR_PLAN.md's
         // Phase 0 fixture-layout decision for why both tests are kept.
         let mut config = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
-        assert!(config.opcua.is_some(), "fixture must already have OPCUA before the test adds a sensor");
+        assert!(config.extensions.contains_key("TM_OPCUA"), "fixture must already have OPCUA before the test adds a sensor");
 
         let cb = config.optical_trains[0].optional_components.clearbox.as_mut().unwrap();
         cb.synchronous_sensors.insert(
@@ -986,7 +926,7 @@ mod tests {
         Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap();
         let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
 
-        assert!(rt.opcua.is_some(), "OPCUA must survive alongside the newly-added sensor");
+        assert!(rt.extensions.contains_key("TM_OPCUA"), "OPCUA must survive alongside the newly-added sensor");
         let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
         let sensor_rt = &cb_rt.synchronous_sensors["Oxygen Sensor"];
         assert_eq!(sensor_rt.sensor_name, Some("ZR800 Oxygen Analyzer".to_string()));
@@ -1043,71 +983,20 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_opcua_fields() {
+    fn roundtrip_opcua_extension_tree() {
         let orig = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
         let tmp = NamedTempFile::with_suffix(".h5").unwrap();
         Hdf5WriterV1_0::new(&orig).write(tmp.path()).unwrap();
         let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
 
-        let orig_opcua = orig.opcua.as_ref().unwrap();
-        let rt_opcua = rt.opcua.as_ref().unwrap();
-        assert_eq!(orig_opcua.client.server_url, rt_opcua.client.server_url);
-        assert_eq!(orig_opcua.client.bfs_max_depth, rt_opcua.client.bfs_max_depth);
-        assert_eq!(orig_opcua.client.extra, rt_opcua.client.extra);
-        assert_eq!(orig_opcua.pipe.buffer_size, rt_opcua.pipe.buffer_size);
-        assert_eq!(orig_opcua.triggers_enabled, rt_opcua.triggers_enabled);
-        assert_eq!(orig_opcua.triggers.len(), rt_opcua.triggers.len());
-
-        // The 22 newly-promoted fields + the new trigger_stop_ceiling_layers field.
-        assert_eq!(orig_opcua.client.keep_alive_count, rt_opcua.client.keep_alive_count);
-        assert_eq!(orig_opcua.client.lifetime_count, rt_opcua.client.lifetime_count);
-        assert_eq!(orig_opcua.client.machine_profile, rt_opcua.client.machine_profile);
-        assert_eq!(orig_opcua.client.queue_policy, rt_opcua.client.queue_policy);
-        assert_eq!(orig_opcua.client.queue_size_data_change, rt_opcua.client.queue_size_data_change);
-        assert_eq!(orig_opcua.client.queue_size_events, rt_opcua.client.queue_size_events);
-        assert_eq!(orig_opcua.client.reconnect_interval, rt_opcua.client.reconnect_interval);
-        assert_eq!(orig_opcua.client.root_node, rt_opcua.client.root_node);
-        assert_eq!(orig_opcua.client.sync_loop_interval_initial, rt_opcua.client.sync_loop_interval_initial);
-        assert_eq!(orig_opcua.client.sync_loop_interval_settled, rt_opcua.client.sync_loop_interval_settled);
-        assert_eq!(orig_opcua.pipe.configure_client, rt_opcua.pipe.configure_client);
-        assert_eq!(orig_opcua.pipe.inbound_rate_limit, rt_opcua.pipe.inbound_rate_limit);
-        assert_eq!(orig_opcua.pipe.max_inbound_message_size, rt_opcua.pipe.max_inbound_message_size);
-        assert_eq!(orig_opcua.pipe.min_integrity_level, rt_opcua.pipe.min_integrity_level);
-        assert_eq!(orig_opcua.pipe.pipe_name, rt_opcua.pipe.pipe_name);
-        assert_eq!(orig_opcua.pipe.user_access_level, rt_opcua.pipe.user_access_level);
-        assert_eq!(orig_opcua.trigger_stop_ceiling_layers, rt_opcua.trigger_stop_ceiling_layers);
-        assert_eq!(orig_opcua.trigger_stop_ceiling_layers, Some(3));
-
-        let orig_t = &orig_opcua.triggers["Laser Emission Interlock"];
-        let rt_t = &rt_opcua.triggers["Laser Emission Interlock"];
-        assert_eq!(orig_t.signal, rt_t.signal);
-        assert_eq!(orig_t.rule_enabled, rt_t.rule_enabled);
-        assert_eq!(orig_t.extra, rt_t.extra);
-        assert_eq!(orig_t.case_sensitivity, rt_t.case_sensitivity);
-        assert_eq!(orig_t.component, rt_t.component);
-        assert_eq!(orig_t.cooldown_period, rt_t.cooldown_period);
-        assert_eq!(orig_t.event, rt_t.event);
-        assert_eq!(orig_t.max_fires_per_job, rt_t.max_fires_per_job);
-        assert_eq!(orig_t.trigger_label, rt_t.trigger_label);
-    }
-
-    /// `trigger_stop_ceiling_layers` specifically, including the `None` case —
-    /// the one field that lives directly on `OpcuaConfig` with no `extra`
-    /// bucket to fall back on if the write/read pairing were wrong.
-    #[test]
-    fn roundtrip_trigger_stop_ceiling_layers_none_and_some() {
-        let mut orig = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
-
-        let tmp_some = NamedTempFile::with_suffix(".h5").unwrap();
-        Hdf5WriterV1_0::new(&orig).write(tmp_some.path()).unwrap();
-        let rt_some = MachineConfigReader::open(tmp_some.path()).unwrap().parse().unwrap();
-        assert_eq!(rt_some.opcua.unwrap().trigger_stop_ceiling_layers, Some(3));
-
-        orig.opcua.as_mut().unwrap().trigger_stop_ceiling_layers = None;
-        let tmp_none = NamedTempFile::with_suffix(".h5").unwrap();
-        Hdf5WriterV1_0::new(&orig).write(tmp_none.path()).unwrap();
-        let rt_none = MachineConfigReader::open(tmp_none.path()).unwrap().parse().unwrap();
-        assert_eq!(rt_none.opcua.unwrap().trigger_stop_ceiling_layers, None);
+        let (a, b) = (&orig.extensions["TM_OPCUA"], &rt.extensions["TM_OPCUA"]);
+        assert_eq!(crate::canonical_digest(a).unwrap(), crate::canonical_digest(b).unwrap());
+        // Dtypes survive too: the flag is float64 on disk in this layout.
+        assert_eq!(
+            a.children["Triggers"].attrs["Triggers_Enabled"],
+            b.children["Triggers"].attrs["Triggers_Enabled"]
+        );
+        assert_eq!(b.children["Triggers"].attrs["Trigger_Stop_Ceiling_Layers"].as_i64(), Some(3));
     }
 
     #[test]

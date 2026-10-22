@@ -10,7 +10,6 @@
 package v1_1
 
 import (
-	"strings"
 
 	machineconfig "machine-config-go"
 	"machine-config-go/capabilities/internal/api"
@@ -141,51 +140,6 @@ func (f *File) SetScanner(index int, model machineconfig.Scanner, mode api.SetMo
 	}
 	f.config.OpticalTrains[index].Scanner = merged
 	return nil
-}
-
-// GetOpcua returns the OPCUA config, or an ErrValidation error if OPCUA is
-// present but missing one or more required fields. Same enforcement
-// contract as v1_0.File.GetOpcua — see there for the rationale.
-func (f *File) GetOpcua() (machineconfig.OpcuaConfig, *api.Error) {
-	if err := f.assertOpen(); err != nil {
-		return machineconfig.OpcuaConfig{}, err
-	}
-	if f.config.Opcua == nil {
-		return machineconfig.OpcuaConfig{}, api.Errf(api.ErrNotPresent, "OPCUA group is not present")
-	}
-	opcua := f.config.Opcua
-
-	var missing []string
-	if opcua.Client.MachineProfile == nil {
-		missing = append(missing, "Machine_Profile")
-	}
-	if opcua.Client.RootNode == nil {
-		missing = append(missing, "Root_Node")
-	}
-	if opcua.Pipe.ConfigureClient == nil {
-		missing = append(missing, "Configure_Client")
-	}
-	if opcua.Pipe.PipeName == nil {
-		missing = append(missing, "Pipe_Name")
-	}
-	if opcua.TriggersEnabled == nil {
-		missing = append(missing, "Triggers_Enabled")
-	}
-	if opcua.TriggerStopCeilingLayers == nil {
-		missing = append(missing, "Trigger_Stop_Ceiling_Layers")
-	}
-	for name, trigger := range opcua.Triggers {
-		if trigger.Event == nil {
-			missing = append(missing, name+".Event")
-		}
-	}
-
-	if len(missing) > 0 {
-		msg := "OPCUA is present but missing required field(s): " + strings.Join(missing, ", ")
-		return machineconfig.OpcuaConfig{}, api.Errf(api.ErrValidation, msg, missing...)
-	}
-
-	return api.Snapshot(*opcua), nil
 }
 
 func (f *File) GetClearbox(index int) (machineconfig.ClearBox, *api.Error) {

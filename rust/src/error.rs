@@ -45,7 +45,10 @@ pub enum MachineConfigError {
     /// `train_id=value, train_id=value, ...` breakdown.
     #[error("Consolidate conflict on '{field}': trains disagree — {detail}")]
     ConsolidateConflict { field: &'static str, detail: String },
-}
+    /// An extension tree violates the extension contract, or cannot be stored in this
+    /// `File_Version` (see `extensions.rs`).
+    #[error("Invalid extension: {0}")]
+    InvalidExtension(String),}
 
 /// Shorthand `Result` used throughout the crate.
 pub type Result<T> = std::result::Result<T, MachineConfigError>;

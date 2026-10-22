@@ -7,6 +7,8 @@
  * reference implementation.
  */
 
+import type { ExtensionTree } from "./extensions/contract.js";
+
 // ---------------------------------------------------------------------------
 // Sub-component types
 // ---------------------------------------------------------------------------
@@ -151,8 +153,7 @@ export interface PowerCharacterization {
 /**
  * A single Synchronous Sensor record. Map key (on `ClearBox.synchronous_sensors`)
  * is a free-form label chosen by the file's author — not required to equal
- * any attribute value inside the sensor's own group (same convention as
- * `OpcuaConfig.triggers`'s keys).
+ * any attribute value inside the sensor's own group.
  */
 export interface SynchronousSensor {
   enabled: boolean | null;
@@ -214,9 +215,7 @@ export interface ClearBox {
    * `#[serde(skip_serializing_if = "IndexMap::is_empty")]` and Python's
    * `_clearbox_to_dict` choice to omit the key when empty, so every fixture
    * that doesn't use this feature stays byte-for-byte identical in JSON
-   * shape to before it existed. Same optional-whole-feature shape as
-   * `MachineConfig.opcua?`, not `OpcuaConfig.triggers` (which is always
-   * present, even as `{}`) — deliberately different from that precedent.
+   * shape to before it existed.
    */
   synchronous_sensors?: Record<string, SynchronousSensor>;
   /** v1.1 addition (Change 1); omitted entirely (not `null`) when absent —
@@ -409,68 +408,6 @@ export interface OpticalTrain {
 }
 
 // ---------------------------------------------------------------------------
-// OPC-UA types
-// ---------------------------------------------------------------------------
-
-export interface OpcuaClientConfig {
-  server_url: string;
-  auth_mode: string;
-  security_mode: string;
-  security_policy: string;
-  bfs_max_depth: number;
-  publish_interval: number;
-  sampling_interval: number;
-  session_timeout: number;
-  keep_alive_count: number | null;
-  lifetime_count: number | null;
-  machine_profile: string | null;
-  queue_policy: string | null;
-  queue_size_data_change: number | null;
-  queue_size_events: number | null;
-  reconnect_interval: number | null;
-  root_node: string | null;
-  sync_loop_interval_initial: number | null;
-  sync_loop_interval_settled: number | null;
-  extra: Record<string, unknown>;
-}
-
-export interface OpcuaPipeConfig {
-  pipe_enabled: boolean;
-  buffer_size: number;
-  configure_client: boolean | null;
-  inbound_rate_limit: number | null;
-  max_inbound_message_size: number | null;
-  min_integrity_level: string | null;
-  pipe_name: string | null;
-  user_access_level: string | null;
-  extra: Record<string, unknown>;
-}
-
-export interface OpcuaTrigger {
-  id: string | null;
-  signal: string | null;
-  subsystem: string | null;
-  rule_enabled: boolean | null;
-  start_value: string | null;
-  stop_value: string | null;
-  case_sensitivity: string | null;
-  component: string | null;
-  cooldown_period: number | null;
-  event: string | null;
-  max_fires_per_job: number | null;
-  trigger_label: string | null;
-  extra: Record<string, unknown>;
-}
-
-export interface OpcuaConfig {
-  client: OpcuaClientConfig;
-  pipe: OpcuaPipeConfig;
-  triggers_enabled: boolean | null;
-  trigger_stop_ceiling_layers: number | null;
-  triggers: Record<string, OpcuaTrigger>;
-}
-
-// ---------------------------------------------------------------------------
 // Top-level config
 // ---------------------------------------------------------------------------
 
@@ -478,6 +415,12 @@ export interface MachineConfig {
   meta: MachineConfigMeta;
   machine: Machine;
   optical_trains: OpticalTrain[];
-  /** OPC-UA configuration; omitted when no OPC-UA config is present. */
-  opcua?: OpcuaConfig;
+  /**
+   * Opaque extension trees keyed by their group name under `Extensions/`.
+   * Read and written verbatim by core, so extensions core has no model for
+   * (including private ones) survive a read-modify-write. Interpreted only by
+   * the matching extension library. ClearBox is still modelled in core and is
+   * never listed here.
+   */
+  extensions?: Record<string, ExtensionTree>;
 }

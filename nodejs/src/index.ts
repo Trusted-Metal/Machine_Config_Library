@@ -11,6 +11,25 @@ export { SCHEMA_VERSION, getSchema, validate } from './schema.js';
 export { computeConfigurationHash, canonicalizeForHash } from './hash.js';
 
 export {
+  EXTENSION_CONTRACT_VERSION,
+  EXTENSION_DTYPES,
+  ExtensionContractError,
+  assertValidExtensionTree,
+  emptyExtensionTree,
+} from './extensions/contract.js';
+export type {
+  ExtensionAttr,
+  ExtensionDataset,
+  ExtensionDtype,
+  ExtensionNumericArray,
+  ExtensionScalar,
+  ExtensionTree,
+} from './extensions/contract.js';
+export { canonicalDigest } from './extensions/digest.js';
+export { extensionTreeToJson, extensionTreeFromJson } from './extensions/json.js';
+export type { ExtensionTreeJson } from './extensions/json.js';
+
+export {
   openMachineConfig,
   createMachineConfig,
   supportedFileVersions,
@@ -35,7 +54,6 @@ export type {
   MachineHandle,
   TrainHandle,
   TrainCollection,
-  OpcuaHandle,
   ClearBoxHandle,
   OptionalComponentsHandle,
   MetaModel,

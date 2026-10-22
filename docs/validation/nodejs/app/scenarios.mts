@@ -15,12 +15,14 @@ import { existsSync, globSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  ExtensionContractError,
   MachineConfigFileV1_0,
   MachineConfigReader,
   MachineConfigWriter,
   MockConfigBuilder,
   SetMode,
   UnsupportedFileVersion,
+  canonicalDigest,
   createMachineConfig,
   openMachineConfig,
   supportedFileVersions,
@@ -31,7 +33,6 @@ import type {
   Collimator,
   LightSource,
   MachineConfig,
-  OpcuaConfig,
   OpticalTrain,
   Scanner,
   ScannerCard,
@@ -246,7 +247,7 @@ export async function runS06(_fixturesDir: string, _realDir: string): Promise<[b
   return [true, '2-laser build OK, center≈2.0, roundtrip OK'];
 }
 
-// S-07: OPCUA configuration round-trip
+// S-07: Extension round-trip — the legacy OPCUA group is carried as the opaque "TM_OPCUA" extension tree
 export async function runS07(fixturesDir: string, _realDir: string): Promise<[boolean, string]> {
   const path = join(fixturesDir, 'reference_config_opcua.h5');
   if (!existsSync(path)) {
@@ -254,73 +255,35 @@ export async function runS07(fixturesDir: string, _realDir: string): Promise<[bo
   }
 
   const cfg = await new MachineConfigReader(path).parse();
-  if (cfg.opcua == null) {
-    return [false, 'opcua is undefined after reading OPCUA fixture'];
+  const tree = cfg.extensions?.TM_OPCUA;
+  if (tree == null) {
+    return [false, 'TM_OPCUA extension missing after reading the OPCUA fixture'];
   }
-
-  const origUrl = cfg.opcua.client.server_url;
-  const origTimeout = cfg.opcua.client.session_timeout;
-  const origTriggersEnabled = cfg.opcua.triggers_enabled;
-  const origTriggerNames = new Set(Object.keys(cfg.opcua.triggers));
-  // Newly-promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — a
-  // representative subset, proving the low-level roundtrip works through
-  // the public MachineConfigReader/Writer API too, not just in unit tests.
-  const origMachineProfile = cfg.opcua.client.machine_profile;
-  const origRootNode = cfg.opcua.client.root_node;
-  const origPipeName = cfg.opcua.pipe.pipe_name;
-  const origCeilingLayers = cfg.opcua.trigger_stop_ceiling_layers;
+  const origDigest = canonicalDigest(tree);
+  const origTriggers = Object.keys(tree.children.Triggers.children).sort();
+  const origUrl = tree.children.Client.attrs.Server_URL.value;
 
   const tmp = join(tmpdir(), `s07_${randomUUID()}.h5`);
   await new MachineConfigWriter(cfg).write(tmp);
   const rb = await new MachineConfigReader(tmp).parse();
 
-  if (rb.opcua == null) {
-    return [false, 'opcua is undefined after roundtrip'];
+  const rbTree = rb.extensions?.TM_OPCUA;
+  if (rbTree == null) {
+    return [false, 'TM_OPCUA extension missing after roundtrip'];
   }
-  if (rb.opcua.client.server_url !== origUrl) {
-    return [false, `server_url changed: '${origUrl}' → '${rb.opcua.client.server_url}'`];
+  if (canonicalDigest(rbTree) !== origDigest) {
+    return [false, 'extension digest changed across the roundtrip'];
   }
-  if (rb.opcua.client.session_timeout !== origTimeout) {
-    return [false, `session_timeout changed: ${origTimeout} → ${rb.opcua.client.session_timeout}`];
+  const rbTriggers = Object.keys(rbTree.children.Triggers.children).sort();
+  if (JSON.stringify(rbTriggers) !== JSON.stringify(origTriggers)) {
+    return [false, 'trigger groups changed across the roundtrip'];
   }
-  if (rb.opcua.triggers_enabled !== origTriggersEnabled) {
-    return [false, `triggers_enabled changed: ${origTriggersEnabled} → ${rb.opcua.triggers_enabled}`];
-  }
-
-  const rbNames = new Set(Object.keys(rb.opcua.triggers));
-  if (rbNames.size !== origTriggerNames.size || ![...origTriggerNames].every((n) => rbNames.has(n))) {
-    const missing = [...origTriggerNames].filter((n) => !rbNames.has(n));
-    return [false, `trigger names changed: missing=${JSON.stringify(missing)}`];
+  const rbUrl = rbTree.children.Client.attrs.Server_URL.value;
+  if (rbUrl !== origUrl) {
+    return [false, `Server_URL changed: '${origUrl}' → '${rbUrl}'`];
   }
 
-  const co = 'Chamber Oxygen Level';
-  if (co in cfg.opcua.triggers) {
-    const ot = cfg.opcua.triggers[co], rt = rb.opcua.triggers[co];
-    if (ot.signal !== rt.signal || ot.subsystem !== rt.subsystem) {
-      return [false, `'${co}' signal/subsystem changed`];
-    }
-    if (ot.event !== rt.event || ot.trigger_label !== rt.trigger_label) {
-      return [false, `'${co}' event/trigger_label changed`];
-    }
-  }
-
-  if (rb.opcua.client.machine_profile !== origMachineProfile) {
-    return [false, `machine_profile changed: '${origMachineProfile}' → '${rb.opcua.client.machine_profile}'`];
-  }
-  if (rb.opcua.client.root_node !== origRootNode) {
-    return [false, `root_node changed: '${origRootNode}' → '${rb.opcua.client.root_node}'`];
-  }
-  if (rb.opcua.pipe.pipe_name !== origPipeName) {
-    return [false, `pipe_name changed: '${origPipeName}' → '${rb.opcua.pipe.pipe_name}'`];
-  }
-  if (rb.opcua.trigger_stop_ceiling_layers !== origCeilingLayers) {
-    return [false, `trigger_stop_ceiling_layers changed: ${origCeilingLayers} → ${rb.opcua.trigger_stop_ceiling_layers}`];
-  }
-
-  return [
-    true,
-    `OPCUA roundtrip OK: ${origTriggerNames.size} triggers, url='${origUrl}', machine_profile='${origMachineProfile}'`,
-  ];
+  return [true, `extension roundtrip OK: ${origTriggers.length} trigger groups, digest=${origDigest.slice(0, 16)}...`];
 }
 
 // S-08: Drastic change to real AconityMIDI file — new train, build_plate_x, rotation, clearbox cleared
@@ -389,7 +352,6 @@ export async function runS09(_fixturesDir: string, _realDir: string): Promise<[b
   assertType<Collimator>(cfg.optical_trains[0]?.collimator);
   assertType<ScannerCard>(cfg.optical_trains[0]?.scanner_card);
   assertType<ClearBox | null | undefined>(cfg.optical_trains[0]?.optional_components.clearbox);
-  assertType<OpcuaConfig | undefined>(cfg.opcua);
   assertType<typeof MachineConfigReader>(MachineConfigReader);
   assertType<typeof MachineConfigWriter>(MachineConfigWriter);
 
@@ -686,72 +648,62 @@ export async function runAv11(_fixturesDir: string, _realDir: string): Promise<[
     `machine_name='${v1_0.machine.machine_name}' preserved, file_version='1.0'`];
 }
 
-// AV-12: capabilities facade .opcua() returns Ok with the newly-promoted
-// typed fields readable, when every required field is present.
-//
-// Nothing before this scenario exercised the `capabilities` facade at all —
-// S-07 above only goes through the plain MachineConfigReader/Writer. See
-// OPCUA_FIELD_PROMOTION_PLAN.md's "Validation-app coverage" section for why
-// this is a real public-API guarantee, not just a unit-test concern.
+// AV-12: an edit session through the capabilities facade must preserve the opaque
+// TM_OPCUA extension tree (core has no model for it, so a save must never drop it).
 export async function runAv12(fixturesDir: string, _realDir: string): Promise<[boolean, string]> {
   const path = join(fixturesDir, 'reference_config_opcua.h5');
+  const before = canonicalDigest((await new MachineConfigReader(path).parse()).extensions!.TM_OPCUA);
+
   const opened = await openMachineConfig(path);
   if (!opened.ok) {
     return [false, `openMachineConfig failed: ${JSON.stringify(opened.error)}`];
   }
-
-  const result = opened.value.opcua();
-  if (!result.ok) {
-    return [false, `opcua() failed on fully-populated fixture: ${JSON.stringify(result.error)}`];
+  const train = opened.value.opticalTrain(0);
+  if (!train.ok) {
+    return [false, `opticalTrain(0) failed: ${train.error.message}`];
+  }
+  const edited = train.value.setScanner({ ...train.value.getScanner(), working_distance: 77.5 }, SetMode.Merge);
+  if (!edited.ok) {
+    return [false, `setScanner failed: ${edited.error.message}`];
   }
 
-  const model = result.value.getModel();
-  return [
-    true,
-    `opcua() Ok: machine_profile='${model.client.machine_profile}', ` +
-      `root_node='${model.client.root_node}', pipe_name='${model.pipe.pipe_name}', ` +
-      `triggers_enabled=${model.triggers_enabled}, ` +
-      `trigger_stop_ceiling_layers=${model.trigger_stop_ceiling_layers}`,
-  ];
+  const tmp = join(tmpdir(), `av12_${randomUUID()}.h5`);
+  const saved = await opened.value.save(tmp);
+  if (!saved.ok) {
+    return [false, `save failed: ${saved.error.message}`];
+  }
+  opened.value.close();
+
+  const after = canonicalDigest((await new MachineConfigReader(tmp).parse()).extensions!.TM_OPCUA);
+  if (after !== before) {
+    return [false, `extension digest changed across the session: ${before.slice(0, 16)}... -> ${after.slice(0, 16)}...`];
+  }
+  return [true, `extension survived the edit session, digest=${after.slice(0, 16)}...`];
 }
 
-// AV-13: capabilities facade .opcua() returns Err(ValidationError) with
-// `details` naming exactly the seven missing required fields, when OPCUA is
-// present but incomplete.
+// AV-13: the writer rejects an invalid extension tree before creating any file.
 export async function runAv13(fixturesDir: string, _realDir: string): Promise<[boolean, string]> {
-  const fixture = avFixture(fixturesDir, 'opcua_missing_required.h5');
-  const opened = await openMachineConfig(fixture);
-  if (!opened.ok) {
-    return [false, `openMachineConfig failed: ${JSON.stringify(opened.error)}`];
-  }
+  const parsed = await new MachineConfigReader(join(fixturesDir, 'reference_config.h5')).parse();
+  const cfg: MachineConfig = {
+    ...parsed,
+    meta: { ...parsed.meta, file_version: '1.1' },
+    extensions: { Bad: { attrs: { A: { dtype: 'u8', value: 999 } }, children: {}, datasets: {} } },
+  };
 
-  const result = opened.value.opcua();
-  if (result.ok) {
-    return [false, 'opcua() returned Ok on a fixture missing required fields'];
+  const out = join(tmpdir(), `av13_${randomUUID()}.h5`);
+  try {
+    await new MachineConfigWriter(cfg).write(out);
+  } catch (e) {
+    if (!(e instanceof ExtensionContractError)) {
+      return [false, `unexpected error type: ${String(e)}`];
+    }
+    if (!e.path.includes('@A')) {
+      return [false, `error path does not name the attribute: '${e.path}'`];
+    }
+    if (existsSync(out)) {
+      return [false, 'a file was created despite the rejected extension'];
+    }
+    return [true, `ExtensionContractError at '${e.path}', no file created`];
   }
-
-  if (result.error.code !== 'ValidationError') {
-    return [false, `wrong error code: ${result.error.code}`];
-  }
-
-  const expected = new Set([
-    'Machine_Profile',
-    'Root_Node',
-    'Configure_Client',
-    'Pipe_Name',
-    'Triggers_Enabled',
-    'Trigger_Stop_Ceiling_Layers',
-    'Laser Emission Interlock.Event',
-  ]);
-  const actual = new Set(result.error.details ?? []);
-  const sameSize = actual.size === expected.size;
-  const sameMembers = [...expected].every((d) => actual.has(d));
-  if (!sameSize || !sameMembers) {
-    return [
-      false,
-      `details mismatch: got ${JSON.stringify([...actual].sort())}, expected ${JSON.stringify([...expected].sort())}`,
-    ];
-  }
-
-  return [true, `ValidationError with details=${JSON.stringify([...actual].sort())}`];
+  return [false, 'writer accepted an out-of-range extension attribute'];
 }

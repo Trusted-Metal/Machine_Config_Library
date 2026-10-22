@@ -96,7 +96,6 @@ func (b *MockConfigBuilder) Build() *MachineConfig {
 		Meta:          meta,
 		Machine:       machine,
 		OpticalTrains: trains,
-		Opcua:         nil,
 	}
 }
 

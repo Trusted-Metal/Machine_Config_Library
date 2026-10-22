@@ -19,6 +19,7 @@ use ndarray::Array1;
 use super::hdf5::{RawCalibrationPoint, RawEquationConstant, EQUATION_CONSTANT_NAME_MAX_BYTES};
 use super::layout;
 use crate::error::{MachineConfigError, Result};
+use crate::extensions::{validate_extension_trees, write_extension_tree};
 use crate::models::*;
 use crate::writer::WriterAdapter;
 
@@ -136,6 +137,7 @@ impl<'a> Hdf5WriterV1_1<'a> {
     /// `Software_Trigger_Delay` — see `docs/migrations/v1_0_to_v1_1.md` Change 1's
     /// "Consolidate conflict rule".
     pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        self.validate_extensions()?;
         let f = H5File::create(path)?;
         let root = f.group("/")?;
         self.write_root_attrs(&root)?;
@@ -146,8 +148,24 @@ impl<'a> Hdf5WriterV1_1<'a> {
 
         self.write_optical_trains(&f, &trains_grp)?;
 
-        if let Some(opcua) = &self.config.opcua {
-            self.write_opcua(&f, opcua)?;
+        if !self.config.extensions.is_empty() {
+            let extensions_grp = ensure_group(&f.group("/")?, layout::ROOT_EXTENSIONS)?;
+            for (name, tree) in &self.config.extensions {
+                write_extension_tree(&extensions_grp, name, tree)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Runs before the output file is created, so a rejected config never leaves a partial file.
+    fn validate_extensions(&self) -> Result<()> {
+        validate_extension_trees(&self.config.extensions)?;
+        for name in self.config.extensions.keys() {
+            if layout::MODELLED_EXTENSION_NAMES.contains(&name.as_str()) {
+                return Err(MachineConfigError::InvalidExtension(format!(
+                    "Extension \"{name}\" is modelled by core and cannot be written as an extension tree"
+                )));
+            }
         }
         Ok(())
     }
@@ -619,80 +637,6 @@ impl<'a> Hdf5WriterV1_1<'a> {
         Ok(())
     }
 
-    // ------------------------------------------------------------------
-    // OPCUA (Change 2: relocated to Extensions/TM_OPCUA)
-    // ------------------------------------------------------------------
-
-    fn write_opcua(&self, f: &H5File, opcua: &OpcuaConfig) -> Result<()> {
-        let extensions = ensure_group(&f.group("/")?, layout::ROOT_EXTENSIONS)?;
-        let opcua_grp = extensions.create_group("TM_OPCUA")?;
-
-        let client_grp = opcua_grp.create_group("Client")?;
-        let c = &opcua.client;
-        ws(&client_grp, "Server_URL", &c.server_url)?;
-        ws(&client_grp, "Auth_Mode", &c.auth_mode)?;
-        ws(&client_grp, "Security_Mode", &c.security_mode)?;
-        ws(&client_grp, "Security_Policy", &c.security_policy)?;
-        client_grp.new_attr::<i64>().create("BFS_Max_Depth")?.write_scalar(&c.bfs_max_depth)?;
-        client_grp.new_attr::<i64>().create("Publish_Interval")?.write_scalar(&c.publish_interval)?;
-        client_grp.new_attr::<i64>().create("Sampling_Interval")?.write_scalar(&c.sampling_interval)?;
-        client_grp.new_attr::<i64>().create("Session_Timeout")?.write_scalar(&c.session_timeout)?;
-        wi(&client_grp, "Keep_Alive_Count", c.keep_alive_count)?;
-        wi(&client_grp, "Lifetime_Count", c.lifetime_count)?;
-        ws(&client_grp, "Machine_Profile", c.machine_profile.as_deref().unwrap_or(""))?;
-        ws(&client_grp, "Queue_Policy", c.queue_policy.as_deref().unwrap_or(""))?;
-        wi(&client_grp, "Queue_Size_Data_Change", c.queue_size_data_change)?;
-        wi(&client_grp, "Queue_Size_Events", c.queue_size_events)?;
-        wi(&client_grp, "Reconnect_Interval", c.reconnect_interval)?;
-        ws(&client_grp, "Root_Node", c.root_node.as_deref().unwrap_or(""))?;
-        wi(&client_grp, "Sync_Loop_Interval_Initial", c.sync_loop_interval_initial)?;
-        wi(&client_grp, "Sync_Loop_Interval_Settled", c.sync_loop_interval_settled)?;
-        for (k, v) in &c.extra {
-            write_extra_value(&client_grp, k, v)?;
-        }
-
-        let pipe_grp = opcua_grp.create_group("Pipe")?;
-        let p = &opcua.pipe;
-        pipe_grp.new_attr::<i64>().create("Pipe_Enabled")?.write_scalar(&(p.pipe_enabled as i64))?;
-        pipe_grp.new_attr::<i64>().create("Buffer_Size")?.write_scalar(&p.buffer_size)?;
-        wb(&pipe_grp, "Configure_Client", p.configure_client)?;
-        wi(&pipe_grp, "Inbound_Rate_Limit", p.inbound_rate_limit)?;
-        wi(&pipe_grp, "Max_Inbound_Message_Size", p.max_inbound_message_size)?;
-        ws(&pipe_grp, "Min_Integrity_Level", p.min_integrity_level.as_deref().unwrap_or(""))?;
-        ws(&pipe_grp, "Pipe_Name", p.pipe_name.as_deref().unwrap_or(""))?;
-        ws(&pipe_grp, "User_Access_Level", p.user_access_level.as_deref().unwrap_or(""))?;
-        for (k, v) in &p.extra {
-            write_extra_value(&pipe_grp, k, v)?;
-        }
-
-        let triggers_grp = opcua_grp.create_group("Triggers")?;
-        if let Some(te) = opcua.triggers_enabled {
-            triggers_grp
-                .new_attr::<f64>()
-                .create("Triggers_Enabled")?
-                .write_scalar(&(if te { 1.0_f64 } else { 0.0_f64 }))?;
-        }
-        wi(&triggers_grp, "Trigger_Stop_Ceiling_Layers", opcua.trigger_stop_ceiling_layers)?;
-        for (name, trigger) in &opcua.triggers {
-            let tg = triggers_grp.create_group(name)?;
-            ws(&tg, "ID", trigger.id.as_deref().unwrap_or(""))?;
-            ws(&tg, "Signal", trigger.signal.as_deref().unwrap_or(""))?;
-            ws(&tg, "Subsystem", trigger.subsystem.as_deref().unwrap_or(""))?;
-            wb(&tg, "Rule_Enabled", trigger.rule_enabled)?;
-            ws(&tg, "Start_Value", trigger.start_value.as_deref().unwrap_or(""))?;
-            ws(&tg, "Stop_Value", trigger.stop_value.as_deref().unwrap_or(""))?;
-            ws(&tg, "Case_Sensitivity", trigger.case_sensitivity.as_deref().unwrap_or(""))?;
-            ws(&tg, "Component", trigger.component.as_deref().unwrap_or(""))?;
-            wi(&tg, "Cooldown_Period", trigger.cooldown_period)?;
-            ws(&tg, "Event", trigger.event.as_deref().unwrap_or(""))?;
-            wi(&tg, "Max_Fires_Per_Job", trigger.max_fires_per_job)?;
-            ws(&tg, "Trigger_Label", trigger.trigger_label.as_deref().unwrap_or(""))?;
-            for (k, v) in &trigger.extra {
-                write_extra_value(&tg, k, v)?;
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Change 1 (Consolidate): collect `field` from every ClearBox-bearing train

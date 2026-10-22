@@ -150,7 +150,7 @@ TEST_CASE("RoundtripWithoutClearBox") {
     REQUIRE(rb.meta.machine_name == "MinimalMachine");
     REQUIRE(rb.optical_trains.size() == 1);
     REQUIRE_FALSE(rb.optical_trains[0].optional_components.clearbox.has_value());
-    REQUIRE_FALSE(rb.opcua.has_value());
+    REQUIRE(rb.extensions.empty());
 
     std::filesystem::remove(out);
 }
@@ -297,7 +297,7 @@ TEST_CASE("RoundtripOpcuaAndSynchronousSensorCoexist") {
     auto out = tmpPath("opcua_and_sensor");
     MachineConfigReader src{OPCUA_REF};
     auto cfg = src.parse();
-    REQUIRE(cfg.opcua.has_value());
+    REQUIRE(cfg.extensions.count("TM_OPCUA") == 1);
 
     SynchronousSensor sensor;
     sensor.enabled = true;
@@ -311,7 +311,7 @@ TEST_CASE("RoundtripOpcuaAndSynchronousSensorCoexist") {
     REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
     MachineConfigReader back{out};
     auto rb = back.parse();
-    REQUIRE(rb.opcua.has_value());
+    REQUIRE(rb.extensions.count("TM_OPCUA") == 1);
     const auto& s = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors.at("Oxygen Sensor");
     REQUIRE(s.derivation_equation_constants.size() == 2);
     REQUIRE(s.derivation_equation_constants[0].name == "a");
@@ -333,155 +333,6 @@ TEST_CASE("WriterRejectsEquationConstantNameOver64Bytes") {
     cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["Oversized Name Sensor"] = sensor;
 
     REQUIRE_THROWS_WITH(MachineConfigWriter{cfg}.write(out), Catch::Matchers::ContainsSubstring("does not fit"));
-}
-
-// ---------------------------------------------------------------------------
-// RoundtripWithOpcua
-// Read OPCUA fixture → write → read back → verify OPCUA fields preserved.
-// ---------------------------------------------------------------------------
-TEST_CASE("RoundtripWithOpcua") {
-    auto out = tmpPath("opcua");
-    MachineConfigReader src{OPCUA_REF};
-    auto orig = src.parse();
-    REQUIRE(orig.opcua.has_value());
-
-    REQUIRE_NOTHROW(MachineConfigWriter{orig}.write(out));
-
-    MachineConfigReader back{out};
-    auto rb = back.parse();
-
-    REQUIRE(rb.opcua.has_value());
-    REQUIRE(rb.opcua->client.server_url    == orig.opcua->client.server_url);
-    REQUIRE(rb.opcua->client.session_timeout == orig.opcua->client.session_timeout);
-    REQUIRE(rb.opcua->client.bfs_max_depth == orig.opcua->client.bfs_max_depth);
-    REQUIRE(rb.opcua->pipe.buffer_size     == orig.opcua->pipe.buffer_size);
-    REQUIRE(rb.opcua->triggers_enabled     == orig.opcua->triggers_enabled);
-    REQUIRE(rb.opcua->triggers.size()      == orig.opcua->triggers.size());
-
-    // Verify individual trigger field values survive the write→read cycle.
-    const auto& origT = orig.opcua->triggers.at("Chamber Oxygen Level");
-    const auto& rbT   = rb.opcua->triggers.at("Chamber Oxygen Level");
-    REQUIRE(rbT.signal       == origT.signal);
-    REQUIRE(rbT.subsystem    == origT.subsystem);
-    REQUIRE(rbT.rule_enabled == origT.rule_enabled);
-    REQUIRE(rbT.start_value  == origT.start_value);
-    REQUIRE(rbT.stop_value   == origT.stop_value);
-
-    // Promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — all 22
-    // promoted fields survive a real write→read cycle, not just parsing.
-    const auto& origC = orig.opcua->client;
-    const auto& rbC   = rb.opcua->client;
-    REQUIRE(rbC.keep_alive_count           == origC.keep_alive_count);
-    REQUIRE(rbC.lifetime_count             == origC.lifetime_count);
-    REQUIRE(rbC.machine_profile            == origC.machine_profile);
-    REQUIRE(rbC.queue_policy               == origC.queue_policy);
-    REQUIRE(rbC.queue_size_data_change     == origC.queue_size_data_change);
-    REQUIRE(rbC.queue_size_events          == origC.queue_size_events);
-    REQUIRE(rbC.reconnect_interval         == origC.reconnect_interval);
-    REQUIRE(rbC.root_node                  == origC.root_node);
-    REQUIRE(rbC.sync_loop_interval_initial == origC.sync_loop_interval_initial);
-    REQUIRE(rbC.sync_loop_interval_settled == origC.sync_loop_interval_settled);
-
-    const auto& origP = orig.opcua->pipe;
-    const auto& rbP   = rb.opcua->pipe;
-    REQUIRE(rbP.configure_client         == origP.configure_client);
-    REQUIRE(rbP.inbound_rate_limit       == origP.inbound_rate_limit);
-    REQUIRE(rbP.max_inbound_message_size == origP.max_inbound_message_size);
-    REQUIRE(rbP.min_integrity_level      == origP.min_integrity_level);
-    REQUIRE(rbP.pipe_name                == origP.pipe_name);
-    REQUIRE(rbP.user_access_level        == origP.user_access_level);
-
-    REQUIRE(rb.opcua->trigger_stop_ceiling_layers == orig.opcua->trigger_stop_ceiling_layers);
-    REQUIRE(orig.opcua->trigger_stop_ceiling_layers == std::optional<std::int64_t>{3});
-
-    REQUIRE(rbT.case_sensitivity  == origT.case_sensitivity);
-    REQUIRE(rbT.component         == origT.component);
-    REQUIRE(rbT.cooldown_period   == origT.cooldown_period);
-    REQUIRE(rbT.event             == origT.event);
-    REQUIRE(rbT.max_fires_per_job == origT.max_fires_per_job);
-    REQUIRE(rbT.trigger_label     == origT.trigger_label);
-
-    std::filesystem::remove(out);
-}
-
-// ---------------------------------------------------------------------------
-// RoundtripTriggerStopCeilingLayersNilAndSome
-// The one field with no `extra` bucket to fall back on if the write/read
-// pairing were mismatched — both the real value (3) and the nullopt case.
-// ---------------------------------------------------------------------------
-TEST_CASE("RoundtripTriggerStopCeilingLayersNilAndSome") {
-    MachineConfigReader src{OPCUA_REF};
-    auto cfg = src.parse();
-
-    auto outSome = tmpPath("ceiling_some");
-    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(outSome));
-    MachineConfigReader backSome{outSome};
-    auto rtSome = backSome.parse();
-    REQUIRE(rtSome.opcua->trigger_stop_ceiling_layers == std::optional<std::int64_t>{3});
-    std::filesystem::remove(outSome);
-
-    cfg.opcua->trigger_stop_ceiling_layers = std::nullopt;
-    auto outNone = tmpPath("ceiling_none");
-    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(outNone));
-    MachineConfigReader backNone{outNone};
-    auto rtNone = backNone.parse();
-    REQUIRE_FALSE(rtNone.opcua->trigger_stop_ceiling_layers.has_value());
-    std::filesystem::remove(outNone);
-}
-
-// ---------------------------------------------------------------------------
-// RoundtripOpcuaFromScratch
-// Build an OpcuaConfig in-memory (not from a fixture), write it, read it back.
-// ---------------------------------------------------------------------------
-TEST_CASE("RoundtripOpcuaFromScratch") {
-    auto out = tmpPath("opcua_scratch");
-    auto cfg = makeMinimalConfig();
-
-    OpcuaConfig opcua;
-    opcua.client.server_url        = "opc.tcp://localhost:4840";
-    opcua.client.auth_mode         = "Anonymous";
-    opcua.client.security_mode     = "None";
-    opcua.client.security_policy   = "None";
-    opcua.client.bfs_max_depth     = 8;
-    opcua.client.publish_interval  = 500;
-    opcua.client.sampling_interval = 500;
-    opcua.client.session_timeout   = 30000;
-    opcua.pipe.pipe_enabled        = true;
-    opcua.pipe.buffer_size         = 32768;
-    opcua.triggers_enabled         = true;
-
-    OpcuaTrigger t;
-    t.id           = "trigger_1";
-    t.signal       = "test_signal";
-    t.subsystem    = "TestSys";
-    t.rule_enabled = true;
-    t.start_value  = "0";
-    t.stop_value   = "100";
-    opcua.triggers["TestTrigger"] = std::move(t);
-    cfg.opcua = std::move(opcua);
-
-    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
-
-    MachineConfigReader back{out};
-    auto rb = back.parse();
-
-    REQUIRE(rb.opcua.has_value());
-    REQUIRE(rb.opcua->client.server_url      == "opc.tcp://localhost:4840");
-    REQUIRE(rb.opcua->client.session_timeout == 30000);
-    REQUIRE(rb.opcua->client.bfs_max_depth   == 8);
-    REQUIRE(rb.opcua->pipe.buffer_size       == 32768);
-    REQUIRE(rb.opcua->pipe.pipe_enabled      == true);
-    REQUIRE(rb.opcua->triggers_enabled       == std::optional<bool>{true});
-    REQUIRE(rb.opcua->triggers.size()        == 1);
-
-    const auto& rt = rb.opcua->triggers.at("TestTrigger");
-    REQUIRE(rt.signal      == std::optional<std::string>{"test_signal"});
-    REQUIRE(rt.subsystem   == std::optional<std::string>{"TestSys"});
-    REQUIRE(rt.rule_enabled == std::optional<bool>{true});
-    REQUIRE(rt.start_value  == std::optional<std::string>{"0"});
-    REQUIRE(rt.stop_value   == std::optional<std::string>{"100"});
-
-    std::filesystem::remove(out);
 }
 
 // ---------------------------------------------------------------------------

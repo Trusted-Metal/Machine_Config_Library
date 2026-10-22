@@ -11,10 +11,8 @@ pub const ROOT_MACHINE: &str = "Machine";
 pub const ROOT_OPTICAL_TRAINS: &str = "Machine/Optical_Trains";
 pub const ROOT_EXTENSIONS: &str = "Extensions";
 pub const GROUP_CLEARBOX: &str = "Extensions/ClearBox";
-pub const ROOT_OPCUA: &str = "Extensions/TM_OPCUA";
-pub const OPCUA_CLIENT: &str = "Extensions/TM_OPCUA/Client";
-pub const OPCUA_PIPE: &str = "Extensions/TM_OPCUA/Pipe";
-pub const OPCUA_TRIGGERS: &str = "Extensions/TM_OPCUA/Triggers";
+/// Group names under `Extensions/` that core still models and therefore never exposes as trees.
+pub const MODELLED_EXTENSION_NAMES: &[&str] = &["ClearBox"];
 
 pub const TRAIN_ID_PREFIX: &str = "Optical_Train_";
 pub const GROUP_SCANNER: &str = "Scanner";

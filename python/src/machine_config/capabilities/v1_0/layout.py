@@ -9,10 +9,10 @@ FILE_VERSION = "1.0"
 
 ROOT_MACHINE = "Machine"
 ROOT_OPTICAL_TRAINS = "Machine/Optical_Trains"
+# File_Version 1.0 has no Extensions group: the one extension it can hold lives at the root as ``OPCUA/``.
 ROOT_OPCUA = "OPCUA"
-OPCUA_CLIENT = "OPCUA/Client"
-OPCUA_PIPE = "OPCUA/Pipe"
-OPCUA_TRIGGERS = "OPCUA/Triggers"
+# The extension name core exposes the legacy ``OPCUA/`` group under.
+LEGACY_OPCUA_EXTENSION_NAME = "TM_OPCUA"
 
 TRAIN_ID_PREFIX = "Optical_Train_"
 GROUP_SCANNER = "Scanner"

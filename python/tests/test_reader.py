@@ -351,7 +351,7 @@ class TestSynchronousSensor:
 
     def test_combined_opcua_and_sensors_fixture_has_both(self, opcua_sensors_reader):
         config = opcua_sensors_reader.parse()
-        assert config.opcua is not None
+        assert "TM_OPCUA" in config.extensions
         cb = config.optical_trains[0].optional_components.clearbox
         assert cb.synchronous_sensors["Oxygen Sensor"].sensor_name == "ZR800 Oxygen Analyzer"
 
@@ -500,64 +500,31 @@ class TestOpcua:
 
 
 # ===========================================================================
-# OPCUA — model-level (parse() result on reference_config_opcua.h5)
-# These complement TestOpcua (get_raw_group level) and assert that parse()
-# now returns a fully-populated OpcuaConfig object.
+# Extensions - parse() exposes the legacy OPCUA group as an opaque "TM_OPCUA" tree
 # ===========================================================================
 
-class TestOpcuaModel:
-    def test_opcua_is_none_on_reference_config(self, reference_config):
-        """Standard fixture has no OPCUA group — config.opcua must be None."""
-        assert reference_config.opcua is None
+class TestExtensionsModel:
+    def test_no_extensions_on_reference_config(self, reference_config):
+        assert reference_config.extensions == {}
 
-    def test_opcua_is_populated_on_opcua_fixture(self, opcua_reader):
+    def test_opcua_group_is_an_opaque_extension(self, opcua_reader):
         config = opcua_reader.parse()
-        assert config.opcua is not None
+        assert list(config.extensions) == ["TM_OPCUA"]
+        tree = config.extensions["TM_OPCUA"]
+        assert set(tree.children) >= {"Client", "Pipe", "Triggers"}
 
-    def test_opcua_client_server_url(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.client.server_url == (
+    def test_opaque_attrs_keep_their_stored_dtype(self, opcua_reader):
+        client = opcua_reader.parse().extensions["TM_OPCUA"].children["Client"]
+        assert client.attrs["Server_URL"].dtype == "utf8"
+        assert client.attrs["Server_URL"].value == (
             "opc.tcp://172.17.20.240:62541/TM_OPCUA_DevTemplate_V0.1/TelemetryServer"
         )
+        assert client.attrs["Publish_Interval"].value == 250
 
-    def test_opcua_client_auth_mode(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.client.auth_mode == "UsernamePassword"
-
-    def test_opcua_client_integer_fields(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.client.bfs_max_depth == 16
-        assert config.opcua.client.publish_interval == 250
-        assert config.opcua.client.sampling_interval == 250
-        assert config.opcua.client.session_timeout == 60000
-
-    def test_opcua_pipe_enabled(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.pipe.pipe_enabled is True
-
-    def test_opcua_pipe_buffer_size(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.pipe.buffer_size == 65536
-
-    def test_opcua_triggers_enabled(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.triggers_enabled is True
-
-    def test_opcua_trigger_laser_emission_interlock(self, opcua_reader):
-        config = opcua_reader.parse()
-        t = config.opcua.triggers["Laser Emission Interlock"]
-        assert t.id == "trigger_1"
-        assert t.signal == "yellow_light"
-        assert t.subsystem == "Chamber"
-        assert t.rule_enabled is True
-
-    def test_opcua_trigger_chamber_oxygen(self, opcua_reader):
-        config = opcua_reader.parse()
-        t = config.opcua.triggers["Chamber Oxygen Level"]
-        assert t.id == "trigger_2"
-        assert t.signal == "oxygen_level"
-        assert t.start_value == "700"
-        assert t.stop_value == "1000"
+    def test_trigger_groups_are_children(self, opcua_reader):
+        triggers = opcua_reader.parse().extensions["TM_OPCUA"].children["Triggers"]
+        assert "Laser Emission Interlock" in triggers.children
+        assert "Chamber Oxygen Level" in triggers.children
 
 
 # ===========================================================================

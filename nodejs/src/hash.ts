@@ -34,8 +34,8 @@
  * numeric leaf in this domain effectively came from an HDF5 float64 attribute
  * (and must render with a forced trailing `.0` when whole, e.g. `"250.0"`,
  * to agree with Python/Rust/C++'s own native int/float distinction) *except*
- * a small, known set of genuinely integer-typed fields (OPCUA's
- * `bfs_max_depth`, ClearBox's `data_port`, etc.). This is a leaf *key name*
+ * a small, known set of genuinely integer-typed fields (ClearBox's
+ * `data_port`, etc.). This is a leaf *key name*
  * allowlist (not a full path allowlist), hardcoded below rather than read
  * from `schema/machine_config_v1.schema.json` at runtime — that schema is
  * itself hand-maintained (not generated from the models), so reading it
@@ -47,7 +47,7 @@
  *
  * This allowlist does not cover dynamically-named passthrough `extra`
  * attributes (arbitrary HDF5 attributes preserved verbatim, e.g.
- * `meta.extra`/`OpcuaTrigger.extra`) — those have no fixed key name to
+ * `meta.extra`) — those have no fixed key name to
  * allowlist, and Node's HDF5 reader (`attrExtra`) already collapses both
  * int64 and float64 attribute values to a plain JS `number` with no
  * provenance retained, so a whole-valued float `extra` attribute cannot be
@@ -58,6 +58,7 @@
 import { createHash } from "node:crypto";
 
 import type { MachineConfig } from "./models.js";
+import { canonicalDigest } from "./extensions/digest.js";
 
 /**
  * Every leaf key name in `schema/machine_config_v1.schema.json` declared
@@ -67,30 +68,13 @@ import type { MachineConfig } from "./models.js";
 export const INTEGER_FIELD_NAMES: ReadonlySet<string> = new Set([
   "actual_bit_resolution",
   "actual_timing_offset",
-  "bfs_max_depth",
-  "buffer_size",
   "commanded_bit_resolution",
   "commanded_timing_offset",
-  "cooldown_period",
   "data_port",
   "file_size",
-  "inbound_rate_limit",
-  "keep_alive_count",
-  "lifetime_count",
-  "max_fires_per_job",
-  "max_inbound_message_size",
   "port_id",
-  "publish_interval",
-  "queue_size_data_change",
-  "queue_size_events",
-  "reconnect_interval",
-  "sampling_interval",
   "server_port",
-  "session_timeout",
   "software_trigger_delay",
-  "sync_loop_interval_initial",
-  "sync_loop_interval_settled",
-  "trigger_stop_ceiling_layers",
 ]);
 
 /** Returns the SHA-256 hex digest of `config`'s canonical, hash-relevant content. */
@@ -140,8 +124,17 @@ const INVERT_FLAG_KEYS = [
  *   of being inherited "for free".
  */
 function sanitizeForHash(config: MachineConfig): MachineConfig {
+  const { extensions, ...rest } = config;
+  const sanitized: Record<string, unknown> = { ...rest };
+  // Extension content enters the hash as one canonical digest per extension; absent or empty
+  // `extensions` leaves the hash of every existing config unchanged.
+  if (extensions !== undefined && Object.keys(extensions).length > 0) {
+    sanitized.extensions = Object.fromEntries(
+      Object.entries(extensions).map(([name, tree]) => [name, canonicalDigest(tree)]),
+    );
+  }
   return {
-    ...config,
+    ...(sanitized as unknown as MachineConfig),
     optical_trains: config.optical_trains.map((train) => {
       let next = train;
       if (next.optional_components.clearbox !== null) {

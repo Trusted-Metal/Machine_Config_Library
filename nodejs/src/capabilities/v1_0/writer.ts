@@ -10,7 +10,6 @@ import type {
   ScannerCard,
   ClearBox,
   ScanFieldCorrectionFile,
-  OpcuaConfig,
   SynchronousSensor,
   EquationConstant,
   CalibrationPoint,
@@ -18,6 +17,8 @@ import type {
 import { nestedToFlat } from "../../models.js";
 import { backwardFlatFieldsCoefficients, backwardFlatFieldsPoints } from "../../powerCharacterization.js";
 import * as layout from "./layout.js";
+import { assertValidExtensionTree } from "../../extensions/contract.js";
+import { writeExtensionTree } from "../../extensions/hdf5.js";
 
 // ---------------------------------------------------------------------------
 // WASM init — lazy singleton (shared module-level state with reader.ts when
@@ -436,67 +437,6 @@ function writeOpticalTrain(
   }
 }
 
-function writeOpcua(f: h5wasm.File, opcua: OpcuaConfig): void {
-  const opcuaGrp = f.create_group("OPCUA");
-
-  const clientGrp = opcuaGrp.create_group("Client");
-  const c = opcua.client;
-  ws(clientGrp, "Server_URL", c.server_url);
-  ws(clientGrp, "Auth_Mode", c.auth_mode);
-  ws(clientGrp, "Security_Mode", c.security_mode);
-  ws(clientGrp, "Security_Policy", c.security_policy);
-  clientGrp.create_attribute("BFS_Max_Depth", c.bfs_max_depth, [], "<i8");
-  clientGrp.create_attribute("Publish_Interval", c.publish_interval, [], "<i8");
-  clientGrp.create_attribute("Sampling_Interval", c.sampling_interval, [], "<i8");
-  clientGrp.create_attribute("Session_Timeout", c.session_timeout, [], "<i8");
-  wi(clientGrp, "Keep_Alive_Count", c.keep_alive_count);
-  wi(clientGrp, "Lifetime_Count", c.lifetime_count);
-  ws(clientGrp, "Machine_Profile", c.machine_profile);
-  ws(clientGrp, "Queue_Policy", c.queue_policy);
-  wi(clientGrp, "Queue_Size_Data_Change", c.queue_size_data_change);
-  wi(clientGrp, "Queue_Size_Events", c.queue_size_events);
-  wi(clientGrp, "Reconnect_Interval", c.reconnect_interval);
-  ws(clientGrp, "Root_Node", c.root_node);
-  wi(clientGrp, "Sync_Loop_Interval_Initial", c.sync_loop_interval_initial);
-  wi(clientGrp, "Sync_Loop_Interval_Settled", c.sync_loop_interval_settled);
-  writeExtra(clientGrp, c.extra);
-
-  const pipeGrp = opcuaGrp.create_group("Pipe");
-  const p = opcua.pipe;
-  pipeGrp.create_attribute("Pipe_Enabled", p.pipe_enabled ? 1 : 0, [], "<i8");
-  pipeGrp.create_attribute("Buffer_Size", p.buffer_size, [], "<i8");
-  wb(pipeGrp, "Configure_Client", p.configure_client);
-  wi(pipeGrp, "Inbound_Rate_Limit", p.inbound_rate_limit);
-  wi(pipeGrp, "Max_Inbound_Message_Size", p.max_inbound_message_size);
-  ws(pipeGrp, "Min_Integrity_Level", p.min_integrity_level);
-  ws(pipeGrp, "Pipe_Name", p.pipe_name);
-  ws(pipeGrp, "User_Access_Level", p.user_access_level);
-  writeExtra(pipeGrp, p.extra);
-
-  const triggersGrp = opcuaGrp.create_group("Triggers");
-  if (opcua.triggers_enabled != null) {
-    // Triggers_Enabled is stored as float64 — matches Python (np.float64) and Rust writer.
-    triggersGrp.create_attribute("Triggers_Enabled", opcua.triggers_enabled ? 1.0 : 0.0, [], "<d");
-  }
-  wi(triggersGrp, "Trigger_Stop_Ceiling_Layers", opcua.trigger_stop_ceiling_layers);
-  for (const [name, trigger] of Object.entries(opcua.triggers)) {
-    const tGrp = triggersGrp.create_group(name);
-    ws(tGrp, "ID", trigger.id);
-    ws(tGrp, "Signal", trigger.signal);
-    ws(tGrp, "Subsystem", trigger.subsystem);
-    wb(tGrp, "Rule_Enabled", trigger.rule_enabled);
-    ws(tGrp, "Start_Value", trigger.start_value);
-    ws(tGrp, "Stop_Value", trigger.stop_value);
-    ws(tGrp, "Case_Sensitivity", trigger.case_sensitivity);
-    ws(tGrp, "Component", trigger.component);
-    wi(tGrp, "Cooldown_Period", trigger.cooldown_period);
-    ws(tGrp, "Event", trigger.event);
-    wi(tGrp, "Max_Fires_Per_Job", trigger.max_fires_per_job);
-    ws(tGrp, "Trigger_Label", trigger.trigger_label);
-    writeExtra(tGrp, trigger.extra);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -508,6 +448,13 @@ export class Hdf5WriterV1_0 {
   constructor(private readonly config: MachineConfig) {}
 
   async write(outputPath: string): Promise<void> {
+    const extensions = Object.entries(this.config.extensions ?? {});
+    for (const [name, tree] of extensions) {
+      assertValidExtensionTree(tree, name);
+      if (name !== layout.LEGACY_OPCUA_EXTENSION_NAME) {
+        throw new Error(`File_Version 1.0 has no Extensions group; cannot write extension "${name}"`);
+      }
+    }
     await ensureReady();
     const path = normPath(outputPath);
     const f = new h5wasm.File(path, "w");
@@ -549,9 +496,9 @@ export class Hdf5WriterV1_0 {
         writeOpticalTrain(trainsGrp, i, this.config.optical_trains[i]);
       }
 
-      // OPC-UA (optional)
-      if (this.config.opcua != null) {
-        writeOpcua(f, this.config.opcua);
+      // v1.0 stores the TM_OPCUA extension at the root as `OPCUA/`.
+      for (const [, tree] of extensions) {
+        writeExtensionTree(f, layout.ROOT_OPCUA, tree);
       }
     } finally {
       f.close();

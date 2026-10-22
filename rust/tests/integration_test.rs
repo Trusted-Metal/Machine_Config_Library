@@ -131,27 +131,22 @@ fn test_builder_roundtrip() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_opcua_client_fields() {
-    let config = MachineConfigReader::open(REFERENCE_OPCUA)
-        .unwrap()
-        .parse()
-        .unwrap();
-    let client = config.opcua.unwrap().client;
-    assert!(!client.server_url.is_empty());
-    assert_eq!(client.bfs_max_depth, 16);
-    assert_eq!(client.session_timeout, 60000);
+fn test_opcua_group_is_an_extension_tree() {
+    let config = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
+    let tree = &config.extensions["TM_OPCUA"];
+    let client = &tree.children["Client"];
+    assert!(!client.attrs["Server_URL"].as_str().unwrap().is_empty());
+    assert_eq!(client.attrs["BFS_Max_Depth"].as_i64(), Some(16));
+    assert_eq!(client.attrs["Session_Timeout"].as_i64(), Some(60000));
 }
 
 #[test]
 fn test_opcua_triggers_parsed() {
-    let config = MachineConfigReader::open(REFERENCE_OPCUA)
-        .unwrap()
-        .parse()
-        .unwrap();
-    let opcua = config.opcua.unwrap();
-    assert_eq!(opcua.triggers_enabled, Some(true));
+    let config = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
+    let triggers = &config.extensions["TM_OPCUA"].children["Triggers"];
+    assert_eq!(triggers.attrs["Triggers_Enabled"].as_i64(), Some(1));
     assert!(
-        opcua.triggers.contains_key("Laser Emission Interlock"),
+        triggers.children.contains_key("Laser Emission Interlock"),
         "expected 'Laser Emission Interlock' trigger"
     );
 }
@@ -202,36 +197,6 @@ fn test_writer_roundtrip_correction_data_checksum() {
         cd_hash(&roundtripped),
         "Correction data hash changed across write roundtrip"
     );
-}
-
-#[test]
-fn test_writer_roundtrip_opcua() {
-    let original = MachineConfigReader::open(REFERENCE_OPCUA)
-        .unwrap()
-        .parse()
-        .unwrap();
-    let tmp = NamedTempFile::with_suffix(".h5").unwrap();
-    MachineConfigWriter::new(&original).write(tmp.path()).unwrap();
-    let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
-
-    let orig_opcua = original.opcua.as_ref().unwrap();
-    let rt_opcua = rt.opcua.as_ref().unwrap();
-
-    assert_eq!(rt_opcua.client.server_url, orig_opcua.client.server_url);
-    assert_eq!(rt_opcua.client.session_timeout, orig_opcua.client.session_timeout);
-    assert_eq!(rt_opcua.client.bfs_max_depth, orig_opcua.client.bfs_max_depth);
-    assert_eq!(rt_opcua.pipe.buffer_size, orig_opcua.pipe.buffer_size);
-    assert_eq!(rt_opcua.triggers_enabled, orig_opcua.triggers_enabled);
-    assert_eq!(rt_opcua.triggers.len(), orig_opcua.triggers.len());
-
-    // Verify individual trigger field values survive the write→read cycle.
-    let orig_t = orig_opcua.triggers.get("Chamber Oxygen Level").unwrap();
-    let rt_t   = rt_opcua.triggers.get("Chamber Oxygen Level").unwrap();
-    assert_eq!(rt_t.signal,       orig_t.signal);
-    assert_eq!(rt_t.subsystem,    orig_t.subsystem);
-    assert_eq!(rt_t.rule_enabled, orig_t.rule_enabled);
-    assert_eq!(rt_t.start_value,  orig_t.start_value);
-    assert_eq!(rt_t.stop_value,   orig_t.stop_value);
 }
 
 fn write_future_file_version(path: &std::path::Path) {
@@ -404,3 +369,20 @@ fn test_writer_roundtrip_inverse_correction_data_checksum() {
         "Inverse correction data hash changed across write roundtrip"
     );
 }
+
+#[test]
+fn test_writer_roundtrip_opcua() {
+    let original = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
+    let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+    MachineConfigWriter::new(&original).write(tmp.path()).unwrap();
+    let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
+
+    let (a, b) = (&original.extensions["TM_OPCUA"], &rt.extensions["TM_OPCUA"]);
+    assert_eq!(
+        machine_config::canonical_digest(a).unwrap(),
+        machine_config::canonical_digest(b).unwrap()
+    );
+    let oxygen = |t: &machine_config::ExtensionTree| t.children["Triggers"].children["Chamber Oxygen Level"].clone();
+    assert_eq!(oxygen(a), oxygen(b));
+}
+

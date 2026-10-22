@@ -23,7 +23,6 @@ from machine_config.models import (
     Collimator,
     LightSource,
     MachineConfig,
-    OpcuaConfig,
     OpticalTrain,
     ScanFieldCorrectionFile,
     Scanner,
@@ -37,6 +36,8 @@ from machine_config.power_characterization import (
     backward_flat_fields_points,
 )
 
+from machine_config.extension_contract import validate_tree
+from machine_config.extensions_hdf5 import write_extension_tree
 from . import layout
 from .hdf5 import (
     EQUATION_CONSTANT_NAME_MAX_BYTES,
@@ -55,14 +56,26 @@ class Hdf5WriterV1_0:
     # Public API
     # ------------------------------------------------------------------
 
+    def _validate_extensions(self) -> None:
+        """Runs before the output file is created, so a rejected config never leaves a partial file."""
+        for name, tree in self.config.extensions.items():
+            validate_tree(tree, name)
+            if name != layout.LEGACY_OPCUA_EXTENSION_NAME:
+                raise ValueError(
+                    f'File_Version 1.0 has no Extensions group; cannot write extension "{name}"'
+                )
+
     def write(self, path: str | Path) -> None:
         """Write *config* to an HDF5 file at *path* (creates or overwrites)."""
+        self._validate_extensions()
         with h5py.File(Path(path), "w") as f:
             self._write_root_attrs(f)
             self._write_machine(f)
             self._write_optical_trains(f)
-            if self.config.opcua is not None:
-                self._write_opcua(f, self.config.opcua)
+            # v1.0 stores the TM_OPCUA extension at the root as ``OPCUA/``.
+            tree = self.config.extensions.get(layout.LEGACY_OPCUA_EXTENSION_NAME)
+            if tree is not None:
+                write_extension_tree(f, layout.ROOT_OPCUA, tree)
 
     # ------------------------------------------------------------------
     # Type-conversion helpers — exact inverses of reader helpers
@@ -377,66 +390,4 @@ class Hdf5WriterV1_0:
         ds.attrs["document_created_at"] = self._s(sfcf.document_created_at)
         ds.attrs["document_type"]       = self._s(sfcf.document_type)
         ds.attrs["original_uri"]        = self._s(sfcf.original_uri)
-
-    def _write_opcua(self, f: h5py.File, opcua: OpcuaConfig) -> None:
-        # ---- Client --------------------------------------------------------------
-        cg = f.require_group(layout.OPCUA_CLIENT)
-        c  = opcua.client
-        cg.attrs["Server_URL"]        = c.server_url
-        cg.attrs["Auth_Mode"]         = c.auth_mode
-        cg.attrs["Security_Mode"]     = c.security_mode
-        cg.attrs["Security_Policy"]   = c.security_policy
-        cg.attrs["BFS_Max_Depth"]     = int(c.bfs_max_depth)
-        cg.attrs["Publish_Interval"]  = int(c.publish_interval)
-        cg.attrs["Sampling_Interval"] = int(c.sampling_interval)
-        cg.attrs["Session_Timeout"]   = int(c.session_timeout)
-        cg.attrs["Keep_Alive_Count"]           = self._i(c.keep_alive_count)
-        cg.attrs["Lifetime_Count"]             = self._i(c.lifetime_count)
-        cg.attrs["Machine_Profile"]            = self._s(c.machine_profile)
-        cg.attrs["Queue_Policy"]               = self._s(c.queue_policy)
-        cg.attrs["Queue_Size_Data_Change"]     = self._i(c.queue_size_data_change)
-        cg.attrs["Queue_Size_Events"]          = self._i(c.queue_size_events)
-        cg.attrs["Reconnect_Interval"]         = self._i(c.reconnect_interval)
-        cg.attrs["Root_Node"]                  = self._s(c.root_node)
-        cg.attrs["Sync_Loop_Interval_Initial"] = self._i(c.sync_loop_interval_initial)
-        cg.attrs["Sync_Loop_Interval_Settled"] = self._i(c.sync_loop_interval_settled)
-        for k, v in c.extra.items():
-            cg.attrs[k] = v
-
-        # ---- Pipe ----------------------------------------------------------------
-        pg = f.require_group(layout.OPCUA_PIPE)
-        p  = opcua.pipe
-        pg.attrs["Pipe_Enabled"] = 1 if p.pipe_enabled else 0
-        pg.attrs["Buffer_Size"]  = int(p.buffer_size)
-        pg.attrs["Configure_Client"]         = self._b(p.configure_client)
-        pg.attrs["Inbound_Rate_Limit"]       = self._i(p.inbound_rate_limit)
-        pg.attrs["Max_Inbound_Message_Size"] = self._i(p.max_inbound_message_size)
-        pg.attrs["Min_Integrity_Level"]      = self._s(p.min_integrity_level)
-        pg.attrs["Pipe_Name"]                = self._s(p.pipe_name)
-        pg.attrs["User_Access_Level"]        = self._s(p.user_access_level)
-        for k, v in p.extra.items():
-            pg.attrs[k] = v
-
-        # ---- Triggers ------------------------------------------------------------
-        tg = f.require_group(layout.OPCUA_TRIGGERS)
-        if opcua.triggers_enabled is not None:
-            tg.attrs["Triggers_Enabled"] = np.float64(1.0 if opcua.triggers_enabled else 0.0)
-        tg.attrs["Trigger_Stop_Ceiling_Layers"] = self._i(opcua.trigger_stop_ceiling_layers)
-
-        for name, trigger in opcua.triggers.items():
-            sg = tg.require_group(name)
-            sg.attrs["ID"]           = self._s(trigger.id)
-            sg.attrs["Signal"]       = self._s(trigger.signal)
-            sg.attrs["Subsystem"]    = self._s(trigger.subsystem)
-            sg.attrs["Rule_Enabled"] = self._b(trigger.rule_enabled)
-            sg.attrs["Start_Value"]  = self._s(trigger.start_value)
-            sg.attrs["Stop_Value"]   = self._s(trigger.stop_value)
-            sg.attrs["Case_Sensitivity"]  = self._s(trigger.case_sensitivity)
-            sg.attrs["Component"]         = self._s(trigger.component)
-            sg.attrs["Cooldown_Period"]   = self._i(trigger.cooldown_period)
-            sg.attrs["Event"]             = self._s(trigger.event)
-            sg.attrs["Max_Fires_Per_Job"] = self._i(trigger.max_fires_per_job)
-            sg.attrs["Trigger_Label"]     = self._s(trigger.trigger_label)
-            for k, v in trigger.extra.items():
-                sg.attrs[k] = v
 

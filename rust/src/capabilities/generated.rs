@@ -7,7 +7,7 @@ use crate::capabilities::errors::CapabilityError;
 use crate::capabilities::result::Result;
 use crate::models::{
     ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfigMeta,
-    OpcuaConfig, OpticalTrain, Scanner, ScannerCard,
+    OpticalTrain, Scanner, ScannerCard,
 };
 use std::path::Path;
 
@@ -52,9 +52,6 @@ pub trait MachineConfigFile {
 
     fn get_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError>;
     fn get_inverse_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError>;
-
-    fn get_opcua(&self) -> Result<OpcuaConfig, CapabilityError>;
-    fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError>;
 
     fn is_valid(&self) -> bool;
 

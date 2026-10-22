@@ -15,8 +15,10 @@
 // the reader's `validate()` step (Phase 3.5), not in these plain data structs.
 
 use indexmap::IndexMap;
+use mcf_extension_contract::ExtensionTree;
 use ndarray::Array3;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Raw correction grid read directly from a ClearBox HDF5 dataset.
 ///
@@ -488,87 +490,16 @@ pub struct MachineConfigMeta {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OpcuaClientConfig {
-    pub server_url: String,
-    pub auth_mode: String,
-    pub security_mode: String,
-    pub security_policy: String,
-    pub bfs_max_depth: i64,
-    pub publish_interval: i64,
-    pub sampling_interval: i64,
-    pub session_timeout: i64,
-    pub keep_alive_count: Option<i64>,
-    pub lifetime_count: Option<i64>,
-    pub machine_profile: Option<String>,
-    pub queue_policy: Option<String>,
-    pub queue_size_data_change: Option<i64>,
-    pub queue_size_events: Option<i64>,
-    pub reconnect_interval: Option<i64>,
-    pub root_node: Option<String>,
-    pub sync_loop_interval_initial: Option<i64>,
-    pub sync_loop_interval_settled: Option<i64>,
-    /// Preserves any non-typed HDF5 attrs.
-    #[serde(default)]
-    pub extra: ExtraAttrs,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OpcuaPipeConfig {
-    /// HDF5 int 0/1.
-    pub pipe_enabled: bool,
-    pub buffer_size: i64,
-    /// HDF5 int 0/1.
-    pub configure_client: Option<bool>,
-    pub inbound_rate_limit: Option<i64>,
-    pub max_inbound_message_size: Option<i64>,
-    pub min_integrity_level: Option<String>,
-    pub pipe_name: Option<String>,
-    pub user_access_level: Option<String>,
-    /// Preserves any non-typed HDF5 attrs.
-    #[serde(default)]
-    pub extra: ExtraAttrs,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OpcuaTrigger {
-    pub id: Option<String>,
-    pub signal: Option<String>,
-    pub subsystem: Option<String>,
-    /// HDF5 int 0/1.
-    pub rule_enabled: Option<bool>,
-    pub start_value: Option<String>,
-    pub stop_value: Option<String>,
-    pub case_sensitivity: Option<String>,
-    pub component: Option<String>,
-    pub cooldown_period: Option<i64>,
-    pub event: Option<String>,
-    pub max_fires_per_job: Option<i64>,
-    pub trigger_label: Option<String>,
-    #[serde(default)]
-    pub extra: ExtraAttrs,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OpcuaConfig {
-    pub client: OpcuaClientConfig,
-    pub pipe: OpcuaPipeConfig,
-    /// Key = trigger label (HDF5 sub-group name under `OPCUA/Triggers/`).
-    /// `IndexMap` preserves HDF5 group enumeration order.
-    pub triggers: IndexMap<String, OpcuaTrigger>,
-    /// HDF5 float64 `0.0`/`1.0` on the `OPCUA/Triggers` group attrs — not an int.
-    pub triggers_enabled: Option<bool>,
-    pub trigger_stop_ceiling_layers: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MachineConfig {
     pub meta: MachineConfigMeta,
     pub machine: Machine,
     pub optical_trains: Vec<OpticalTrain>,
-    /// Machine connectivity configuration, outside the canonical schema (§0.2).
-    /// Omitted from JSON entirely when absent (not serialised as `null`).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub opcua: Option<OpcuaConfig>,
+    /// Opaque extension trees keyed by their group name under `Extensions/`. Read and written
+    /// verbatim by core, so extensions core has no model for (including private ones) survive a
+    /// read-modify-write; only the matching extension library interprets them. ClearBox is still
+    /// modelled in core and is never listed here. Omitted from JSON when empty.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
+    pub extensions: BTreeMap<String, ExtensionTree>,
 }
 
 #[cfg(test)]
@@ -726,7 +657,7 @@ mod tests {
                 recoater_blade_type: Some("Standard".into()),
             },
             optical_trains: vec![sample_train()],
-            opcua: None,
+            extensions: Default::default(),
         }
     }
 
@@ -745,83 +676,18 @@ mod tests {
     }
 
     #[test]
-    fn absent_opcua_is_omitted_not_null() {
-        let config = sample_config();
-        let json = serde_json::to_string(&config).unwrap();
-        assert!(!json.contains("\"opcua\""), "opcua key must be omitted when None");
-    }
-
-    #[test]
-    fn present_opcua_serialises_as_object() {
+    fn extensions_are_omitted_when_empty_and_roundtrip_through_json() {
         let mut config = sample_config();
-        let mut triggers = IndexMap::new();
-        triggers.insert(
-            "Laser Emission Interlock".to_string(),
-            OpcuaTrigger {
-                id: None,
-                signal: Some("E-Stop".into()),
-                subsystem: None,
-                rule_enabled: Some(true),
-                start_value: None,
-                stop_value: None,
-                case_sensitivity: Some("Exact".into()),
-                component: Some("machine_state_indicator".into()),
-                cooldown_period: Some(0),
-                event: Some("SensorEvents".into()),
-                max_fires_per_job: Some(0),
-                trigger_label: Some("Laser Emission Interlock".into()),
-                extra: IndexMap::new(),
-            },
-        );
-        config.opcua = Some(OpcuaConfig {
-            client: OpcuaClientConfig {
-                server_url: "opc.tcp://localhost:4840".into(),
-                auth_mode: "Anonymous".into(),
-                security_mode: "None".into(),
-                security_policy: "None".into(),
-                bfs_max_depth: 16,
-                publish_interval: 100,
-                sampling_interval: 100,
-                session_timeout: 60000,
-                keep_alive_count: Some(240),
-                lifetime_count: Some(2400),
-                machine_profile: Some("Aconity".into()),
-                queue_policy: Some("DropOldest".into()),
-                queue_size_data_change: Some(100),
-                queue_size_events: Some(7200),
-                reconnect_interval: Some(10000),
-                root_node: Some("MachineFleet".into()),
-                sync_loop_interval_initial: Some(1000),
-                sync_loop_interval_settled: Some(30000),
-                extra: IndexMap::new(),
-            },
-            pipe: OpcuaPipeConfig {
-                pipe_enabled: true,
-                buffer_size: 4096,
-                configure_client: Some(true),
-                inbound_rate_limit: Some(-1),
-                max_inbound_message_size: Some(65536),
-                min_integrity_level: Some("0x2000".into()),
-                pipe_name: Some("\\\\.\\pipe\\opc_ua_client_pipe".into()),
-                user_access_level: Some("AnyLocalUser".into()),
-                extra: IndexMap::new(),
-            },
-            triggers,
-            triggers_enabled: Some(true),
-            trigger_stop_ceiling_layers: Some(3),
-        });
-
         let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("\"extensions\""), "extensions key must be omitted when empty");
+
+        let mut tree = ExtensionTree::default();
+        tree.attrs.insert("Flag".into(), mcf_extension_contract::Attr::scalar(1u32));
+        config.extensions.insert("Private_Ext".into(), tree);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"extensions\""));
         let roundtripped: MachineConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, roundtripped);
-        let opcua = roundtripped.opcua.unwrap();
-        assert_eq!(opcua.triggers_enabled, Some(true));
-        assert_eq!(opcua.trigger_stop_ceiling_layers, Some(3));
-        assert!(opcua.triggers.contains_key("Laser Emission Interlock"));
-        let trigger = &opcua.triggers["Laser Emission Interlock"];
-        assert_eq!(trigger.event, Some("SensorEvents".into()));
-        assert_eq!(opcua.client.machine_profile, Some("Aconity".into()));
-        assert_eq!(opcua.pipe.pipe_name, Some("\\\\.\\pipe\\opc_ua_client_pipe".into()));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 package models
 
+import "machine-config-go/extension"
+
 import "math"
 
 // StrPtr returns a pointer to s.
@@ -96,7 +98,10 @@ type MachineConfig struct {
 	Meta          MachineConfigMeta `json:"meta"`
 	Machine       Machine           `json:"machine"`
 	OpticalTrains []OpticalTrain    `json:"optical_trains"`
-	Opcua         *OpcuaConfig      `json:"opcua,omitempty"`
+	// Extensions holds opaque extension trees keyed by group name under Extensions/. Core reads and
+	// writes them verbatim (see docs/EXTENSION_CONTRACT.md); ClearBox is modelled by core and never
+	// listed here.
+	Extensions map[string]*extension.Tree `json:"extensions,omitempty"`
 }
 
 // MachineConfigMeta holds root-level metadata attributes.
@@ -417,66 +422,4 @@ type ScanFieldCorrectionFile struct {
 	DocumentType      *string `json:"document_type"`
 	OriginalURI       *string `json:"original_uri"`
 	RawBytes          []byte  `json:"raw_bytes,omitempty"`
-}
-
-// OpcuaConfig holds OPC-UA connectivity configuration.
-type OpcuaConfig struct {
-	Client                   OpcuaClientConfig       `json:"client"`
-	Pipe                     OpcuaPipeConfig         `json:"pipe"`
-	TriggersEnabled          *bool                   `json:"triggers_enabled"`
-	TriggerStopCeilingLayers *int                    `json:"trigger_stop_ceiling_layers"`
-	Triggers                 map[string]OpcuaTrigger `json:"triggers"`
-}
-
-// OpcuaClientConfig holds OPC-UA client connection settings.
-type OpcuaClientConfig struct {
-	ServerURL               string         `json:"server_url"`
-	AuthMode                string         `json:"auth_mode"`
-	SecurityMode            string         `json:"security_mode"`
-	SecurityPolicy          string         `json:"security_policy"`
-	BfsMaxDepth             int            `json:"bfs_max_depth"`
-	PublishInterval         int            `json:"publish_interval"`
-	SamplingInterval        int            `json:"sampling_interval"`
-	SessionTimeout          int            `json:"session_timeout"`
-	KeepAliveCount          *int           `json:"keep_alive_count"`
-	LifetimeCount           *int           `json:"lifetime_count"`
-	MachineProfile          *string        `json:"machine_profile"`
-	QueuePolicy             *string        `json:"queue_policy"`
-	QueueSizeDataChange     *int           `json:"queue_size_data_change"`
-	QueueSizeEvents         *int           `json:"queue_size_events"`
-	ReconnectInterval       *int           `json:"reconnect_interval"`
-	RootNode                *string        `json:"root_node"`
-	SyncLoopIntervalInitial *int           `json:"sync_loop_interval_initial"`
-	SyncLoopIntervalSettled *int           `json:"sync_loop_interval_settled"`
-	Extra                   map[string]any `json:"extra"`
-}
-
-// OpcuaPipeConfig holds OPC-UA pipe settings.
-type OpcuaPipeConfig struct {
-	PipeEnabled           bool           `json:"pipe_enabled"`
-	BufferSize            int            `json:"buffer_size"`
-	ConfigureClient       *bool          `json:"configure_client"`
-	InboundRateLimit      *int           `json:"inbound_rate_limit"`
-	MaxInboundMessageSize *int           `json:"max_inbound_message_size"`
-	MinIntegrityLevel     *string        `json:"min_integrity_level"`
-	PipeName              *string        `json:"pipe_name"`
-	UserAccessLevel       *string        `json:"user_access_level"`
-	Extra                 map[string]any `json:"extra"`
-}
-
-// OpcuaTrigger holds one OPC-UA trigger rule.
-type OpcuaTrigger struct {
-	ID              *string        `json:"id"`
-	Signal          *string        `json:"signal"`
-	Subsystem       *string        `json:"subsystem"`
-	RuleEnabled     *bool          `json:"rule_enabled"`
-	StartValue      *string        `json:"start_value"`
-	StopValue       *string        `json:"stop_value"`
-	CaseSensitivity *string        `json:"case_sensitivity"`
-	Component       *string        `json:"component"`
-	CooldownPeriod  *int           `json:"cooldown_period"`
-	Event           *string        `json:"event"`
-	MaxFiresPerJob  *int           `json:"max_fires_per_job"`
-	TriggerLabel    *string        `json:"trigger_label"`
-	Extra           map[string]any `json:"extra"`
 }

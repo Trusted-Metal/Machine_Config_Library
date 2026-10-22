@@ -17,7 +17,6 @@ import type {
   ScannerCard,
   ClearBox,
   ScanFieldCorrectionFile,
-  OpcuaConfig,
   SynchronousSensor,
   PowerCharacterization,
   EquationConstant,
@@ -25,6 +24,8 @@ import type {
 } from "../../models.js";
 import { nestedToFlat } from "../../models.js";
 import * as layout from "./layout.js";
+import { assertValidExtensionTree } from "../../extensions/contract.js";
+import { writeExtensionTree } from "../../extensions/hdf5.js";
 
 // ---------------------------------------------------------------------------
 // WASM init — lazy singleton, module-local.
@@ -432,70 +433,6 @@ function writeTrainAttrs(grp: h5wasm.Group, train: OpticalTrain): void {
   ws(grp, "Thermal_Lensing_Threshold_unit", train.thermal_lensing_threshold_unit);
 }
 
-function writeOpcua(f: h5wasm.File, opcua: OpcuaConfig): void {
-  const extensionsGrp = f.get(layout.ROOT_EXTENSIONS);
-  const opcuaGrp =
-    extensionsGrp instanceof h5wasm.Group
-      ? extensionsGrp.create_group("TM_OPCUA")
-      : f.create_group(layout.ROOT_EXTENSIONS).create_group("TM_OPCUA");
-
-  const clientGrp = opcuaGrp.create_group("Client");
-  const c = opcua.client;
-  ws(clientGrp, "Server_URL", c.server_url);
-  ws(clientGrp, "Auth_Mode", c.auth_mode);
-  ws(clientGrp, "Security_Mode", c.security_mode);
-  ws(clientGrp, "Security_Policy", c.security_policy);
-  clientGrp.create_attribute("BFS_Max_Depth", c.bfs_max_depth, [], "<i8");
-  clientGrp.create_attribute("Publish_Interval", c.publish_interval, [], "<i8");
-  clientGrp.create_attribute("Sampling_Interval", c.sampling_interval, [], "<i8");
-  clientGrp.create_attribute("Session_Timeout", c.session_timeout, [], "<i8");
-  wi(clientGrp, "Keep_Alive_Count", c.keep_alive_count);
-  wi(clientGrp, "Lifetime_Count", c.lifetime_count);
-  ws(clientGrp, "Machine_Profile", c.machine_profile);
-  ws(clientGrp, "Queue_Policy", c.queue_policy);
-  wi(clientGrp, "Queue_Size_Data_Change", c.queue_size_data_change);
-  wi(clientGrp, "Queue_Size_Events", c.queue_size_events);
-  wi(clientGrp, "Reconnect_Interval", c.reconnect_interval);
-  ws(clientGrp, "Root_Node", c.root_node);
-  wi(clientGrp, "Sync_Loop_Interval_Initial", c.sync_loop_interval_initial);
-  wi(clientGrp, "Sync_Loop_Interval_Settled", c.sync_loop_interval_settled);
-  writeExtra(clientGrp, c.extra);
-
-  const pipeGrp = opcuaGrp.create_group("Pipe");
-  const p = opcua.pipe;
-  pipeGrp.create_attribute("Pipe_Enabled", p.pipe_enabled ? 1 : 0, [], "<i8");
-  pipeGrp.create_attribute("Buffer_Size", p.buffer_size, [], "<i8");
-  wb(pipeGrp, "Configure_Client", p.configure_client);
-  wi(pipeGrp, "Inbound_Rate_Limit", p.inbound_rate_limit);
-  wi(pipeGrp, "Max_Inbound_Message_Size", p.max_inbound_message_size);
-  ws(pipeGrp, "Min_Integrity_Level", p.min_integrity_level);
-  ws(pipeGrp, "Pipe_Name", p.pipe_name);
-  ws(pipeGrp, "User_Access_Level", p.user_access_level);
-  writeExtra(pipeGrp, p.extra);
-
-  const triggersGrp = opcuaGrp.create_group("Triggers");
-  if (opcua.triggers_enabled != null) {
-    triggersGrp.create_attribute("Triggers_Enabled", opcua.triggers_enabled ? 1.0 : 0.0, [], "<d");
-  }
-  wi(triggersGrp, "Trigger_Stop_Ceiling_Layers", opcua.trigger_stop_ceiling_layers);
-  for (const [name, trigger] of Object.entries(opcua.triggers)) {
-    const tGrp = triggersGrp.create_group(name);
-    ws(tGrp, "ID", trigger.id);
-    ws(tGrp, "Signal", trigger.signal);
-    ws(tGrp, "Subsystem", trigger.subsystem);
-    wb(tGrp, "Rule_Enabled", trigger.rule_enabled);
-    ws(tGrp, "Start_Value", trigger.start_value);
-    ws(tGrp, "Stop_Value", trigger.stop_value);
-    ws(tGrp, "Case_Sensitivity", trigger.case_sensitivity);
-    ws(tGrp, "Component", trigger.component);
-    wi(tGrp, "Cooldown_Period", trigger.cooldown_period);
-    ws(tGrp, "Event", trigger.event);
-    wi(tGrp, "Max_Fires_Per_Job", trigger.max_fires_per_job);
-    ws(tGrp, "Trigger_Label", trigger.trigger_label);
-    writeExtra(tGrp, trigger.extra);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Change 1: Consolidate (Output_Path / Software_Trigger_Delay)
 // ---------------------------------------------------------------------------
@@ -530,6 +467,16 @@ function consolidate<T>(
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Validates every extension tree and rejects names core still models, before the output file is created. */
+function assertExtensionsWritable(config: MachineConfig): void {
+  for (const [name, tree] of Object.entries(config.extensions ?? {})) {
+    assertValidExtensionTree(tree, name);
+    if (layout.MODELLED_EXTENSION_NAMES.has(name)) {
+      throw new Error(`Extension "${name}" is modelled by core and cannot be written as an extension tree`);
+    }
+  }
+}
+
 /**
  * File_Version 1.1 HDF5 writer. Public MachineConfigWriter dispatches here.
  */
@@ -537,6 +484,7 @@ export class Hdf5WriterV1_1 {
   constructor(private readonly config: MachineConfig) {}
 
   async write(outputPath: string): Promise<void> {
+    assertExtensionsWritable(this.config);
     await ensureReady();
     const path = normPath(outputPath);
     const f = new h5wasm.File(path, "w");
@@ -583,7 +531,8 @@ export class Hdf5WriterV1_1 {
         if (cb != null) trainsWithClearbox.push({ tid: layout.trainId(i), cb });
       }
 
-      const needsExtensions = trainsWithClearbox.length > 0 || this.config.opcua != null;
+      const extensions = Object.entries(this.config.extensions ?? {});
+      const needsExtensions = trainsWithClearbox.length > 0 || extensions.length > 0;
       const extensionsGrp = needsExtensions ? f.create_group(layout.ROOT_EXTENSIONS) : null;
 
       let clearboxRootGrp: h5wasm.Group | null = null;
@@ -620,9 +569,8 @@ export class Hdf5WriterV1_1 {
         }
       }
 
-      // OPC-UA (optional) — relocated to Extensions/TM_OPCUA/ (Change 2).
-      if (this.config.opcua != null) {
-        writeOpcua(f, this.config.opcua);
+      for (const [name, tree] of extensions) {
+        writeExtensionTree(extensionsGrp as h5wasm.Group, name, tree);
       }
     } finally {
       f.close();

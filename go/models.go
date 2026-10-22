@@ -33,8 +33,4 @@ type (
 	CalibrationPoint        = models.CalibrationPoint
 	PowerCharacterization   = models.PowerCharacterization
 	ScanFieldCorrectionFile = models.ScanFieldCorrectionFile
-	OpcuaConfig             = models.OpcuaConfig
-	OpcuaClientConfig       = models.OpcuaClientConfig
-	OpcuaPipeConfig         = models.OpcuaPipeConfig
-	OpcuaTrigger            = models.OpcuaTrigger
 )

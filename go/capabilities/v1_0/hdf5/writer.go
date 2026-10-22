@@ -6,12 +6,17 @@ import (
 	"fmt"
 
 	"machine-config-go/capabilities/v1_0/layout"
+	"machine-config-go/extension"
+	"machine-config-go/internal/extio"
 	"machine-config-go/internal/h5c"
 	. "machine-config-go/internal/models"
 )
 
 // Write serialises cfg to a File_Version 1.0 HDF5 file at path.
 func Write(cfg *MachineConfig, path string) error {
+	if err := validateExtensions(cfg); err != nil {
+		return err
+	}
 	f, err := h5c.Create(path)
 	if err != nil {
 		return fmt.Errorf("create %q: %w", path, err)
@@ -56,15 +61,23 @@ func Write(cfg *MachineConfig, path string) error {
 		}
 	}
 
-	if cfg.Opcua != nil {
-		opcuaGrp, err := root.CreateGroup(layout.RootOPCUA)
-		if err != nil {
+	if tree, ok := cfg.Extensions[layout.LegacyOpcuaExtensionName]; ok {
+		if err := extio.WriteTree(root, layout.RootOPCUA, tree); err != nil {
 			return err
 		}
-		err = writeOpcua(opcuaGrp, cfg.Opcua)
-		opcuaGrp.Close()
-		if err != nil {
+	}
+	return nil
+}
+
+// validateExtensions runs before the output file is created, so a rejected config never leaves a
+// partial file behind. File_Version 1.0 can only hold the legacy OPCUA/ extension.
+func validateExtensions(cfg *MachineConfig) error {
+	for name, tree := range cfg.Extensions {
+		if err := extension.Validate(tree, name); err != nil {
 			return err
+		}
+		if name != layout.LegacyOpcuaExtensionName {
+			return fmt.Errorf("File_Version 1.0 has no Extensions group; cannot write extension %q", name)
 		}
 	}
 	return nil
@@ -923,193 +936,3 @@ func writeSFCF(g *h5c.Group, sfcf *ScanFieldCorrectionFile) error {
 // OPCUA/
 // ---------------------------------------------------------------------------
 
-func writeOpcua(g *h5c.Group, opcua *OpcuaConfig) error {
-	clientGrp, err := g.CreateGroup("Client")
-	if err != nil {
-		return err
-	}
-	defer clientGrp.Close()
-	c := &opcua.Client
-	if err := ws(clientGrp, "Server_URL", c.ServerURL); err != nil {
-		return err
-	}
-	if err := ws(clientGrp, "Auth_Mode", c.AuthMode); err != nil {
-		return err
-	}
-	if err := ws(clientGrp, "Security_Mode", c.SecurityMode); err != nil {
-		return err
-	}
-	if err := ws(clientGrp, "Security_Policy", c.SecurityPolicy); err != nil {
-		return err
-	}
-	if err := clientGrp.WriteInt64Attr("BFS_Max_Depth", int64(c.BfsMaxDepth)); err != nil {
-		return err
-	}
-	if err := clientGrp.WriteInt64Attr("Publish_Interval", int64(c.PublishInterval)); err != nil {
-		return err
-	}
-	if err := clientGrp.WriteInt64Attr("Sampling_Interval", int64(c.SamplingInterval)); err != nil {
-		return err
-	}
-	if err := clientGrp.WriteInt64Attr("Session_Timeout", int64(c.SessionTimeout)); err != nil {
-		return err
-	}
-	if err := wi(clientGrp, "Keep_Alive_Count", c.KeepAliveCount); err != nil {
-		return err
-	}
-	if err := wi(clientGrp, "Lifetime_Count", c.LifetimeCount); err != nil {
-		return err
-	}
-	if err := ws(clientGrp, "Machine_Profile", strOrEmpty(c.MachineProfile)); err != nil {
-		return err
-	}
-	if err := ws(clientGrp, "Queue_Policy", strOrEmpty(c.QueuePolicy)); err != nil {
-		return err
-	}
-	if err := wi(clientGrp, "Queue_Size_Data_Change", c.QueueSizeDataChange); err != nil {
-		return err
-	}
-	if err := wi(clientGrp, "Queue_Size_Events", c.QueueSizeEvents); err != nil {
-		return err
-	}
-	if err := wi(clientGrp, "Reconnect_Interval", c.ReconnectInterval); err != nil {
-		return err
-	}
-	if err := ws(clientGrp, "Root_Node", strOrEmpty(c.RootNode)); err != nil {
-		return err
-	}
-	if err := wi(clientGrp, "Sync_Loop_Interval_Initial", c.SyncLoopIntervalInitial); err != nil {
-		return err
-	}
-	if err := wi(clientGrp, "Sync_Loop_Interval_Settled", c.SyncLoopIntervalSettled); err != nil {
-		return err
-	}
-	for k, v := range c.Extra {
-		if err := writeExtra(clientGrp, k, v); err != nil {
-			return err
-		}
-	}
-
-	pipeGrp, err := g.CreateGroup("Pipe")
-	if err != nil {
-		return err
-	}
-	defer pipeGrp.Close()
-	p := &opcua.Pipe
-	var pipeEnabled int64
-	if p.PipeEnabled {
-		pipeEnabled = 1
-	}
-	if err := pipeGrp.WriteInt64Attr("Pipe_Enabled", pipeEnabled); err != nil {
-		return err
-	}
-	if err := pipeGrp.WriteInt64Attr("Buffer_Size", int64(p.BufferSize)); err != nil {
-		return err
-	}
-	if err := wb(pipeGrp, "Configure_Client", p.ConfigureClient); err != nil {
-		return err
-	}
-	if err := wi(pipeGrp, "Inbound_Rate_Limit", p.InboundRateLimit); err != nil {
-		return err
-	}
-	if err := wi(pipeGrp, "Max_Inbound_Message_Size", p.MaxInboundMessageSize); err != nil {
-		return err
-	}
-	if err := ws(pipeGrp, "Min_Integrity_Level", strOrEmpty(p.MinIntegrityLevel)); err != nil {
-		return err
-	}
-	if err := ws(pipeGrp, "Pipe_Name", strOrEmpty(p.PipeName)); err != nil {
-		return err
-	}
-	if err := ws(pipeGrp, "User_Access_Level", strOrEmpty(p.UserAccessLevel)); err != nil {
-		return err
-	}
-	for k, v := range p.Extra {
-		if err := writeExtra(pipeGrp, k, v); err != nil {
-			return err
-		}
-	}
-
-	triggersGrp, err := g.CreateGroup("Triggers")
-	if err != nil {
-		return err
-	}
-	defer triggersGrp.Close()
-
-	// Triggers_Enabled is stored as float64, not int — same as Rust.
-	if opcua.TriggersEnabled != nil {
-		var te float64
-		if *opcua.TriggersEnabled {
-			te = 1.0
-		}
-		if err := triggersGrp.WriteFloat64Attr("Triggers_Enabled", te); err != nil {
-			return err
-		}
-	}
-	if err := wi(triggersGrp, "Trigger_Stop_Ceiling_Layers", opcua.TriggerStopCeilingLayers); err != nil {
-		return err
-	}
-
-	for name, trigger := range opcua.Triggers {
-		tGrp, err := triggersGrp.CreateGroup(name)
-		if err != nil {
-			return err
-		}
-		if err := ws(tGrp, "ID", strOrEmpty(trigger.ID)); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := ws(tGrp, "Signal", strOrEmpty(trigger.Signal)); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := ws(tGrp, "Subsystem", strOrEmpty(trigger.Subsystem)); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := wb(tGrp, "Rule_Enabled", trigger.RuleEnabled); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := ws(tGrp, "Start_Value", strOrEmpty(trigger.StartValue)); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := ws(tGrp, "Stop_Value", strOrEmpty(trigger.StopValue)); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := ws(tGrp, "Case_Sensitivity", strOrEmpty(trigger.CaseSensitivity)); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := ws(tGrp, "Component", strOrEmpty(trigger.Component)); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := wi(tGrp, "Cooldown_Period", trigger.CooldownPeriod); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := ws(tGrp, "Event", strOrEmpty(trigger.Event)); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := wi(tGrp, "Max_Fires_Per_Job", trigger.MaxFiresPerJob); err != nil {
-			tGrp.Close()
-			return err
-		}
-		if err := ws(tGrp, "Trigger_Label", strOrEmpty(trigger.TriggerLabel)); err != nil {
-			tGrp.Close()
-			return err
-		}
-		for k, v := range trigger.Extra {
-			if err := writeExtra(tGrp, k, v); err != nil {
-				tGrp.Close()
-				return err
-			}
-		}
-		tGrp.Close()
-	}
-	return nil
-}

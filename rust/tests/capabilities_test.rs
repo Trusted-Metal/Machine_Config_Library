@@ -16,10 +16,6 @@ static REFERENCE_OPCUA: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../fixtures/reference_config_opcua.h5"
 );
-static OPCUA_MISSING_REQUIRED: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../docs/validation/fixtures/opcua_missing_required.h5"
-);
 static REFERENCE_SENSORS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../fixtures/reference_config_synchronous_sensors.h5"
@@ -90,82 +86,17 @@ fn invalid_index() {
 }
 
 #[test]
-fn opcua_not_present_vs_present() {
-    let no_opc = open_machine_config(REFERENCE).unwrap();
-    assert!(matches!(
-        no_opc.get_opcua().unwrap_err(),
-        CapabilityError::NotPresent(_)
-    ));
+fn opcua_extension_tree_survives_a_session_save() {
+    let mut file = open_machine_config(REFERENCE_OPCUA).unwrap();
+    let out = NamedTempFile::with_suffix(".h5").unwrap();
+    file.save(Some(out.path())).unwrap();
 
-    let with_opc = open_machine_config(REFERENCE_OPCUA).unwrap();
-    assert!(with_opc.get_opcua().is_ok());
-}
-
-#[test]
-fn opcua_required_fields_present_on_reference_fixture() {
-    let file = open_machine_config(REFERENCE_OPCUA).unwrap();
-    let opcua = file.get_opcua().expect("all required fields are present on this fixture");
-    // Sanity-check a couple of the fields the check depends on, so a future
-    // accidental fixture edit fails loudly here rather than only downstream.
-    assert!(opcua.client.machine_profile.is_some());
-    assert!(opcua.triggers.values().all(|t| t.event.is_some()));
-}
-
-#[test]
-fn opcua_missing_required_fields_reports_all_seven_at_once() {
-    let file = open_machine_config(OPCUA_MISSING_REQUIRED).unwrap();
-    let err = file.get_opcua().unwrap_err();
-    let details = match err {
-        CapabilityError::ValidationError { details: Some(details), .. } => details,
-        other => panic!("expected ValidationError with details, got {other:?}"),
-    };
-
-    let mut actual = details.clone();
-    actual.sort();
-    let mut expected = vec![
-        "Machine_Profile".to_string(),
-        "Root_Node".to_string(),
-        "Configure_Client".to_string(),
-        "Pipe_Name".to_string(),
-        "Triggers_Enabled".to_string(),
-        "Trigger_Stop_Ceiling_Layers".to_string(),
-        "Laser Emission Interlock.Event".to_string(),
-    ];
-    expected.sort();
-    assert_eq!(actual, expected, "details must name exactly the seven missing fields");
-
-    // The other trigger still has Event — must not be reported as missing.
-    assert!(!details.iter().any(|d| d.starts_with("Chamber Oxygen Level")));
-}
-
-#[test]
-fn opcua_optional_field_never_appears_in_missing_details() {
-    // opcua_missing_required.h5 only clears the 7 required fields — every
-    // optional field is still present there, so absence of an optional field
-    // from `details` would be trivially true. To make this a real check
-    // (not a tautology), also clear an optional field (keep_alive_count) in
-    // memory, re-write to a temp file, and confirm `details` still names
-    // exactly the same 7 required fields — not 8.
-    let mut config = MachineConfigReader::open(OPCUA_MISSING_REQUIRED)
-        .unwrap()
-        .parse()
-        .unwrap();
-    config.opcua.as_mut().unwrap().client.keep_alive_count = None;
-    let tmp = NamedTempFile::with_suffix(".h5").unwrap();
-    MachineConfigWriter::new(&config).write(tmp.path()).unwrap();
-
-    let file = open_machine_config(tmp.path()).unwrap();
-    let err = file.get_opcua().unwrap_err();
-    let details = match err {
-        CapabilityError::ValidationError { details: Some(details), .. } => details,
-        other => panic!("expected ValidationError with details, got {other:?}"),
-    };
-
-    assert!(
-        !details.iter().any(|d| d.contains("Keep_Alive_Count")),
-        "optional field must never appear in details, even when genuinely absent: {details:?}"
+    let before = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
+    let after = MachineConfigReader::open(out.path()).unwrap().parse().unwrap();
+    assert_eq!(
+        machine_config::canonical_digest(&after.extensions["TM_OPCUA"]).unwrap(),
+        machine_config::canonical_digest(&before.extensions["TM_OPCUA"]).unwrap()
     );
-    assert_eq!(details.len(), 7, "clearing an optional field must not change the missing count");
 }
 
 #[test]
@@ -201,7 +132,8 @@ fn combined_fixture_has_opcua_and_synchronous_sensors_through_facade() {
     // proves the internal adapter, reader.rs proves the plain public
     // MachineConfigReader, this proves the capabilities facade too.
     let file = open_machine_config(REFERENCE_OPCUA_SENSORS).unwrap();
-    assert!(file.get_opcua().is_ok(), "OPCUA must be present on the combined fixture");
+    let config = MachineConfigReader::open(REFERENCE_OPCUA_SENSORS).unwrap().parse().unwrap();
+    assert!(config.extensions.contains_key("TM_OPCUA"), "OPCUA must be present on the combined fixture");
     let cb = file.get_clearbox(0).unwrap().unwrap();
     assert_eq!(
         cb.synchronous_sensors["Oxygen Sensor"].sensor_name,

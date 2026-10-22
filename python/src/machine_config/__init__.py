@@ -10,10 +10,6 @@ from .models import (
     Machine,
     MachineConfig,
     MachineConfigMeta,
-    OpcuaClientConfig,
-    OpcuaConfig,
-    OpcuaPipeConfig,
-    OpcuaTrigger,
     OpticalTrain,
     OptionalComponents,
     PowerCharacterization,
@@ -23,6 +19,17 @@ from .models import (
     SynchronousSensor,
 )
 from .reader import MachineConfigReader, config_from_dict
+from .extension_contract import (
+    EXTENSION_CONTRACT_VERSION,
+    Attr,
+    Dataset,
+    ExtensionContractError,
+    ExtensionTree,
+    canonical_digest,
+    tree_from_json,
+    tree_to_json,
+    validate_tree,
+)
 from .writer import MachineConfigWriter
 from .builder import ConfigEditor, MockConfigBuilder, YamlConfigBuilder
 from .capabilities import (
@@ -39,6 +46,15 @@ from .capabilities import (
 )
 
 __all__ = [
+    "EXTENSION_CONTRACT_VERSION",
+    "Attr",
+    "Dataset",
+    "ExtensionContractError",
+    "ExtensionTree",
+    "canonical_digest",
+    "tree_from_json",
+    "tree_to_json",
+    "validate_tree",
     "AxisConfig",
     "BuildPlate",
     "CalibrationPoint",
@@ -53,10 +69,6 @@ __all__ = [
     "MachineConfigReader",
     "MachineConfigWriter",
     "MockConfigBuilder",
-    "OpcuaClientConfig",
-    "OpcuaConfig",
-    "OpcuaPipeConfig",
-    "OpcuaTrigger",
     "OpticalTrain",
     "OptionalComponents",
     "PowerCharacterization",

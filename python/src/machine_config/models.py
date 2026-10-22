@@ -4,6 +4,8 @@ from typing import Any, Optional
 
 import numpy as np
 
+from machine_config.extension_contract import ExtensionTree
+
 
 def nan_array_to_nested(arr: np.ndarray) -> list:
     """Convert a float64 ndarray to a nested Python list, mapping NaN -> None.
@@ -381,70 +383,10 @@ class MachineConfigMeta:
 
 
 @dataclass
-class OpcuaClientConfig:
-    server_url: str
-    auth_mode: str
-    security_mode: str
-    security_policy: str
-    bfs_max_depth: int
-    publish_interval: int
-    sampling_interval: int
-    session_timeout: int
-    keep_alive_count: Optional[int] = None
-    lifetime_count: Optional[int] = None
-    machine_profile: Optional[str] = None
-    queue_policy: Optional[str] = None
-    queue_size_data_change: Optional[int] = None
-    queue_size_events: Optional[int] = None
-    reconnect_interval: Optional[int] = None
-    root_node: Optional[str] = None
-    sync_loop_interval_initial: Optional[int] = None
-    sync_loop_interval_settled: Optional[int] = None
-    extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed HDF5 attrs
-
-
-@dataclass
-class OpcuaPipeConfig:
-    pipe_enabled: bool                   # HDF5 int 0/1
-    buffer_size: int
-    configure_client: Optional[bool] = None      # HDF5 int 0/1
-    inbound_rate_limit: Optional[int] = None
-    max_inbound_message_size: Optional[int] = None
-    min_integrity_level: Optional[str] = None
-    pipe_name: Optional[str] = None
-    user_access_level: Optional[str] = None
-    extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed HDF5 attrs
-
-
-@dataclass
-class OpcuaTrigger:
-    id: Optional[str] = None
-    signal: Optional[str] = None
-    subsystem: Optional[str] = None
-    rule_enabled: Optional[bool] = None  # HDF5 int 0/1
-    start_value: Optional[str] = None
-    stop_value: Optional[str] = None
-    case_sensitivity: Optional[str] = None
-    component: Optional[str] = None
-    cooldown_period: Optional[int] = None
-    event: Optional[str] = None
-    max_fires_per_job: Optional[int] = None
-    trigger_label: Optional[str] = None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class OpcuaConfig:
-    client: OpcuaClientConfig
-    pipe: OpcuaPipeConfig
-    triggers: dict[str, OpcuaTrigger]
-    triggers_enabled: Optional[bool] = None  # HDF5 float 0.0/1.0 on OPCUA/Triggers group
-    trigger_stop_ceiling_layers: Optional[int] = None  # HDF5 int on OPCUA/Triggers group
-
-
-@dataclass
 class MachineConfig:
     meta: MachineConfigMeta
     machine: Machine
     optical_trains: list[OpticalTrain]
-    opcua: Optional[OpcuaConfig] = None
+    # Opaque extension trees keyed by group name under ``Extensions/``; read and written verbatim
+    # by core (see machine_config.extension_contract). ClearBox is modelled in core, never listed here.
+    extensions: dict[str, ExtensionTree] = field(default_factory=dict)

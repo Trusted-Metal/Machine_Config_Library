@@ -5,7 +5,7 @@ import { unlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
 import * as h5wasm from 'h5wasm/node';
-import { MachineConfigWriter } from '../src/index.js';
+import { MachineConfigWriter, canonicalDigest } from '../src/index.js';
 import { MachineConfigReader } from '../src/index.js';
 import { UnsupportedFileVersion } from '../src/capabilities/index.js';
 import { MockConfigBuilder } from '../src/builder.js';
@@ -216,8 +216,8 @@ describe('MachineConfigWriter — reference roundtrip', () => {
     expect(back?.ip_address).toBe(orig?.ip_address);
   });
 
-  it('no opcua in non-opcua fixture roundtrip', () => {
-    expect(rt.opcua).toBeUndefined();
+  it('no extensions in a fixture without an OPCUA group roundtrip', () => {
+    expect(rt.extensions).toBeUndefined();
   });
 
   it('synchronous_sensors survives roundtrip as omitted (undefined), not {}', () => {
@@ -331,12 +331,10 @@ describe('MachineConfigWriter — SynchronousSensor roundtrip', () => {
   });
 
   it('OPCUA and a newly-added sensor coexist through the writer', async () => {
-    // Proves the Writer side of the cross-feature guarantee: parses a real
-    // OPCUA-only fixture, adds a sensor purely in memory, writes, and
-    // confirms both survive re-reading (mirrors Rust's and Python's
-    // equivalent tests).
+    // Parses a real OPCUA-only fixture, adds a sensor purely in memory, writes, and
+    // confirms the OPCUA extension tree and the sensor both survive re-reading.
     const cfg: MachineConfig = structuredClone(referenceOpcua);
-    expect(cfg.opcua).toBeDefined();
+    expect(cfg.extensions?.TM_OPCUA).toBeDefined();
     cfg.optical_trains[0].optional_components.clearbox!.synchronous_sensors = {
       'Oxygen Sensor': blankSensor({
         enabled: true,
@@ -354,7 +352,7 @@ describe('MachineConfigWriter — SynchronousSensor roundtrip', () => {
       }),
     };
     const rt = await roundtrip(cfg);
-    expect(rt.opcua).toBeDefined();
+    expect(canonicalDigest(rt.extensions!.TM_OPCUA)).toBe(canonicalDigest(referenceOpcua.extensions!.TM_OPCUA));
     const sensor = rt.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
     expect(sensor.derivation_equation_constants).toEqual([
       { name: 'a', value: 0.4375 },
@@ -379,121 +377,44 @@ describe('MachineConfigWriter — SynchronousSensor roundtrip', () => {
 // Roundtrip: OPC-UA fixture
 // ---------------------------------------------------------------------------
 
-describe('MachineConfigWriter — OPC-UA roundtrip', () => {
+describe('MachineConfigWriter — OPC-UA extension roundtrip', () => {
   let rt: MachineConfig;
 
   beforeAll(async () => {
     rt = await roundtrip(referenceOpcua);
   }, 60_000);
 
-  it('opcua block is preserved', () => {
-    expect(rt.opcua).toBeDefined();
+  const val = (t: { attrs: Record<string, { value: unknown }> }, name: string) => t.attrs[name]?.value;
+
+  it('the TM_OPCUA tree is preserved verbatim (same canonical digest)', () => {
+    expect(rt.extensions).toBeDefined();
+    expect(canonicalDigest(rt.extensions!.TM_OPCUA)).toBe(canonicalDigest(referenceOpcua.extensions!.TM_OPCUA));
   });
 
-  it('opcua server_url survives roundtrip', () => {
-    expect(rt.opcua!.client.server_url).toBe(referenceOpcua.opcua!.client.server_url);
+  it('there is no typed opcua model on either side', () => {
+    expect(rt).not.toHaveProperty('opcua');
+    expect(referenceOpcua).not.toHaveProperty('opcua');
   });
 
-  it('opcua session_timeout survives roundtrip', () => {
-    expect(rt.opcua!.client.session_timeout).toBe(referenceOpcua.opcua!.client.session_timeout);
+  it('client, pipe and trigger attributes survive with their dtype', () => {
+    const orig = referenceOpcua.extensions!.TM_OPCUA;
+    const back = rt.extensions!.TM_OPCUA;
+    expect(back.children.Client.attrs.Server_URL).toEqual(orig.children.Client.attrs.Server_URL);
+    expect(back.children.Client.attrs.Session_Timeout).toEqual(orig.children.Client.attrs.Session_Timeout);
+    expect(back.children.Pipe.attrs.Pipe_Name).toEqual(orig.children.Pipe.attrs.Pipe_Name);
+    expect(back.children.Triggers.attrs.Triggers_Enabled).toEqual(orig.children.Triggers.attrs.Triggers_Enabled);
   });
 
-  it('opcua triggers_enabled survives roundtrip', () => {
-    expect(rt.opcua!.triggers_enabled).toBe(referenceOpcua.opcua!.triggers_enabled);
+  it('trigger groups and their attributes survive', () => {
+    const t = rt.extensions!.TM_OPCUA.children.Triggers.children;
+    expect(Object.keys(t).sort()).toEqual(['Chamber Oxygen Level', 'Laser Emission Interlock']);
+    expect(val(t['Chamber Oxygen Level'], 'Start_Value')).toBe('700');
+    expect(val(t['Laser Emission Interlock'], 'Event')).toBe('SensorEvents');
   });
 
-  it('opcua trigger names are preserved', () => {
-    const origKeys = Object.keys(referenceOpcua.opcua!.triggers).sort();
-    const rtKeys   = Object.keys(rt.opcua!.triggers).sort();
-    expect(rtKeys).toEqual(origKeys);
-  });
-
-  it('opcua trigger signal survives roundtrip', () => {
-    const origTriggers = referenceOpcua.opcua!.triggers;
-    const firstName = Object.keys(origTriggers)[0];
-    expect(rt.opcua!.triggers[firstName]?.signal)
-      .toBe(origTriggers[firstName]?.signal);
-  });
-
-  it('"Chamber Oxygen Level" trigger subsystem survives roundtrip', () => {
-    expect(rt.opcua!.triggers['Chamber Oxygen Level']?.subsystem)
-      .toBe(referenceOpcua.opcua!.triggers['Chamber Oxygen Level']?.subsystem);
-  });
-
-  it('"Chamber Oxygen Level" trigger rule_enabled survives roundtrip', () => {
-    expect(rt.opcua!.triggers['Chamber Oxygen Level']?.rule_enabled)
-      .toBe(referenceOpcua.opcua!.triggers['Chamber Oxygen Level']?.rule_enabled);
-  });
-
-  it('"Chamber Oxygen Level" trigger start_value and stop_value survive roundtrip', () => {
-    const orig = referenceOpcua.opcua!.triggers['Chamber Oxygen Level']!;
-    const rtT  = rt.opcua!.triggers['Chamber Oxygen Level']!;
-    expect(rtT.start_value).toBe(orig.start_value);
-    expect(rtT.stop_value).toBe(orig.stop_value);
-  });
-
-  // Newly-promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — the
-  // 22 promoted fields survive a real write→read cycle, not just parsing.
-  it('client promoted fields survive roundtrip', () => {
-    const orig = referenceOpcua.opcua!.client;
-    const rtC  = rt.opcua!.client;
-    expect(rtC.keep_alive_count).toBe(orig.keep_alive_count);
-    expect(rtC.lifetime_count).toBe(orig.lifetime_count);
-    expect(rtC.machine_profile).toBe(orig.machine_profile);
-    expect(rtC.queue_policy).toBe(orig.queue_policy);
-    expect(rtC.queue_size_data_change).toBe(orig.queue_size_data_change);
-    expect(rtC.queue_size_events).toBe(orig.queue_size_events);
-    expect(rtC.reconnect_interval).toBe(orig.reconnect_interval);
-    expect(rtC.root_node).toBe(orig.root_node);
-    expect(rtC.sync_loop_interval_initial).toBe(orig.sync_loop_interval_initial);
-    expect(rtC.sync_loop_interval_settled).toBe(orig.sync_loop_interval_settled);
-  });
-
-  it('pipe promoted fields survive roundtrip', () => {
-    const orig = referenceOpcua.opcua!.pipe;
-    const rtP  = rt.opcua!.pipe;
-    expect(rtP.configure_client).toBe(orig.configure_client);
-    expect(rtP.inbound_rate_limit).toBe(orig.inbound_rate_limit);
-    expect(rtP.max_inbound_message_size).toBe(orig.max_inbound_message_size);
-    expect(rtP.min_integrity_level).toBe(orig.min_integrity_level);
-    expect(rtP.pipe_name).toBe(orig.pipe_name);
-    expect(rtP.user_access_level).toBe(orig.user_access_level);
-  });
-
-  it('"Laser Emission Interlock" trigger promoted fields survive roundtrip', () => {
-    const orig = referenceOpcua.opcua!.triggers['Laser Emission Interlock']!;
-    const rtT  = rt.opcua!.triggers['Laser Emission Interlock']!;
-    expect(rtT.case_sensitivity).toBe(orig.case_sensitivity);
-    expect(rtT.component).toBe(orig.component);
-    expect(rtT.cooldown_period).toBe(orig.cooldown_period);
-    expect(rtT.event).toBe(orig.event);
-    expect(rtT.max_fires_per_job).toBe(orig.max_fires_per_job);
-    expect(rtT.trigger_label).toBe(orig.trigger_label);
-  });
-
-  it('trigger_stop_ceiling_layers survives roundtrip (value = 3)', () => {
-    expect(referenceOpcua.opcua!.trigger_stop_ceiling_layers).toBe(3);
-    expect(rt.opcua!.trigger_stop_ceiling_layers).toBe(3);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// trigger_stop_ceiling_layers — dedicated null/non-null roundtrip
-// ---------------------------------------------------------------------------
-
-describe('MachineConfigWriter — trigger_stop_ceiling_layers roundtrip', () => {
-  it('round-trips a real value (3)', async () => {
-    const rt = await roundtrip(referenceOpcua);
-    expect(rt.opcua!.trigger_stop_ceiling_layers).toBe(3);
-  });
-
-  it('round-trips null when cleared', async () => {
-    const cleared: MachineConfig = {
-      ...referenceOpcua,
-      opcua: { ...referenceOpcua.opcua!, trigger_stop_ceiling_layers: null },
-    };
-    const rt = await roundtrip(cleared);
-    expect(rt.opcua!.trigger_stop_ceiling_layers).toBeNull();
+  it('Trigger_Stop_Ceiling_Layers survives roundtrip (value = 3)', () => {
+    const triggers = rt.extensions!.TM_OPCUA.children.Triggers;
+    expect(Number(val(triggers, 'Trigger_Stop_Ceiling_Layers'))).toBe(3);
   });
 });
 
