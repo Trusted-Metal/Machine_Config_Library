@@ -5,7 +5,7 @@
  * Deliberately independent of the previous version's adapter — every helper
  * used here (type-conversion, sub-group parsing) is defined fresh in this
  * module, even where the on-disk shape happens to match today (Collimator,
- * Scanner_Card, sfcf, OPCUA's inner Client/Pipe/Triggers shape, the
+ * Scanner_Card, sfcf, the
  * low-level attribute-reading helpers). This module could change or be
  * removed later without affecting anything else.
  */
@@ -24,10 +24,6 @@ import type {
   ClearBox,
   OptionalComponents,
   ScanFieldCorrectionFile,
-  OpcuaConfig,
-  OpcuaClientConfig,
-  OpcuaPipeConfig,
-  OpcuaTrigger,
   SynchronousSensor,
   PowerCharacterization,
   EquationConstant,
@@ -38,6 +34,9 @@ import { float64ToNested3D } from "../../models.js";
 
 export type { CorrectionData } from "../../models.js";
 import * as layout from "./layout.js";
+import type { ExtensionTree } from "../../extensions/contract.js";
+import { readExtensionTree } from "../../extensions/hdf5.js";
+import { withExtensionsAsJson } from "../../extensions/json.js";
 
 export interface ReadOptions {
   /** Include correction_data / inverse_correction_data arrays in the output. */
@@ -174,22 +173,6 @@ function attrExtra(attrs: H5Attrs, known: Set<string>): Record<string, unknown> 
 const KNOWN_ROOT = new Set([
   "machine_name", "manufacturer", "model", "serial_number",
   "File_Version", "Export_Date", "Configuration_Hash",
-]);
-const KNOWN_CLIENT = new Set([
-  "Server_URL", "Auth_Mode", "Security_Mode", "Security_Policy",
-  "BFS_Max_Depth", "Publish_Interval", "Sampling_Interval", "Session_Timeout",
-  "Keep_Alive_Count", "Lifetime_Count", "Machine_Profile", "Queue_Policy",
-  "Queue_Size_Data_Change", "Queue_Size_Events", "Reconnect_Interval", "Root_Node",
-  "Sync_Loop_Interval_Initial", "Sync_Loop_Interval_Settled",
-]);
-const KNOWN_PIPE = new Set([
-  "Pipe_Enabled", "Buffer_Size", "Configure_Client", "Inbound_Rate_Limit",
-  "Max_Inbound_Message_Size", "Min_Integrity_Level", "Pipe_Name", "User_Access_Level",
-]);
-const KNOWN_TRIGGER = new Set([
-  "ID", "Signal", "Subsystem", "Rule_Enabled", "Start_Value", "Stop_Value",
-  "Case_Sensitivity", "Component", "Cooldown_Period", "Event",
-  "Max_Fires_Per_Job", "Trigger_Label",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -591,76 +574,6 @@ function parseOpticalTrain(
   };
 }
 
-/** Change 2: OPCUA relocated to `Extensions/TM_OPCUA/` — contents unaffected. */
-function parseOpcua(f: h5wasm.File): OpcuaConfig | undefined {
-  const opcuaEnt = f.get(layout.ROOT_OPCUA);
-  if (!(opcuaEnt instanceof h5wasm.Group)) return undefined;
-
-  const clientGrp = asGroup(opcuaEnt.get("Client"), `${layout.ROOT_OPCUA}/Client`);
-  const ca = clientGrp.attrs;
-  const client: OpcuaClientConfig = {
-    server_url: attrStrReq(ca, "Server_URL"),
-    auth_mode: attrStrReq(ca, "Auth_Mode"),
-    security_mode: attrStrReq(ca, "Security_Mode"),
-    security_policy: attrStrReq(ca, "Security_Policy"),
-    bfs_max_depth: attrInt(ca, "BFS_Max_Depth") ?? 0,
-    publish_interval: attrInt(ca, "Publish_Interval") ?? 0,
-    sampling_interval: attrInt(ca, "Sampling_Interval") ?? 0,
-    session_timeout: attrInt(ca, "Session_Timeout") ?? 0,
-    keep_alive_count: attrInt(ca, "Keep_Alive_Count"),
-    lifetime_count: attrInt(ca, "Lifetime_Count"),
-    machine_profile: attrStr(ca, "Machine_Profile"),
-    queue_policy: attrStr(ca, "Queue_Policy"),
-    queue_size_data_change: attrInt(ca, "Queue_Size_Data_Change"),
-    queue_size_events: attrInt(ca, "Queue_Size_Events"),
-    reconnect_interval: attrInt(ca, "Reconnect_Interval"),
-    root_node: attrStr(ca, "Root_Node"),
-    sync_loop_interval_initial: attrInt(ca, "Sync_Loop_Interval_Initial"),
-    sync_loop_interval_settled: attrInt(ca, "Sync_Loop_Interval_Settled"),
-    extra: attrExtra(ca, KNOWN_CLIENT),
-  };
-
-  const pipeGrp = asGroup(opcuaEnt.get("Pipe"), `${layout.ROOT_OPCUA}/Pipe`);
-  const pa = pipeGrp.attrs;
-  const pipe: OpcuaPipeConfig = {
-    pipe_enabled: attrBool(pa, "Pipe_Enabled") ?? false,
-    buffer_size: attrInt(pa, "Buffer_Size") ?? 0,
-    configure_client: attrBool(pa, "Configure_Client"),
-    inbound_rate_limit: attrInt(pa, "Inbound_Rate_Limit"),
-    max_inbound_message_size: attrInt(pa, "Max_Inbound_Message_Size"),
-    min_integrity_level: attrStr(pa, "Min_Integrity_Level"),
-    pipe_name: attrStr(pa, "Pipe_Name"),
-    user_access_level: attrStr(pa, "User_Access_Level"),
-    extra: attrExtra(pa, KNOWN_PIPE),
-  };
-
-  const triggersGrp = asGroup(opcuaEnt.get("Triggers"), `${layout.ROOT_OPCUA}/Triggers`);
-  const triggers_enabled = attrBool(triggersGrp.attrs, "Triggers_Enabled");
-  const trigger_stop_ceiling_layers = attrInt(triggersGrp.attrs, "Trigger_Stop_Ceiling_Layers");
-  const triggers: Record<string, OpcuaTrigger> = {};
-  for (const name of triggersGrp.keys()) {
-    const tGrp = asGroup(triggersGrp.get(name), `${layout.ROOT_OPCUA}/Triggers/${name}`);
-    const ta = tGrp.attrs;
-    triggers[name] = {
-      id: attrStr(ta, "ID"),
-      signal: attrStr(ta, "Signal"),
-      subsystem: attrStr(ta, "Subsystem"),
-      rule_enabled: attrBool(ta, "Rule_Enabled"),
-      start_value: attrStr(ta, "Start_Value"),
-      stop_value: attrStr(ta, "Stop_Value"),
-      case_sensitivity: attrStr(ta, "Case_Sensitivity"),
-      component: attrStr(ta, "Component"),
-      cooldown_period: attrInt(ta, "Cooldown_Period"),
-      event: attrStr(ta, "Event"),
-      max_fires_per_job: attrInt(ta, "Max_Fires_Per_Job"),
-      trigger_label: attrStr(ta, "Trigger_Label"),
-      extra: attrExtra(ta, KNOWN_TRIGGER),
-    };
-  }
-
-  return { client, pipe, triggers_enabled, trigger_stop_ceiling_layers, triggers };
-}
-
 function parseFile(f: h5wasm.File, opts: ReadOptions): MachineConfig {
   const includeBinary = opts.includeBinary ?? false;
 
@@ -687,10 +600,26 @@ function parseFile(f: h5wasm.File, opts: ReadOptions): MachineConfig {
     parseOpticalTrain(f, tid, hasClearboxRoot, sharedOutputPath, sharedSoftwareTriggerDelay, includeBinary),
   );
 
-  const opcua = parseOpcua(f);
+  const extensions = parseExtensions(f);
   const config: MachineConfig = { meta, machine, optical_trains };
-  if (opcua !== undefined) config.opcua = opcua;
+  if (Object.keys(extensions).length > 0) config.extensions = extensions;
   return config;
+}
+
+/** Every group under `Extensions/` that core does not model, verbatim. */
+function parseExtensions(f: h5wasm.File): Record<string, ExtensionTree> {
+  const out: Record<string, ExtensionTree> = {};
+  const root = f.get(layout.ROOT_EXTENSIONS);
+  if (!(root instanceof h5wasm.Group)) return out;
+  for (const name of root.keys()) {
+    if (layout.MODELLED_EXTENSION_NAMES.has(name)) continue;
+    const ent = root.get(name);
+    if (!(ent instanceof h5wasm.Group)) {
+      throw new Error(`HDF5: expected Group at "${layout.ROOT_EXTENSIONS}/${name}"`);
+    }
+    out[name] = readExtensionTree(ent, name);
+  }
+  return out;
 }
 
 /** Read a named ClearBox correction dataset as a flat, NaN-preserving Float64Array + shape. */
@@ -729,7 +658,7 @@ export class Hdf5AdapterV1_1 {
   async toJson(options: ToJsonOptions = {}): Promise<string> {
     const config = await this.parse(options);
     const indent = options.indent ?? 2;
-    return JSON.stringify(config, omitFalseInvertFlags, indent || undefined);
+    return JSON.stringify(withExtensionsAsJson(config), omitFalseInvertFlags, indent || undefined);
   }
 
   /**

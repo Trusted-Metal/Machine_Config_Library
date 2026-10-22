@@ -213,51 +213,6 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
     return Result<CorrectionData>::Ok(std::move(cd));
   }
 
-  // Returns the OPCUA config, or Err("ValidationError", ...) if OPCUA is
-  // present but missing one or more required fields. Collects every missing
-  // field at once (in errorDetails()) rather than failing on the first one —
-  // see OPCUA_FIELD_PROMOTION_PLAN.md's "Why facade-only enforcement". The
-  // low-level reader/writer stay fully permissive; this is the one place
-  // "required" is enforced.
-  Result<OpcuaConfig> getOpcua() const override {
-    assertOpen();
-    if (!config_.opcua.has_value()) {
-      return Result<OpcuaConfig>::Err("NotPresent", "OPCUA group is not present");
-    }
-    const auto& opcua = *config_.opcua;
-
-    std::vector<std::string> missing;
-    if (!opcua.client.machine_profile.has_value()) missing.push_back("Machine_Profile");
-    if (!opcua.client.root_node.has_value()) missing.push_back("Root_Node");
-    if (!opcua.pipe.configure_client.has_value()) missing.push_back("Configure_Client");
-    if (!opcua.pipe.pipe_name.has_value()) missing.push_back("Pipe_Name");
-    if (!opcua.triggers_enabled.has_value()) missing.push_back("Triggers_Enabled");
-    if (!opcua.trigger_stop_ceiling_layers.has_value()) missing.push_back("Trigger_Stop_Ceiling_Layers");
-    for (const auto& [name, trigger] : opcua.triggers) {
-      if (!trigger.event.has_value()) missing.push_back(name + ".Event");
-    }
-
-    if (!missing.empty()) {
-      std::string msg = "OPCUA is present but missing required field(s): ";
-      for (std::size_t i = 0; i < missing.size(); ++i) {
-        if (i) msg += ", ";
-        msg += missing[i];
-      }
-      return Result<OpcuaConfig>::Err("ValidationError", msg, missing);
-    }
-
-    return Result<OpcuaConfig>::Ok(opcua);
-  }
-
-  Result<void> setOpcua(const OpcuaConfig& model, SetMode mode = SetMode::Merge) override {
-    assertOpen();
-    if (!config_.opcua.has_value()) {
-      return Result<void>::Err("NotPresent", "OPCUA group is not present");
-    }
-    config_.opcua = applySetModeT(*config_.opcua, model, mode);
-    return Result<void>::Ok();
-  }
-
   // Recomputes the configuration hash from the session's *current* content
   // and compares it to the session's current meta.configuration_hash --
   // fresh, every call. Deliberately live, not cached at open() time: this

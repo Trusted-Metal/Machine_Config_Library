@@ -44,8 +44,6 @@ public:
   virtual Result<CorrectionData> getCorrectionData(std::size_t index) const = 0;
   virtual Result<CorrectionData> getInverseCorrectionData(std::size_t index) const = 0;
 
-  virtual Result<OpcuaConfig> getOpcua() const = 0;
-  virtual Result<void> setOpcua(const OpcuaConfig& model, SetMode mode = SetMode::Merge) = 0;
 
   virtual bool isValid() const = 0;
 

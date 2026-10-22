@@ -10,7 +10,10 @@ namespace machine_config::capabilities::v1_0 {
 inline constexpr const char* FILE_VERSION = "1.0";
 inline constexpr const char* ROOT_MACHINE = "Machine";
 inline constexpr const char* ROOT_OPTICAL_TRAINS = "Machine/Optical_Trains";
+// File_Version 1.0 has no Extensions group: the one extension it can hold lives at the root as OPCUA/.
 inline constexpr const char* ROOT_OPCUA = "OPCUA";
+// The extension name core exposes the legacy OPCUA/ group under.
+inline constexpr const char* LEGACY_OPCUA_EXTENSION_NAME = "TM_OPCUA";
 inline constexpr const char* TRAIN_ID_PREFIX = "Optical_Train_";
 inline constexpr const char* GROUP_OPTIONAL_COMPONENTS = "Optional_Components";
 inline constexpr const char* GROUP_CLEARBOX = "ClearBox";

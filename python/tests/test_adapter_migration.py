@@ -261,7 +261,6 @@ class MockV1_1Reader:
             meta=meta,
             machine=machine,
             optical_trains=optical_trains,
-            opcua=None,  # OPCUA layout unchanged; not needed for migration test scope
         )
 
     def _parse_train(self, f: h5py.File, tid: str) -> OpticalTrain:
@@ -875,7 +874,6 @@ def _make_config(
                 scan_field_correction_file=None,
             )
         ],
-        opcua=None,
     )
 
 

@@ -41,7 +41,6 @@ def render_ts(api: dict, models: dict) -> str:
         "  Collimator,",
         "  ScannerCard,",
         "  ClearBox,",
-        "  OpcuaConfig,",
         "  CorrectionData,",
         '} from "../models.js";',
         "",
@@ -59,7 +58,6 @@ def render_ts(api: dict, models: dict) -> str:
         "export type ScannerCardModel = ScannerCard & { extra?: Record<string, unknown> };",
         "export type ClearBoxModel = ClearBox & { extra?: Record<string, unknown> };",
         "export type OpticalTrainModel = OpticalTrain & { extra?: Record<string, unknown> };",
-        "export type OpcuaModel = OpcuaConfig & { extra?: Record<string, unknown> };",
         "",
         "export interface MetaHandle {",
         "  getModel(): MetaModel;",
@@ -94,17 +92,12 @@ def render_ts(api: dict, models: dict) -> str:
         "  get(index: number): Result<TrainHandle, CapabilityError>;",
         "  [Symbol.iterator](): Iterator<TrainHandle>;",
         "}",
-        "export interface OpcuaHandle {",
-        "  getModel(): OpcuaModel;",
-        "  setModel(model: OpcuaModel, mode?: SetMode): Result<void, CapabilityError>;",
-        "}",
         "export interface MachineConfigFile {",
         "  fileVersion(): string;",
         "  meta(): MetaHandle;",
         "  machine(): MachineHandle;",
         "  opticalTrains(): TrainCollection;",
         "  opticalTrain(index: number): Result<TrainHandle, CapabilityError>;",
-        "  opcua(): Result<OpcuaHandle, CapabilityError>;",
         "  getCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;",
         "  getInverseCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;",
         "  isValid(): boolean;",
@@ -157,16 +150,12 @@ def render_py(api: dict, models: dict) -> str:
         + "    def __len__(self) -> int: ...\n"
         + "    def get(self, index: int) -> Result[TrainHandle, CapabilityError]: ...\n"
         + "    def __iter__(self) -> Iterator[TrainHandle]: ...\n\n\n"
-        + "class OpcuaHandle(Protocol):\n"
-        + "    def get_model(self) -> dict[str, Any]: ...\n"
-        + "    def set_model(self, model: dict[str, Any], mode: SetMode = SetMode.MERGE) -> Result[None, CapabilityError]: ...\n\n\n"
         + "class MachineConfigFile(Protocol):\n"
         + "    def file_version(self) -> str: ...\n"
         + "    def meta(self) -> MetaHandle: ...\n"
         + "    def machine(self) -> MachineHandle: ...\n"
         + "    def optical_trains(self) -> TrainCollection: ...\n"
         + "    def optical_train(self, index: int) -> Result[TrainHandle, CapabilityError]: ...\n"
-        + "    def opcua(self) -> Result[OpcuaHandle, CapabilityError]: ...\n"
         + "    def is_valid(self) -> bool: ...\n"
         + "    def save(self, path: str | None = None) -> Result[None, CapabilityError]: ...\n"
         + "    def close(self) -> None: ...\n"
@@ -188,7 +177,7 @@ def render_rs(api: dict, models: dict) -> str:
         + "use crate::capabilities::result::Result;\n"
         + "use crate::models::{\n"
         + "    ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfigMeta,\n"
-        + "    OpcuaConfig, OpticalTrain, Scanner, ScannerCard,\n"
+        + "    OpticalTrain, Scanner, ScannerCard,\n"
         + "};\n"
         + "use std::path::Path;\n\n"
         + "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\n"
@@ -231,9 +220,6 @@ def render_rs(api: dict, models: dict) -> str:
         + "\n"
         + "    fn get_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError>;\n"
         + "    fn get_inverse_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError>;\n"
-        + "\n"
-        + "    fn get_opcua(&self) -> Result<OpcuaConfig, CapabilityError>;\n"
-        + "    fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError>;\n"
         + "\n"
         + "    fn is_valid(&self) -> bool;\n"
         + "\n"
@@ -295,8 +281,6 @@ def render_hpp(api: dict, models: dict) -> str:
         + "  virtual Result<CorrectionData> getCorrectionData(std::size_t index) const = 0;\n"
         + "  virtual Result<CorrectionData> getInverseCorrectionData(std::size_t index) const = 0;\n"
         + "\n"
-        + "  virtual Result<OpcuaConfig> getOpcua() const = 0;\n"
-        + "  virtual Result<void> setOpcua(const OpcuaConfig& model, SetMode mode = SetMode::Merge) = 0;\n"
         + "\n"
         + "  virtual bool isValid() const = 0;\n"
         + "\n"

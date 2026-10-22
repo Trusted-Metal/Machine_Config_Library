@@ -181,20 +181,23 @@ println!("Peak correction: {:.4}", arr[[128, 128, 0]]);  // ≈ 2.0 (Gaussian pe
 
 ---
 
-## Use case 8 — Read OPCUA telemetry configuration
+## Use case 8 — Read an extension (OPC UA) tree
+
+Core has no OPC UA model. Every group under `Extensions/` that core does not model (and, in
+`File_Version` 1.0, the legacy root `OPCUA/` group, exposed as `TM_OPCUA`) is returned verbatim in
+`config.extensions`, and written back unchanged. Pack and unpack it with the extension's own
+library (see `docs/EXTENSION_CONTRACT.md`); `get_raw_group()` remains for ad-hoc attribute inspection:
 
 ```rust
-use machine_config::reader::MachineConfigReader;
+use machine_config::{canonical_digest, reader::MachineConfigReader};
 
 let reader = MachineConfigReader::open("fixtures/reference_config_opcua.h5")?;
 let config = reader.parse()?;
 
-if let Some(opcua) = &config.opcua {
-    println!("{}", opcua.client.server_url);
-    println!("{:?}", opcua.triggers_enabled);
-    for (name, trigger) in &opcua.triggers {
-        println!("{name}: signal={:?} subsystem={:?}", trigger.signal, trigger.subsystem);
-    }
+if let Some(opcua) = config.extensions.get("TM_OPCUA") {
+    println!("{:?}", opcua.children.keys().collect::<Vec<_>>());      // ["Client", "Pipe", "Triggers"]
+    println!("{:?}", opcua.children["Client"].attrs["Server_URL"].as_str());
+    println!("{}", canonical_digest(opcua)?);                          // identical in Node and Rust
 }
 
 // Raw attribute map for any HDF5 path — returns empty map, never an error, if absent

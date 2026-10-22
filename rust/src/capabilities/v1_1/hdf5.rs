@@ -19,6 +19,7 @@ use super::layout;
 use crate::error::{MachineConfigError, Result};
 use crate::models::*;
 use crate::reader::ReaderAdapter;
+use crate::extensions::read_extension_tree;
 
 const SCHEMA_VERSION: &str = "v1";
 
@@ -58,53 +59,6 @@ const KNOWN_ROOT_KEYS: &[&str] = &[
     "File_Version",
     "Export_Date",
     "Configuration_Hash",
-];
-
-const KNOWN_CLIENT_KEYS: &[&str] = &[
-    "Server_URL",
-    "Auth_Mode",
-    "Security_Mode",
-    "Security_Policy",
-    "BFS_Max_Depth",
-    "Publish_Interval",
-    "Sampling_Interval",
-    "Session_Timeout",
-    "Keep_Alive_Count",
-    "Lifetime_Count",
-    "Machine_Profile",
-    "Queue_Policy",
-    "Queue_Size_Data_Change",
-    "Queue_Size_Events",
-    "Reconnect_Interval",
-    "Root_Node",
-    "Sync_Loop_Interval_Initial",
-    "Sync_Loop_Interval_Settled",
-];
-
-const KNOWN_PIPE_KEYS: &[&str] = &[
-    "Pipe_Enabled",
-    "Buffer_Size",
-    "Configure_Client",
-    "Inbound_Rate_Limit",
-    "Max_Inbound_Message_Size",
-    "Min_Integrity_Level",
-    "Pipe_Name",
-    "User_Access_Level",
-];
-
-const KNOWN_TRIGGER_KEYS: &[&str] = &[
-    "ID",
-    "Signal",
-    "Subsystem",
-    "Rule_Enabled",
-    "Start_Value",
-    "Stop_Value",
-    "Case_Sensitivity",
-    "Component",
-    "Cooldown_Period",
-    "Event",
-    "Max_Fires_Per_Job",
-    "Trigger_Label",
 ];
 
 // ---------------------------------------------------------------------------
@@ -236,21 +190,6 @@ fn read_bool_from_int(loc: &Location, key: &str) -> Result<Option<bool>> {
         Some(1) => Ok(Some(true)),
         Some(other) => Err(MachineConfigError::Parse(format!(
             "attribute '{key}' has value {other}; expected 0 or 1 (Rule 8)"
-        ))),
-    }
-}
-
-fn read_required_bool_from_int(loc: &Location, key: &str, default: i64) -> Result<bool> {
-    Ok(read_required_int(loc, key, default)? != 0)
-}
-
-fn read_bool_from_float(loc: &Location, key: &str) -> Result<Option<bool>> {
-    match read_float(loc, key)? {
-        None => Ok(None),
-        Some(v) if v == 0.0 => Ok(Some(false)),
-        Some(v) if v == 1.0 => Ok(Some(true)),
-        Some(other) => Err(MachineConfigError::Parse(format!(
-            "attribute '{key}' has value {other}; expected 0.0 or 1.0"
         ))),
     }
 }
@@ -424,9 +363,31 @@ impl Hdf5AdapterV1_1 {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let opcua = self.parse_opcua(f)?;
+        let extensions = self.parse_extensions(f)?;
 
-        Ok(MachineConfig { meta, machine, optical_trains, opcua })
+        Ok(MachineConfig { meta, machine, optical_trains, extensions })
+    }
+
+    /// Every group under `Extensions/` that core does not model, verbatim.
+    fn parse_extensions(
+        &self,
+        f: &H5File,
+    ) -> Result<std::collections::BTreeMap<String, crate::ExtensionTree>> {
+        let mut out = std::collections::BTreeMap::new();
+        let Ok(root) = f.group(layout::ROOT_EXTENSIONS) else { return Ok(out) };
+        for name in root.member_names()? {
+            if layout::MODELLED_EXTENSION_NAMES.contains(&name.as_str()) {
+                continue;
+            }
+            let grp = root.group(&name).map_err(|_| {
+                MachineConfigError::Parse(format!(
+                    "expected a group at '{}/{name}'",
+                    layout::ROOT_EXTENSIONS
+                ))
+            })?;
+            out.insert(name.clone(), read_extension_tree(&grp, &name)?);
+        }
+        Ok(out)
     }
 
     fn parse_train(
@@ -778,79 +739,6 @@ impl Hdf5AdapterV1_1 {
         })
     }
 
-    /// Parses the optional `Extensions/TM_OPCUA` group tree (Change 2).
-    fn parse_opcua(&self, f: &H5File) -> Result<Option<OpcuaConfig>> {
-        let opcua_grp = match f.group(layout::ROOT_OPCUA) {
-            Ok(g) => g,
-            Err(_) => return Ok(None),
-        };
-
-        let client_grp = opcua_grp.group("Client")?;
-        let client = OpcuaClientConfig {
-            server_url: read_required_str(&client_grp, "Server_URL")?,
-            auth_mode: read_required_str(&client_grp, "Auth_Mode")?,
-            security_mode: read_required_str(&client_grp, "Security_Mode")?,
-            security_policy: read_required_str(&client_grp, "Security_Policy")?,
-            bfs_max_depth: read_required_int(&client_grp, "BFS_Max_Depth", 0)?,
-            publish_interval: read_required_int(&client_grp, "Publish_Interval", 0)?,
-            sampling_interval: read_required_int(&client_grp, "Sampling_Interval", 0)?,
-            session_timeout: read_required_int(&client_grp, "Session_Timeout", 0)?,
-            keep_alive_count: read_int(&client_grp, "Keep_Alive_Count")?,
-            lifetime_count: read_int(&client_grp, "Lifetime_Count")?,
-            machine_profile: read_str(&client_grp, "Machine_Profile")?,
-            queue_policy: read_str(&client_grp, "Queue_Policy")?,
-            queue_size_data_change: read_int(&client_grp, "Queue_Size_Data_Change")?,
-            queue_size_events: read_int(&client_grp, "Queue_Size_Events")?,
-            reconnect_interval: read_int(&client_grp, "Reconnect_Interval")?,
-            root_node: read_str(&client_grp, "Root_Node")?,
-            sync_loop_interval_initial: read_int(&client_grp, "Sync_Loop_Interval_Initial")?,
-            sync_loop_interval_settled: read_int(&client_grp, "Sync_Loop_Interval_Settled")?,
-            extra: collect_extra(&client_grp, KNOWN_CLIENT_KEYS)?,
-        };
-
-        let pipe_grp = opcua_grp.group("Pipe")?;
-        let pipe = OpcuaPipeConfig {
-            pipe_enabled: read_required_bool_from_int(&pipe_grp, "Pipe_Enabled", 0)?,
-            buffer_size: read_required_int(&pipe_grp, "Buffer_Size", 0)?,
-            configure_client: read_bool_from_int(&pipe_grp, "Configure_Client")?,
-            inbound_rate_limit: read_int(&pipe_grp, "Inbound_Rate_Limit")?,
-            max_inbound_message_size: read_int(&pipe_grp, "Max_Inbound_Message_Size")?,
-            min_integrity_level: read_str(&pipe_grp, "Min_Integrity_Level")?,
-            pipe_name: read_str(&pipe_grp, "Pipe_Name")?,
-            user_access_level: read_str(&pipe_grp, "User_Access_Level")?,
-            extra: collect_extra(&pipe_grp, KNOWN_PIPE_KEYS)?,
-        };
-
-        let triggers_grp = opcua_grp.group("Triggers")?;
-        let triggers_enabled = read_bool_from_float(&triggers_grp, "Triggers_Enabled")?;
-        let trigger_stop_ceiling_layers = read_int(&triggers_grp, "Trigger_Stop_Ceiling_Layers")?;
-
-        let mut triggers = IndexMap::new();
-        for name in triggers_grp.member_names()? {
-            let tg = triggers_grp.group(&name)?;
-            let extra = collect_extra(&tg, KNOWN_TRIGGER_KEYS)?;
-            triggers.insert(
-                name,
-                OpcuaTrigger {
-                    id: read_str(&tg, "ID")?,
-                    signal: read_str(&tg, "Signal")?,
-                    subsystem: read_str(&tg, "Subsystem")?,
-                    rule_enabled: read_bool_from_int(&tg, "Rule_Enabled")?,
-                    start_value: read_str(&tg, "Start_Value")?,
-                    stop_value: read_str(&tg, "Stop_Value")?,
-                    case_sensitivity: read_str(&tg, "Case_Sensitivity")?,
-                    component: read_str(&tg, "Component")?,
-                    cooldown_period: read_int(&tg, "Cooldown_Period")?,
-                    event: read_str(&tg, "Event")?,
-                    max_fires_per_job: read_int(&tg, "Max_Fires_Per_Job")?,
-                    trigger_label: read_str(&tg, "Trigger_Label")?,
-                    extra,
-                },
-            );
-        }
-
-        Ok(Some(OpcuaConfig { client, pipe, triggers, triggers_enabled, trigger_stop_ceiling_layers }))
-    }
 }
 
 impl ReaderAdapter for Hdf5AdapterV1_1 {

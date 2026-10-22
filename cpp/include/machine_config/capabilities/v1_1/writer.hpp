@@ -12,6 +12,7 @@
 #include "machine_config/models.hpp"
 #include "machine_config/capabilities/v1_1/compound_types.hpp"
 #include "machine_config/capabilities/v1_1/layout.hpp"
+#include "machine_config/extensions_hdf5.hpp"
 
 #include <highfive/H5File.hpp>
 
@@ -109,6 +110,7 @@ public:
     // disagree on Output_Path or Software_Trigger_Delay — see the migration
     // manifest's Change 1 "Consolidate conflict rule".
     void write(std::filesystem::path path) const override {
+        validateExtensions();
         HighFive::File f(path.string(),
             HighFive::File::ReadWrite | HighFive::File::Create | HighFive::File::Truncate);
         writeRootAttrs(f);
@@ -133,11 +135,25 @@ public:
                 writeSfcf(f, tid, *train.scan_field_correction_file);
         }
 
-        if (cfg_.opcua) writeOpcua(f, *cfg_.opcua);
+        if (!cfg_.extensions.empty()) {
+            auto eg = f.exist(ROOT_EXTENSIONS) ? f.getGroup(ROOT_EXTENSIONS) : f.createGroup(ROOT_EXTENSIONS);
+            for (const auto& [name, tree] : cfg_.extensions)
+                extension::writeExtensionTree(eg.getId(), name, tree);
+        }
     }
 
 private:
     const MachineConfig& cfg_;
+
+    // Runs before the output file is created, so a rejected config never leaves a partial file
+    // behind.
+    void validateExtensions() const {
+        for (const auto& [name, tree] : cfg_.extensions) {
+            extension::validate(tree, name);
+            if (isModelledExtensionName(name))
+                throw std::runtime_error("extension \"" + name + "\" is modelled by core and cannot be written as an extension tree");
+        }
+    }
 
     // Change 1 (Consolidate): collect *field* from every ClearBox-bearing
     // train; hard error if they disagree. See the migration manifest's
@@ -486,66 +502,6 @@ private:
         ws(ds, "original_uri",        sfcf.original_uri.value_or(""));
     }
 
-    // Change 2: relocated verbatim to Extensions/TM_OPCUA/ — nothing inside
-    // the group's own shape changes.
-    void writeOpcua(HighFive::File& f, const OpcuaConfig& opcua) const {
-        auto cg = f.createGroup(OPCUA_CLIENT);
-        const auto& c = opcua.client;
-        ws(cg, "Server_URL",      c.server_url);
-        ws(cg, "Auth_Mode",       c.auth_mode);
-        ws(cg, "Security_Mode",   c.security_mode);
-        ws(cg, "Security_Policy", c.security_policy);
-        cg.template createAttribute<int64_t>("BFS_Max_Depth",     HighFive::DataSpace::Scalar()).write(c.bfs_max_depth);
-        cg.template createAttribute<int64_t>("Publish_Interval",  HighFive::DataSpace::Scalar()).write(c.publish_interval);
-        cg.template createAttribute<int64_t>("Sampling_Interval", HighFive::DataSpace::Scalar()).write(c.sampling_interval);
-        cg.template createAttribute<int64_t>("Session_Timeout",   HighFive::DataSpace::Scalar()).write(c.session_timeout);
-        wi(cg, "Keep_Alive_Count", c.keep_alive_count);
-        wi(cg, "Lifetime_Count", c.lifetime_count);
-        ws(cg, "Machine_Profile", c.machine_profile.value_or(""));
-        ws(cg, "Queue_Policy", c.queue_policy.value_or(""));
-        wi(cg, "Queue_Size_Data_Change", c.queue_size_data_change);
-        wi(cg, "Queue_Size_Events", c.queue_size_events);
-        wi(cg, "Reconnect_Interval", c.reconnect_interval);
-        ws(cg, "Root_Node", c.root_node.value_or(""));
-        wi(cg, "Sync_Loop_Interval_Initial", c.sync_loop_interval_initial);
-        wi(cg, "Sync_Loop_Interval_Settled", c.sync_loop_interval_settled);
-        writeExtra(cg, c.extra);
-
-        auto pg = f.createGroup(OPCUA_PIPE);
-        const auto& p = opcua.pipe;
-        pg.template createAttribute<int64_t>("Pipe_Enabled", HighFive::DataSpace::Scalar()).write(static_cast<int64_t>(p.pipe_enabled));
-        pg.template createAttribute<int64_t>("Buffer_Size",  HighFive::DataSpace::Scalar()).write(p.buffer_size);
-        wb(pg, "Configure_Client", p.configure_client);
-        wi(pg, "Inbound_Rate_Limit", p.inbound_rate_limit);
-        wi(pg, "Max_Inbound_Message_Size", p.max_inbound_message_size);
-        ws(pg, "Min_Integrity_Level", p.min_integrity_level.value_or(""));
-        ws(pg, "Pipe_Name", p.pipe_name.value_or(""));
-        ws(pg, "User_Access_Level", p.user_access_level.value_or(""));
-        writeExtra(pg, p.extra);
-
-        auto tg = f.createGroup(OPCUA_TRIGGERS);
-        if (opcua.triggers_enabled) {
-            double te = *opcua.triggers_enabled ? 1.0 : 0.0;
-            tg.template createAttribute<double>("Triggers_Enabled", HighFive::DataSpace::Scalar()).write(te);
-        }
-        wi(tg, "Trigger_Stop_Ceiling_Layers", opcua.trigger_stop_ceiling_layers);
-        for (const auto& [name, trigger] : opcua.triggers) {
-            auto trg = tg.createGroup(name);
-            ws(trg, "ID",          trigger.id.value_or(""));
-            ws(trg, "Signal",      trigger.signal.value_or(""));
-            ws(trg, "Subsystem",   trigger.subsystem.value_or(""));
-            wb(trg, "Rule_Enabled",trigger.rule_enabled);
-            ws(trg, "Start_Value", trigger.start_value.value_or(""));
-            ws(trg, "Stop_Value",  trigger.stop_value.value_or(""));
-            ws(trg, "Case_Sensitivity", trigger.case_sensitivity.value_or(""));
-            ws(trg, "Component", trigger.component.value_or(""));
-            wi(trg, "Cooldown_Period", trigger.cooldown_period);
-            ws(trg, "Event", trigger.event.value_or(""));
-            wi(trg, "Max_Fires_Per_Job", trigger.max_fires_per_job);
-            ws(trg, "Trigger_Label", trigger.trigger_label.value_or(""));
-            writeExtra(trg, trigger.extra);
-        }
-    }
 };
 
 }  // namespace machine_config::capabilities::v1_1

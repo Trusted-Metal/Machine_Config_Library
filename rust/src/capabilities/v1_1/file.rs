@@ -11,7 +11,7 @@ use crate::capabilities::result::Result;
 use crate::hash::compute_configuration_hash;
 use crate::models::{
     nested_to_array3, ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfig,
-    MachineConfigMeta, OpcuaConfig, OpticalTrain, Scanner, ScannerCard,
+    MachineConfigMeta, OpticalTrain, Scanner, ScannerCard,
 };
 use crate::writer::MachineConfigWriter;
 use std::path::{Path, PathBuf};
@@ -259,68 +259,6 @@ impl MachineConfigFileV1_1 {
             .ok_or_else(|| CapabilityError::NotPresent("clearbox is not present".into()))?;
         Ok(grid_to_correction_data(&cb.inverse_correction_data))
     }
-
-    /// Returns the OPCUA config, or `Err(ValidationError)` if OPCUA is present
-    /// but missing one or more required fields. Same enforcement contract as
-    /// v1.0's facade, applied unchanged to Change 2's relocated
-    /// `Extensions/TM_OPCUA` group.
-    pub fn get_opcua(&self) -> Result<OpcuaConfig, CapabilityError> {
-        self.assert_open()?;
-        let opcua = self
-            .config
-            .opcua
-            .clone()
-            .ok_or_else(|| CapabilityError::NotPresent("OPCUA group is not present".into()))?;
-
-        let mut missing = Vec::new();
-        if opcua.client.machine_profile.is_none() {
-            missing.push("Machine_Profile".to_string());
-        }
-        if opcua.client.root_node.is_none() {
-            missing.push("Root_Node".to_string());
-        }
-        if opcua.pipe.configure_client.is_none() {
-            missing.push("Configure_Client".to_string());
-        }
-        if opcua.pipe.pipe_name.is_none() {
-            missing.push("Pipe_Name".to_string());
-        }
-        if opcua.triggers_enabled.is_none() {
-            missing.push("Triggers_Enabled".to_string());
-        }
-        if opcua.trigger_stop_ceiling_layers.is_none() {
-            missing.push("Trigger_Stop_Ceiling_Layers".to_string());
-        }
-        for (name, trigger) in &opcua.triggers {
-            if trigger.event.is_none() {
-                missing.push(format!("{name}.Event"));
-            }
-        }
-
-        if !missing.is_empty() {
-            return Err(CapabilityError::ValidationError {
-                message: format!(
-                    "OPCUA is present but missing required field(s): {}",
-                    missing.join(", ")
-                ),
-                details: Some(missing),
-            });
-        }
-
-        Ok(opcua)
-    }
-
-    pub fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError> {
-        self.assert_open()?;
-        let current = self
-            .config
-            .opcua
-            .clone()
-            .ok_or_else(|| CapabilityError::NotPresent("OPCUA group is not present".into()))?;
-        self.config.opcua = Some(apply_set_mode(&current, &model, mode)?);
-        Ok(())
-    }
-
     /// Recomputes the configuration hash from the session's *current*
     /// content and compares it to the session's current
     /// `meta.configuration_hash` — fresh, every call. Deliberately live, not
@@ -458,12 +396,6 @@ impl crate::capabilities::generated::MachineConfigFile for MachineConfigFileV1_1
     }
     fn get_inverse_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError> {
         self.get_inverse_correction_data(index)
-    }
-    fn get_opcua(&self) -> Result<OpcuaConfig, CapabilityError> {
-        self.get_opcua()
-    }
-    fn set_opcua(&mut self, model: OpcuaConfig, mode: SetMode) -> Result<(), CapabilityError> {
-        self.set_opcua(model, mode)
     }
     fn is_valid(&self) -> bool {
         self.is_valid()

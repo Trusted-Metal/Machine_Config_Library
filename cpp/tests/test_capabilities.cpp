@@ -36,8 +36,6 @@ static const std::string REFERENCE_V1_1 = std::string(FIXTURES_DIR) + "/referenc
 static const std::string OPCUA_REF = std::string(FIXTURES_DIR) + "/reference_config_opcua.h5";
 static const std::string SENSORS_REF =
     std::string(FIXTURES_DIR) + "/reference_config_synchronous_sensors.h5";
-static const std::string OPCUA_MISSING_REQUIRED =
-    std::string(VALIDATION_FIXTURES_DIR) + "/opcua_missing_required.h5";
 
 static std::filesystem::path tmpPath(const std::string& tag) {
     return std::filesystem::temp_directory_path() /
@@ -125,10 +123,6 @@ public:
     ResultT<machine_config::CorrectionData> getInverseCorrectionData(std::size_t) const override {
         return ResultT<machine_config::CorrectionData>::Err("NotPresent", "fake");
     }
-    ResultT<machine_config::OpcuaConfig> getOpcua() const override {
-        return ResultT<machine_config::OpcuaConfig>::Err("NotPresent", "fake");
-    }
-    Result setOpcua(const machine_config::OpcuaConfig&, SetMode) override { return Result::Ok(); }
     bool isValid() const override { return false; }
     Result save(const std::string* = nullptr) override { return Result::Ok(); }
     void close() override {}
@@ -227,71 +221,6 @@ TEST_CASE("CapabilityInvalidIndex") {
     opened.value()->close();
 }
 
-TEST_CASE("CapabilityOpcuaNotPresentVsPresent") {
-    auto no_opc = MachineConfigFileV1_0::open(REF);
-    REQUIRE(no_opc.ok());
-    auto missing = no_opc.value()->getOpcua();
-    REQUIRE_FALSE(missing.ok());
-    REQUIRE(missing.errorCode() == "NotPresent");
-    no_opc.value()->close();
-
-    auto with_opc = MachineConfigFileV1_0::open(OPCUA_REF);
-    REQUIRE(with_opc.ok());
-    REQUIRE(with_opc.value()->getOpcua().ok());
-    with_opc.value()->close();
-}
-
-TEST_CASE("CapabilityOpcuaRequiredFieldsPresentOnReferenceFixture") {
-    auto opened = MachineConfigFileV1_0::open(OPCUA_REF);
-    REQUIRE(opened.ok());
-    auto result = opened.value()->getOpcua();
-    REQUIRE(result.ok());
-    const auto& opcua = result.value();
-    REQUIRE(opcua.client.machine_profile.has_value());
-    for (const auto& [name, trigger] : opcua.triggers) {
-        REQUIRE(trigger.event.has_value());
-    }
-    opened.value()->close();
-}
-
-TEST_CASE("CapabilityOpcuaMissingRequiredFieldsReportsAllSevenAtOnce") {
-    auto opened = MachineConfigFileV1_0::open(OPCUA_MISSING_REQUIRED);
-    REQUIRE(opened.ok());
-    auto result = opened.value()->getOpcua();
-    REQUIRE_FALSE(result.ok());
-    REQUIRE(result.errorCode() == "ValidationError");
-
-    std::set<std::string> expected = {
-        "Machine_Profile", "Root_Node", "Configure_Client", "Pipe_Name",
-        "Triggers_Enabled", "Trigger_Stop_Ceiling_Layers",
-        "Laser Emission Interlock.Event",
-    };
-    std::set<std::string> actual(result.errorDetails().begin(), result.errorDetails().end());
-    REQUIRE(actual == expected);
-    for (const auto& d : result.errorDetails()) {
-        REQUIRE(d.rfind("Chamber Oxygen Level", 0) != 0);
-    }
-    opened.value()->close();
-}
-
-// error() returns one real CapabilityError object — matching Rust's
-// Err(CapabilityError), Python's/Node.js's Err.error, and Go's second
-// (*Error) return value — not just three independent getter calls.
-TEST_CASE("CapabilityResultErrorReturnsRealCapabilityError") {
-    auto opened = MachineConfigFileV1_0::open(OPCUA_MISSING_REQUIRED);
-    REQUIRE(opened.ok());
-    auto result = opened.value()->getOpcua();
-    REQUIRE_FALSE(result.ok());
-
-    const machine_config::capabilities::CapabilityError& err = result.error();
-    REQUIRE(err.code == result.errorCode());
-    REQUIRE(err.message == result.errorMessage());
-    REQUIRE(err.details == result.errorDetails());
-    REQUIRE(err.code == "ValidationError");
-    REQUIRE(err.details.size() == 7);
-    opened.value()->close();
-}
-
 // The openMachineConfig() dispatcher re-wraps MachineConfigFileV1_0::open()'s
 // error into a Result<shared_ptr<IMachineConfigFile>>. This line used to drop
 // errorDetails() during that re-wrap. No real caller can reach that bug
@@ -315,30 +244,6 @@ TEST_CASE("CapabilityErrorRewrapPreservesDetails") {
     REQUIRE(rewrapped.errorMessage() == inner.errorMessage());
     REQUIRE(rewrapped.errorDetails() == inner.errorDetails());
     REQUIRE(rewrapped.errorDetails().size() == 2);
-}
-
-TEST_CASE("CapabilityOpcuaOptionalFieldNeverAppearsInMissingDetails") {
-    // opcua_missing_required.h5 only clears the 7 required fields — every
-    // optional field is still present there, so absence of an optional field
-    // from errorDetails() would be trivially true. Also clear an optional
-    // field (keep_alive_count) in memory, re-write to a temp file, and
-    // confirm errorDetails() still names exactly the same 7 items, not 8.
-    MachineConfigReader reader{OPCUA_MISSING_REQUIRED};
-    auto cfg = reader.parse();
-    cfg.opcua->client.keep_alive_count = std::nullopt;
-    auto tmp = tmpPath("missing_required_plus_optional");
-    REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(tmp));
-
-    auto opened = MachineConfigFileV1_0::open(tmp.string());
-    REQUIRE(opened.ok());
-    auto result = opened.value()->getOpcua();
-    REQUIRE_FALSE(result.ok());
-    for (const auto& d : result.errorDetails()) {
-        REQUIRE(d != "Keep_Alive_Count");
-    }
-    REQUIRE(result.errorDetails().size() == 7);
-    opened.value()->close();
-    std::filesystem::remove(tmp);
 }
 
 TEST_CASE("CapabilityClearboxOptional") {

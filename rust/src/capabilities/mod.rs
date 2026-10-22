@@ -115,7 +115,7 @@ mod tests {
     use super::*;
     use crate::models::{
         ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfigMeta,
-        OpcuaConfig, OpticalTrain, Scanner, ScannerCard,
+        OpticalTrain, Scanner, ScannerCard,
     };
 
     const REFERENCE: &str =
@@ -218,12 +218,6 @@ mod tests {
             &self,
             _index: usize,
         ) -> Result<CorrectionData, CapabilityError> {
-            unreachable!("not exercised by the registry-dispatch tests")
-        }
-        fn get_opcua(&self) -> Result<OpcuaConfig, CapabilityError> {
-            unreachable!("not exercised by the registry-dispatch tests")
-        }
-        fn set_opcua(&mut self, _model: OpcuaConfig, _mode: SetMode) -> Result<(), CapabilityError> {
             unreachable!("not exercised by the registry-dispatch tests")
         }
         fn is_valid(&self) -> bool {

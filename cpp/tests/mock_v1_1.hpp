@@ -46,6 +46,7 @@
 // VALIDATION_PLAN.md §9.5).
 
 #include "machine_config/machine_config.hpp"
+#include "machine_config/extensions_hdf5.hpp"
 
 #include <highfive/H5File.hpp>
 
@@ -378,7 +379,8 @@ public:
         cfg.meta           = parseMeta(f);
         cfg.machine        = parseMachine(f.getGroup(ROOT_MACHINE));
         cfg.optical_trains = parseTrains(f);
-        cfg.opcua          = parseOpcua(f);
+        if (f.exist("OPCUA"))
+            cfg.extensions["TM_OPCUA"] = extension::readExtensionTree(f.getGroup("OPCUA").getId(), "TM_OPCUA");
         return cfg;
     }
 
@@ -686,82 +688,6 @@ private:
         return s;
     }
 
-    std::optional<OpcuaConfig> parseOpcua(const HighFive::File& f) const {
-        if (!f.exist("OPCUA")) return std::nullopt;
-
-        auto client_grp = f.getGroup("OPCUA/Client");
-        OpcuaClientConfig client;
-        client.server_url        = readRequiredStr(client_grp, "Server_URL");
-        client.auth_mode         = readRequiredStr(client_grp, "Auth_Mode");
-        client.security_mode     = readRequiredStr(client_grp, "Security_Mode");
-        client.security_policy   = readRequiredStr(client_grp, "Security_Policy");
-        client.bfs_max_depth     = readInt(client_grp, "BFS_Max_Depth").value_or(0);
-        client.publish_interval  = readInt(client_grp, "Publish_Interval").value_or(0);
-        client.sampling_interval = readInt(client_grp, "Sampling_Interval").value_or(0);
-        client.session_timeout   = readInt(client_grp, "Session_Timeout").value_or(0);
-        client.keep_alive_count             = readInt(client_grp, "Keep_Alive_Count");
-        client.lifetime_count               = readInt(client_grp, "Lifetime_Count");
-        client.machine_profile              = readStr(client_grp, "Machine_Profile");
-        client.queue_policy                 = readStr(client_grp, "Queue_Policy");
-        client.queue_size_data_change       = readInt(client_grp, "Queue_Size_Data_Change");
-        client.queue_size_events            = readInt(client_grp, "Queue_Size_Events");
-        client.reconnect_interval           = readInt(client_grp, "Reconnect_Interval");
-        client.root_node                    = readStr(client_grp, "Root_Node");
-        client.sync_loop_interval_initial   = readInt(client_grp, "Sync_Loop_Interval_Initial");
-        client.sync_loop_interval_settled   = readInt(client_grp, "Sync_Loop_Interval_Settled");
-        client.extra = collectExtra(client_grp, {
-            "Server_URL", "Auth_Mode", "Security_Mode", "Security_Policy",
-            "BFS_Max_Depth", "Publish_Interval", "Sampling_Interval", "Session_Timeout",
-            "Keep_Alive_Count", "Lifetime_Count", "Machine_Profile", "Queue_Policy",
-            "Queue_Size_Data_Change", "Queue_Size_Events", "Reconnect_Interval", "Root_Node",
-            "Sync_Loop_Interval_Initial", "Sync_Loop_Interval_Settled"
-        });
-
-        auto pipe_grp = f.getGroup("OPCUA/Pipe");
-        OpcuaPipeConfig pipe;
-        pipe.pipe_enabled = readBoolFromInt(pipe_grp, "Pipe_Enabled").value_or(false);
-        pipe.buffer_size  = readInt(pipe_grp, "Buffer_Size").value_or(0);
-        pipe.configure_client         = readBoolFromInt(pipe_grp, "Configure_Client");
-        pipe.inbound_rate_limit       = readInt(pipe_grp, "Inbound_Rate_Limit");
-        pipe.max_inbound_message_size = readInt(pipe_grp, "Max_Inbound_Message_Size");
-        pipe.min_integrity_level      = readStr(pipe_grp, "Min_Integrity_Level");
-        pipe.pipe_name                = readStr(pipe_grp, "Pipe_Name");
-        pipe.user_access_level        = readStr(pipe_grp, "User_Access_Level");
-        pipe.extra = collectExtra(pipe_grp, {
-            "Pipe_Enabled", "Buffer_Size", "Configure_Client", "Inbound_Rate_Limit",
-            "Max_Inbound_Message_Size", "Min_Integrity_Level", "Pipe_Name", "User_Access_Level"
-        });
-
-        auto tgrp = f.getGroup("OPCUA/Triggers");
-        OpcuaConfig opcua;
-        opcua.triggers_enabled = readBoolFromInt(tgrp, "Triggers_Enabled");
-        opcua.trigger_stop_ceiling_layers = readInt(tgrp, "Trigger_Stop_Ceiling_Layers");
-        for (const auto& name : tgrp.listObjectNames()) {
-            auto tg = tgrp.getGroup(name);
-            OpcuaTrigger t;
-            t.id           = readStr(tg, "ID");
-            t.signal       = readStr(tg, "Signal");
-            t.subsystem    = readStr(tg, "Subsystem");
-            t.rule_enabled = readBoolFromInt(tg, "Rule_Enabled");
-            t.start_value  = readStr(tg, "Start_Value");
-            t.stop_value   = readStr(tg, "Stop_Value");
-            t.case_sensitivity  = readStr(tg, "Case_Sensitivity");
-            t.component         = readStr(tg, "Component");
-            t.cooldown_period   = readInt(tg, "Cooldown_Period");
-            t.event             = readStr(tg, "Event");
-            t.max_fires_per_job = readInt(tg, "Max_Fires_Per_Job");
-            t.trigger_label     = readStr(tg, "Trigger_Label");
-            t.extra = collectExtra(tg, {
-                "ID", "Signal", "Subsystem", "Rule_Enabled", "Start_Value", "Stop_Value",
-                "Case_Sensitivity", "Component", "Cooldown_Period", "Event",
-                "Max_Fires_Per_Job", "Trigger_Label"
-            });
-            opcua.triggers[name] = std::move(t);
-        }
-        opcua.client = std::move(client);
-        opcua.pipe   = std::move(pipe);
-        return opcua;
-    }
 };
 
 // ---------------------------------------------------------------------------
@@ -783,7 +709,8 @@ public:
             auto tg = ogrp.createGroup(trainId(i));
             writeTrain(tg, cfg_.optical_trains[i]);
         }
-        if (cfg_.opcua) writeOpcua(f, *cfg_.opcua);
+        if (auto it = cfg_.extensions.find("TM_OPCUA"); it != cfg_.extensions.end())
+            extension::writeExtensionTree(f.getId(), "OPCUA", it->second);
     }
 
 private:
@@ -1075,67 +1002,6 @@ private:
         ws(ds, "original_uri",        sfcf.original_uri.value_or(""));
     }
 
-    void writeOpcua(HighFive::File& f, const OpcuaConfig& opcua) const {
-        auto og = f.createGroup("OPCUA");
-
-        auto cg = og.createGroup("Client");
-        const auto& c = opcua.client;
-        ws(cg, "Server_URL",      c.server_url);
-        ws(cg, "Auth_Mode",       c.auth_mode);
-        ws(cg, "Security_Mode",   c.security_mode);
-        ws(cg, "Security_Policy", c.security_policy);
-        cg.template createAttribute<int64_t>("BFS_Max_Depth",     HighFive::DataSpace::Scalar()).write(c.bfs_max_depth);
-        cg.template createAttribute<int64_t>("Publish_Interval",  HighFive::DataSpace::Scalar()).write(c.publish_interval);
-        cg.template createAttribute<int64_t>("Sampling_Interval", HighFive::DataSpace::Scalar()).write(c.sampling_interval);
-        cg.template createAttribute<int64_t>("Session_Timeout",   HighFive::DataSpace::Scalar()).write(c.session_timeout);
-        wi(cg, "Keep_Alive_Count", c.keep_alive_count);
-        wi(cg, "Lifetime_Count", c.lifetime_count);
-        ws(cg, "Machine_Profile", c.machine_profile.value_or(""));
-        ws(cg, "Queue_Policy", c.queue_policy.value_or(""));
-        wi(cg, "Queue_Size_Data_Change", c.queue_size_data_change);
-        wi(cg, "Queue_Size_Events", c.queue_size_events);
-        wi(cg, "Reconnect_Interval", c.reconnect_interval);
-        ws(cg, "Root_Node", c.root_node.value_or(""));
-        wi(cg, "Sync_Loop_Interval_Initial", c.sync_loop_interval_initial);
-        wi(cg, "Sync_Loop_Interval_Settled", c.sync_loop_interval_settled);
-        writeExtra(cg, c.extra);
-
-        auto pg = og.createGroup("Pipe");
-        const auto& p = opcua.pipe;
-        pg.template createAttribute<int64_t>("Pipe_Enabled", HighFive::DataSpace::Scalar()).write(static_cast<int64_t>(p.pipe_enabled));
-        pg.template createAttribute<int64_t>("Buffer_Size",  HighFive::DataSpace::Scalar()).write(p.buffer_size);
-        wb(pg, "Configure_Client", p.configure_client);
-        wi(pg, "Inbound_Rate_Limit", p.inbound_rate_limit);
-        wi(pg, "Max_Inbound_Message_Size", p.max_inbound_message_size);
-        ws(pg, "Min_Integrity_Level", p.min_integrity_level.value_or(""));
-        ws(pg, "Pipe_Name", p.pipe_name.value_or(""));
-        ws(pg, "User_Access_Level", p.user_access_level.value_or(""));
-        writeExtra(pg, p.extra);
-
-        auto tg = og.createGroup("Triggers");
-        if (opcua.triggers_enabled) {
-            // Stored as float64 to match original HDF5 file format.
-            double te = *opcua.triggers_enabled ? 1.0 : 0.0;
-            tg.template createAttribute<double>("Triggers_Enabled", HighFive::DataSpace::Scalar()).write(te);
-        }
-        wi(tg, "Trigger_Stop_Ceiling_Layers", opcua.trigger_stop_ceiling_layers);
-        for (const auto& [name, trigger] : opcua.triggers) {
-            auto trg = tg.createGroup(name);
-            ws(trg, "ID",          trigger.id.value_or(""));
-            ws(trg, "Signal",      trigger.signal.value_or(""));
-            ws(trg, "Subsystem",   trigger.subsystem.value_or(""));
-            wb(trg, "Rule_Enabled",trigger.rule_enabled);
-            ws(trg, "Start_Value", trigger.start_value.value_or(""));
-            ws(trg, "Stop_Value",  trigger.stop_value.value_or(""));
-            ws(trg, "Case_Sensitivity", trigger.case_sensitivity.value_or(""));
-            ws(trg, "Component", trigger.component.value_or(""));
-            wi(trg, "Cooldown_Period", trigger.cooldown_period);
-            ws(trg, "Event", trigger.event.value_or(""));
-            wi(trg, "Max_Fires_Per_Job", trigger.max_fires_per_job);
-            ws(trg, "Trigger_Label", trigger.trigger_label.value_or(""));
-            writeExtra(trg, trigger.extra);
-        }
-    }
 };
 
 // ---------------------------------------------------------------------------

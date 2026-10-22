@@ -280,7 +280,7 @@ scenarios::Result run(const std::filesystem::path&, const std::filesystem::path&
 
 } // namespace s06
 
-// S-07: OPCUA config roundtrip
+// S-07: Read, write, and re-read the OPCUA fixture's extension tree
 namespace s07 {
 
 using namespace machine_config;
@@ -293,64 +293,40 @@ scenarios::Result run(const std::filesystem::path& fixturesDir, const std::files
 
     try {
         MachineConfig cfg = MachineConfigReader{path}.parse();
-        if (!cfg.opcua) return {false, "opcua is absent after reading OPCUA fixture"};
-
-        std::string origUrl = cfg.opcua->client.server_url;
-        auto origTimeout = cfg.opcua->client.session_timeout;
-        auto origTriggersEnabled = cfg.opcua->triggers_enabled;
-        std::set<std::string> origNames;
-        for (const auto& [name, trig] : cfg.opcua->triggers) origNames.insert(name);
-        // Newly-promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — a
-        // representative subset, proving the low-level roundtrip works through
-        // the public Reader/Writer API too, not just in unit tests.
-        auto origMachineProfile = cfg.opcua->client.machine_profile;
-        auto origRootNode = cfg.opcua->client.root_node;
-        auto origPipeName = cfg.opcua->pipe.pipe_name;
-        auto origCeilingLayers = cfg.opcua->trigger_stop_ceiling_layers;
+        auto it = cfg.extensions.find("TM_OPCUA");
+        if (it == cfg.extensions.end()) {
+            return {false, "TM_OPCUA extension missing after reading the OPCUA fixture"};
+        }
+        const auto& tree = it->second;
+        const std::string origDigest = extension::canonicalDigest(tree);
+        std::set<std::string> origTriggers;
+        for (const auto& [name, child] : tree.children.at("Triggers").children) origTriggers.insert(name);
+        const auto origUrl = std::get<std::string>(tree.children.at("Client").attrs.at("Server_URL").value);
 
         auto tmp = scenarios::makeTempPath(".h5");
         MachineConfigWriter{cfg}.write(tmp);
         MachineConfig rb = MachineConfigReader{tmp}.parse();
-        if (!rb.opcua) return {false, "opcua is absent after roundtrip"};
 
-        if (rb.opcua->client.server_url != origUrl) {
-            return {false, "server_url changed"};
+        auto rbIt = rb.extensions.find("TM_OPCUA");
+        if (rbIt == rb.extensions.end()) {
+            return {false, "TM_OPCUA extension missing after roundtrip"};
         }
-        if (rb.opcua->client.session_timeout != origTimeout) {
-            return {false, "session_timeout changed"};
+        const auto& rbTree = rbIt->second;
+        if (extension::canonicalDigest(rbTree) != origDigest) {
+            return {false, "extension digest changed across the roundtrip"};
         }
-        if (rb.opcua->triggers_enabled != origTriggersEnabled) {
-            return {false, "triggers_enabled changed"};
+        std::set<std::string> rbTriggers;
+        for (const auto& [name, child] : rbTree.children.at("Triggers").children) rbTriggers.insert(name);
+        if (rbTriggers != origTriggers) {
+            return {false, "trigger groups changed across the roundtrip"};
         }
-        if (rb.opcua->client.machine_profile != origMachineProfile) {
-            return {false, "machine_profile changed after roundtrip"};
-        }
-        if (rb.opcua->client.root_node != origRootNode) {
-            return {false, "root_node changed after roundtrip"};
-        }
-        if (rb.opcua->pipe.pipe_name != origPipeName) {
-            return {false, "pipe_name changed after roundtrip"};
-        }
-        if (rb.opcua->trigger_stop_ceiling_layers != origCeilingLayers) {
-            return {false, "trigger_stop_ceiling_layers changed after roundtrip"};
+        const auto rbUrl = std::get<std::string>(rbTree.children.at("Client").attrs.at("Server_URL").value);
+        if (rbUrl != origUrl) {
+            return {false, "Server_URL changed: '" + origUrl + "' -> '" + rbUrl + "'"};
         }
 
-        std::set<std::string> rbNames;
-        for (const auto& [name, trig] : rb.opcua->triggers) rbNames.insert(name);
-        if (rbNames != origNames) {
-            return {false, "trigger names changed"};
-        }
-
-        const std::string co = "Chamber Oxygen Level";
-        auto oit = cfg.opcua->triggers.find(co);
-        auto rit = rb.opcua->triggers.find(co);
-        if (oit != cfg.opcua->triggers.end() && rit != rb.opcua->triggers.end()) {
-            if (oit->second.signal != rit->second.signal || oit->second.subsystem != rit->second.subsystem) {
-                return {false, "'" + co + "' signal/subsystem changed"};
-            }
-        }
-
-        return {true, "OPCUA roundtrip OK: " + std::to_string(origNames.size()) + " triggers, url=\"" + origUrl + "\""};
+        return {true, "extension roundtrip OK: " + std::to_string(origTriggers.size()) +
+                          " trigger groups, digest=" + origDigest.substr(0, 16) + "..."};
     } catch (const std::exception& e) {
         return {false, std::string("exception: ") + e.what()};
     }
@@ -433,14 +409,13 @@ namespace s09 {
 
 using namespace machine_config;
 
-// OpcuaConfig is never populated by MockConfigBuilder's default build (no
-// OPCUA fixture involved here) — type-annotating a never-called parameter is
-// exactly what VALIDATION_PLAN.md §8 S-09 allows: "Construct OR
-// type-annotate a variable with each type."
-static void typeCheckOpcua(const OpcuaConfig&) {}
+// Extension trees are never populated by MockConfigBuilder's default build —
+// type-annotating a never-called parameter is exactly what VALIDATION_PLAN.md
+// §8 S-09 allows: "Construct OR type-annotate a variable with each type."
+static void typeCheckExtension(const extension::Tree&) {}
 
 scenarios::Result run(const std::filesystem::path&, const std::filesystem::path&) {
-    (void)&typeCheckOpcua;
+    (void)&typeCheckExtension;
 
     MockConfigBuilder builder;
     builder.laser_count = 2;
@@ -737,99 +712,103 @@ scenarios::Result run(const std::filesystem::path& fixturesDir, const std::files
 
 } // namespace av08
 
-// AV-12: capabilities facade getOpcua() returns no error with the newly-
-// promoted typed fields readable, when every required field is present.
+// AV-12: the extension tree survives a capabilities-facade edit session.
 //
-// Nothing before this scenario exercised the capabilities facade at all —
-// S-07 above only goes through the plain Reader/Writer. See
-// OPCUA_FIELD_PROMOTION_PLAN.md's "Validation-app coverage" section for why
-// this is a real public-API guarantee, not just a unit-test concern.
+// Nothing else exercises extensions through the capabilities session API: an
+// edit session must never drop data core has no model for.
 namespace av12 {
 
 using namespace machine_config;
 using namespace machine_config::capabilities;
 
 scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path&) {
-    // MachineConfigFileV1_0::open() directly, not openMachineConfig(): the
-    // version-agnostic IMachineConfigFile interface only exposes
-    // fileVersion()/opticalTrainCount()/save()/close() (generated.hpp) — the
-    // OPCUA facade lives on the concrete v1.0 type, same as every other
-    // per-component getter this app never routes through the dispatcher for.
     auto path = fixturesDir / "reference_config_opcua.h5";
-    auto opened = MachineConfigFileV1_0::open(path);
-    if (!opened.ok()) {
-        return {false, "MachineConfigFileV1_0::open failed: " + opened.errorMessage()};
-    }
-    auto file = opened.value();
+    try {
+        const std::string before =
+            extension::canonicalDigest(MachineConfigReader{path}.parse().extensions.at("TM_OPCUA"));
 
-    auto opc = file->getOpcua();
-    if (!opc.ok()) {
+        // MachineConfigFileV1_0::open() directly, not openMachineConfig(): the
+        // version-agnostic IMachineConfigFile interface has no per-component setters.
+        auto opened = MachineConfigFileV1_0::open(path);
+        if (!opened.ok()) {
+            return {false, "MachineConfigFileV1_0::open failed: " + opened.errorMessage()};
+        }
+        auto file = opened.value();
+
+        auto scanner = file->getScanner(0);
+        if (!scanner.ok()) {
+            file->close();
+            return {false, "getScanner(0) failed: " + scanner.errorMessage()};
+        }
+        auto edited = scanner.value();
+        edited.working_distance = 77.5;
+        auto set = file->setScanner(0, edited, SetMode::Merge);
+        if (!set.ok()) {
+            file->close();
+            return {false, "setScanner failed: " + set.errorMessage()};
+        }
+
+        auto tmp = scenarios::makeTempPath(".h5");
+        std::string tmpStr = tmp.string();
+        auto saved = file->save(&tmpStr);
         file->close();
-        return {false, "getOpcua failed on fully-populated fixture: " + opc.errorMessage()};
-    }
-    const auto& cfg = opc.value();
-    file->close();
+        if (!saved.ok()) {
+            return {false, "save failed: " + saved.errorMessage()};
+        }
 
-    return {true,
-            "getOpcua Ok: machine_profile=" + scenarios::optOrNil(cfg.client.machine_profile) +
-                " root_node=" + scenarios::optOrNil(cfg.client.root_node) +
-                " pipe_name=" + scenarios::optOrNil(cfg.pipe.pipe_name) +
-                " triggers_enabled=" + scenarios::optOrNil(cfg.triggers_enabled) +
-                " trigger_stop_ceiling_layers=" + scenarios::optOrNil(cfg.trigger_stop_ceiling_layers)};
+        const std::string after =
+            extension::canonicalDigest(MachineConfigReader{tmp}.parse().extensions.at("TM_OPCUA"));
+        if (after != before) {
+            return {false, "extension digest changed across the session: " + before.substr(0, 16) +
+                               "... -> " + after.substr(0, 16) + "..."};
+        }
+        return {true, "extension survived the edit session, digest=" + after.substr(0, 16) + "..."};
+    } catch (const std::exception& e) {
+        return {false, std::string("exception: ") + e.what()};
+    }
 }
 
 } // namespace av12
 
-// AV-13: capabilities facade getOpcua() returns a ValidationError with
-// details naming exactly the seven missing required fields, when OPCUA is
-// present but incomplete.
+// AV-13: the writer rejects an invalid extension tree before creating any file.
+//
+// Validation is part of the stable extension contract; a rejected config must
+// never leave a half-written file behind.
 namespace av13 {
 
 using namespace machine_config;
-using namespace machine_config::capabilities;
 
 scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path&) {
-    // MachineConfigFileV1_0::open() directly — see av12's comment above.
-    auto fixture = scenarios::avFixture(fixturesDir, "opcua_missing_required.h5");
-    auto opened = MachineConfigFileV1_0::open(fixture);
-    if (!opened.ok()) {
-        return {false, "MachineConfigFileV1_0::open failed: " + opened.errorMessage()};
-    }
-    auto file = opened.value();
-
-    auto opc = file->getOpcua();
-    file->close();
-    if (opc.ok()) {
-        return {false, "getOpcua returned no error on a fixture missing required fields"};
-    }
-    if (opc.errorCode() != "ValidationError") {
-        return {false, "wrong error code: '" + opc.errorCode() + "'"};
+    MachineConfig cfg;
+    try {
+        cfg = MachineConfigReader{fixturesDir / "reference_config.h5"}.parse();
+    } catch (const std::exception& e) {
+        return {false, std::string("read failed: ") + e.what()};
     }
 
-    std::set<std::string> expected = {
-        "Machine_Profile", "Root_Node", "Configure_Client", "Pipe_Name",
-        "Triggers_Enabled", "Trigger_Stop_Ceiling_Layers",
-        "Laser Emission Interlock.Event",
-    };
-    std::set<std::string> actual(opc.errorDetails().begin(), opc.errorDetails().end());
-    if (actual != expected) {
-        std::ostringstream oss;
-        oss << "details mismatch, got {";
-        for (const auto& d : opc.errorDetails()) oss << "'" << d << "', ";
-        oss << "}, want exactly " << expected.size() << " items";
-        return {false, oss.str()};
-    }
+    extension::Tree bad;
+    bad.attrs["A"] = extension::Attr{"u8", std::uint64_t{999}};
+    cfg.extensions["Bad"] = bad;
+    cfg.meta.file_version = "1.1";
 
-    std::ostringstream oss;
-    oss << "ValidationError with details={";
-    bool first = true;
-    for (const auto& d : actual) {
-        if (!first) oss << ", ";
-        oss << "'" << d << "'";
-        first = false;
+    auto out = scenarios::makeTempPath(".h5");
+    std::filesystem::remove(out);
+    try {
+        MachineConfigWriter{cfg}.write(out);
+    } catch (const extension::ContractError& e) {
+        if (std::string(e.path()).find("@A") == std::string::npos) {
+            return {false, "error path does not name the attribute: '" + e.path() + "'"};
+        }
+        if (std::filesystem::exists(out)) {
+            std::filesystem::remove(out);
+            return {false, "a file was created despite the rejected extension"};
+        }
+        return {true, "ContractError at '" + e.path() + "', no file created"};
+    } catch (const std::exception& e) {
+        return {false, std::string("wrong exception type: ") + e.what()};
     }
-    oss << "}";
-    return {true, oss.str()};
+    std::filesystem::remove(out);
+    return {false, "writer accepted an out-of-range extension attribute"};
 }
 
 } // namespace av13

@@ -183,7 +183,7 @@ TEST_CASE("SynchronousSensorFixtureHasRealValues") {
 TEST_CASE("CombinedOpcuaAndSynchronousSensorsFixtureHasBoth") {
     MachineConfigReader reader{OPCUA_SENSORS_REF};
     auto cfg = reader.parse();
-    REQUIRE(cfg.opcua.has_value());
+    REQUIRE(cfg.extensions.count("TM_OPCUA") == 1);
     const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
     REQUIRE(cb.synchronous_sensors.count("Oxygen Sensor") == 1);
     const auto& s = cb.synchronous_sensors.at("Oxygen Sensor");
@@ -259,56 +259,6 @@ TEST_CASE("ScanFieldCorrectionBytesSize") {
     MachineConfigReader reader{REF};
     auto bytes = reader.getScanFieldCorrectionBytes(0);
     REQUIRE(bytes.size() == 1138799);
-}
-
-// §4.12: OpcuaAbsentReturnsNullopt — reference fixture has no OPCUA group.
-TEST_CASE("OpcuaAbsentReturnsNullopt") {
-    MachineConfigReader reader{REF};
-    auto cfg = reader.parse();
-    REQUIRE_FALSE(cfg.opcua.has_value());
-}
-
-// §4.12: OpcuaClientServerUrl — known URL from the opcua fixture.
-TEST_CASE("OpcuaClientServerUrl") {
-    MachineConfigReader reader{OPCUA_REF};
-    auto cfg = reader.parse();
-    REQUIRE(cfg.opcua.has_value());
-    REQUIRE(cfg.opcua->client.server_url ==
-        "opc.tcp://172.17.20.240:62541/TM_OPCUA_DevTemplate_V0.1/TelemetryServer");
-    REQUIRE(cfg.opcua->client.auth_mode         == "UsernamePassword");
-    REQUIRE(cfg.opcua->client.security_mode     == "SignAndEncrypt");
-    REQUIRE(cfg.opcua->client.publish_interval  == 250);
-    REQUIRE(cfg.opcua->client.session_timeout   == 60000);
-}
-
-// §4.12: OpcuaTriggerCount — 2 triggers in the opcua fixture.
-TEST_CASE("OpcuaTriggerCount") {
-    MachineConfigReader reader{OPCUA_REF};
-    auto cfg = reader.parse();
-    REQUIRE(cfg.opcua->triggers.size() == 2);
-    REQUIRE(cfg.opcua->triggers_enabled == std::optional<bool>{true});
-}
-
-// §4.12: OpcuaTriggerFieldsPopulated — spot-check "Chamber Oxygen Level".
-TEST_CASE("OpcuaTriggerFieldsPopulated") {
-    MachineConfigReader reader{OPCUA_REF};
-    auto cfg = reader.parse();
-    auto it = cfg.opcua->triggers.find("Chamber Oxygen Level");
-    REQUIRE(it != cfg.opcua->triggers.end());
-    const auto& t = it->second;
-    REQUIRE(t.signal    == std::optional<std::string>{"oxygen_level"});
-    REQUIRE(t.subsystem == std::optional<std::string>{"Gas"});
-    REQUIRE(t.rule_enabled == std::optional<bool>{true});
-    REQUIRE(t.start_value  == std::optional<std::string>{"700"});
-    REQUIRE(t.stop_value   == std::optional<std::string>{"1000"});
-}
-
-// §4.12: OpcuaPipeConfig — pipe_enabled and buffer_size.
-TEST_CASE("OpcuaPipeConfig") {
-    MachineConfigReader reader{OPCUA_REF};
-    auto cfg = reader.parse();
-    REQUIRE(cfg.opcua->pipe.pipe_enabled == true);
-    REQUIRE(cfg.opcua->pipe.buffer_size  == 65536);
 }
 
 // ---------------------------------------------------------------------------
@@ -441,7 +391,7 @@ TEST_CASE("ToJsonTopLevelStructure") {
     REQUIRE(j["optical_trains"].is_array());
     REQUIRE(j["optical_trains"].size() == 2);
     // opcua key must be absent (not null) when no OPCUA group exists.
-    REQUIRE_FALSE(j.contains("opcua"));
+    REQUIRE_FALSE(j.contains("extensions"));
 }
 
 // ---------------------------------------------------------------------------
@@ -544,120 +494,9 @@ TEST_CASE("Train0AndTrain1CorrectionDataDiffer") {
 // OPCUA completeness
 // ---------------------------------------------------------------------------
 
-// Integer fields and security_policy not yet covered by OpcuaClientServerUrl.
-TEST_CASE("OpcuaClientFullFields") {
-    MachineConfigReader reader{OPCUA_REF};
-    auto cfg = reader.parse();
-    const auto& c = cfg.opcua->client;
-    REQUIRE(c.bfs_max_depth     == 16);
-    REQUIRE(c.sampling_interval == 250);
-    REQUIRE(c.security_policy   == "ECC_brainpoolP384r1");
-}
-
-// Verify the second trigger is also parsed correctly.
-TEST_CASE("OpcuaLaserEmissionInterlockTrigger") {
-    MachineConfigReader reader{OPCUA_REF};
-    auto cfg = reader.parse();
-    auto it = cfg.opcua->triggers.find("Laser Emission Interlock");
-    REQUIRE(it != cfg.opcua->triggers.end());
-    const auto& t = it->second;
-    REQUIRE(t.id        == std::optional<std::string>{"trigger_1"});
-    REQUIRE(t.signal    == std::optional<std::string>{"yellow_light"});
-    REQUIRE(t.subsystem == std::optional<std::string>{"Chamber"});
-    REQUIRE(t.rule_enabled == std::optional<bool>{true});
-}
-
-// Promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — every one of the
-// 22 promoted fields checked against reference_config_opcua.h5's real values
-// (verified via h5py before writing this test), plus trigger_stop_ceiling_layers,
-// plus confirmation none of them land in extra.
-TEST_CASE("OpcuaPromotedFieldsHaveRealValues") {
-    MachineConfigReader reader{OPCUA_REF};
-    auto cfg = reader.parse();
-    const auto& c = cfg.opcua->client;
-    REQUIRE(c.keep_alive_count           == std::optional<std::int64_t>{240});
-    REQUIRE(c.lifetime_count             == std::optional<std::int64_t>{2400});
-    REQUIRE(c.machine_profile            == std::optional<std::string>{"Aconity"});
-    REQUIRE(c.queue_policy               == std::optional<std::string>{"DropOldest"});
-    REQUIRE(c.queue_size_data_change     == std::optional<std::int64_t>{100});
-    REQUIRE(c.queue_size_events          == std::optional<std::int64_t>{7200});
-    REQUIRE(c.reconnect_interval         == std::optional<std::int64_t>{10000});
-    REQUIRE(c.root_node                  == std::optional<std::string>{"MachineFleet"});
-    REQUIRE(c.sync_loop_interval_initial == std::optional<std::int64_t>{1000});
-    REQUIRE(c.sync_loop_interval_settled == std::optional<std::int64_t>{30000});
-    REQUIRE(c.extra.empty());
-
-    const auto& p = cfg.opcua->pipe;
-    REQUIRE(p.configure_client         == std::optional<bool>{true});
-    REQUIRE(p.inbound_rate_limit       == std::optional<std::int64_t>{-1});
-    REQUIRE(p.max_inbound_message_size == std::optional<std::int64_t>{65536});
-    REQUIRE(p.min_integrity_level      == std::optional<std::string>{"0x2000"});
-    REQUIRE(p.pipe_name                == std::optional<std::string>{"\\\\.\\pipe\\opc_ua_client_pipe"});
-    REQUIRE(p.user_access_level        == std::optional<std::string>{"AnyLocalUser"});
-    REQUIRE(p.extra.empty());
-
-    REQUIRE(cfg.opcua->trigger_stop_ceiling_layers == std::optional<std::int64_t>{3});
-
-    const auto& lei = cfg.opcua->triggers.at("Laser Emission Interlock");
-    REQUIRE(lei.case_sensitivity  == std::optional<std::string>{"Exact"});
-    REQUIRE(lei.component         == std::optional<std::string>{"machine_state_indicator"});
-    REQUIRE(lei.cooldown_period   == std::optional<std::int64_t>{0});
-    REQUIRE(lei.event             == std::optional<std::string>{"SensorEvents"});
-    REQUIRE(lei.max_fires_per_job == std::optional<std::int64_t>{0});
-    REQUIRE(lei.trigger_label     == std::optional<std::string>{"Laser Emission Interlock"});
-    REQUIRE(lei.extra.empty());
-
-    const auto& col = cfg.opcua->triggers.at("Chamber Oxygen Level");
-    REQUIRE(col.component     == std::optional<std::string>{"process_chamber::gas_management::oxygen_sensor::1"});
-    REQUIRE(col.event         == std::optional<std::string>{"SensorEvents"});
-    REQUIRE(col.trigger_label == std::optional<std::string>{"Chamber Oxygen Level"});
-    REQUIRE(col.extra.empty());
-}
-
 #ifndef VALIDATION_FIXTURES_DIR
 #  error "VALIDATION_FIXTURES_DIR must be defined by tests/CMakeLists.txt"
 #endif
-
-// opcua_missing_required.h5 (Phase 0) removes all seven Phase-2-required
-// attributes. The reader must stay permissive (facade-only enforcement — see
-// OPCUA_FIELD_PROMOTION_PLAN.md): parsing succeeds, the removed fields read
-// back nullopt, and the per-trigger Event asymmetry is exactly as the
-// fixture intends.
-TEST_CASE("OpcuaMissingRequiredFixtureParsesGracefully") {
-    static const std::string path =
-        std::string(VALIDATION_FIXTURES_DIR) + "/opcua_missing_required.h5";
-    MachineConfigReader reader{path};
-    auto cfg = reader.parse();
-    REQUIRE(cfg.opcua.has_value());
-    const auto& o = *cfg.opcua;
-
-    REQUIRE_FALSE(o.client.machine_profile.has_value());
-    REQUIRE_FALSE(o.client.root_node.has_value());
-    REQUIRE_FALSE(o.pipe.configure_client.has_value());
-    REQUIRE_FALSE(o.pipe.pipe_name.has_value());
-    REQUIRE_FALSE(o.triggers_enabled.has_value());
-    REQUIRE_FALSE(o.trigger_stop_ceiling_layers.has_value());
-
-    const auto& lei = o.triggers.at("Laser Emission Interlock");
-    REQUIRE_FALSE(lei.event.has_value());
-    const auto& col = o.triggers.at("Chamber Oxygen Level");
-    REQUIRE(col.event == std::optional<std::string>{"SensorEvents"});
-
-    // Untouched fields elsewhere confirm the rest of the file is unaffected.
-    REQUIRE_FALSE(o.client.server_url.empty());
-    REQUIRE(o.client.keep_alive_count == std::optional<std::int64_t>{240});
-    REQUIRE(o.pipe.buffer_size == 65536);
-    REQUIRE(lei.trigger_label == std::optional<std::string>{"Laser Emission Interlock"});
-}
-
-// toJson must include the "opcua" key when the fixture has an OPCUA group.
-TEST_CASE("ToJsonOpcuaKeyPresent") {
-    MachineConfigReader reader{OPCUA_REF};
-    auto j = nlohmann::json::parse(reader.toJson());
-    REQUIRE(j.contains("opcua"));
-    REQUIRE(j["opcua"].contains("client"));
-    REQUIRE(j["opcua"].contains("triggers"));
-}
 
 // ---------------------------------------------------------------------------
 // Synthetic fixture — validates a completely different HDF5 file
@@ -674,7 +513,7 @@ TEST_CASE("SyntheticFixtureParsesCorrectly") {
     REQUIRE(cfg.optical_trains[0].train_id == "Optical_Train_01");
     REQUIRE(cfg.optical_trains[1].train_id == "Optical_Train_02");
     // Synthetic fixture has no OPCUA group.
-    REQUIRE_FALSE(cfg.opcua.has_value());
+    REQUIRE(cfg.extensions.empty());
     // Basic scanner sanity check.
     REQUIRE_THAT(*cfg.optical_trains[0].scanner.working_distance,
                  Catch::Matchers::WithinRel(670.0));

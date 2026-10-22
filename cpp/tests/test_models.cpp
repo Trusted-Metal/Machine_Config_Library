@@ -116,12 +116,12 @@ TEST_CASE("MachineConfigRoundtrip") {
     cfg.machine.build_plate_x = 150.0;
     cfg.machine.build_plate_radius = std::nullopt;
 
-    cfg.opcua = std::nullopt;
+    cfg.extensions.clear();
 
     nlohmann::json j = cfg;
 
-    // opcua must be absent (not null) when nullopt.
-    REQUIRE_FALSE(j.contains("opcua"));
+    // extensions must be absent (not null) when empty.
+    REQUIRE_FALSE(j.contains("extensions"));
     REQUIRE(j["meta"]["machine_name"].get<std::string>() == "TestMachine");
     REQUIRE(j["machine"]["build_plate_x"].get<double>() == 150.0);
     REQUIRE(j["machine"]["build_plate_radius"].is_null());
@@ -130,5 +130,5 @@ TEST_CASE("MachineConfigRoundtrip") {
     REQUIRE(cfg2.meta.machine_name == "TestMachine");
     REQUIRE(cfg2.machine.build_plate_x == std::optional<double>{150.0});
     REQUIRE(cfg2.machine.build_plate_radius == std::nullopt);
-    REQUIRE(cfg2.opcua == std::nullopt);
+    REQUIRE(cfg2.extensions.empty());
 }

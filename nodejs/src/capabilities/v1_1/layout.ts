@@ -11,10 +11,8 @@ export const ROOT_MACHINE = 'Machine';
 export const ROOT_OPTICAL_TRAINS = 'Machine/Optical_Trains';
 export const ROOT_EXTENSIONS = 'Extensions';
 export const GROUP_CLEARBOX = 'Extensions/ClearBox';
-export const ROOT_OPCUA = 'Extensions/TM_OPCUA';
-export const OPCUA_CLIENT = 'Extensions/TM_OPCUA/Client';
-export const OPCUA_PIPE = 'Extensions/TM_OPCUA/Pipe';
-export const OPCUA_TRIGGERS = 'Extensions/TM_OPCUA/Triggers';
+/** Group names under Extensions/ that core still models and therefore never exposes as extension trees. */
+export const MODELLED_EXTENSION_NAMES: ReadonlySet<string> = new Set(['ClearBox']);
 
 export const TRAIN_ID_PREFIX = 'Optical_Train_';
 export const GROUP_SCANNER = 'Scanner';

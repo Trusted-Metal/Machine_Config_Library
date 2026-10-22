@@ -162,9 +162,13 @@ func TestV1_1AdapterRead(t *testing.T) {
 		}
 	}
 
-	// Change 2: OPCUA relocated, contents unaffected.
-	if cfg.Opcua == nil || cfg.Opcua.Client.MachineProfile == nil {
-		t.Fatal("expected opcua present with machine_profile populated")
+	// Change 2: the legacy OPCUA group is carried as the opaque "TM_OPCUA" extension, contents unaffected.
+	opcua := cfg.Extensions["TM_OPCUA"]
+	if opcua == nil || opcua.Children["Client"] == nil {
+		t.Fatal("expected the TM_OPCUA extension with a Client group")
+	}
+	if _, ok := opcua.Children["Client"].Attrs["Machine_Profile"]; !ok {
+		t.Fatal("expected Client/Machine_Profile to survive the migration")
 	}
 
 	// Change 3: ClearBox Power_Characterization — train 1 LINEAR, train 2 POLYNOMIAL.

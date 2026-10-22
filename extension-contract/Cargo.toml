@@ -1,0 +1,12 @@
+[package]
+name = "mcf-extension-contract"
+version = "0.1.0"
+edition = "2021"
+description = "Opaque extension tree contract shared by the MCF core library and extension libraries"
+license = "MIT"
+
+[dependencies]
+serde      = "1"
+serde_json = "1"
+sha2       = "0.10"
+thiserror  = "1"

@@ -272,30 +272,26 @@ ClearBox and scan field correction file groups are not written by `YamlConfigBui
 
 ## Use case 8 — Read OPCUA telemetry configuration
 
-OPCUA data is optional machine-telemetry config stored in a separate `OPCUA` HDF5 group.
-`parse()` returns `config.opcua` (populated when the group exists, `None` otherwise).
+Core no longer models OPC UA. The legacy `OPCUA/` group (File_Version 1.0) or `Extensions/TM_OPCUA/`
+(1.1) is returned verbatim as the opaque extension `config.extensions["TM_OPCUA"]` (an
+`ExtensionTree`, see `docs/EXTENSION_CONTRACT.md`); a separate extension library interprets it.
 Use `get_raw_group()` for ad-hoc inspection of any path:
 
 ```python
-from machine_config import MachineConfigReader
+from machine_config import MachineConfigReader, canonical_digest
 
 reader = MachineConfigReader("fixtures/reference_config_opcua.h5")
 config = reader.parse()
 
-if config.opcua:
-    print(config.opcua.client.server_url)       # opc.tcp://172.17.20.240:...
-    print(config.opcua.client.auth_mode)        # UsernamePassword
-    for name, trigger in config.opcua.triggers.items():
-        print(f"{name}: signal={trigger.signal}")
+opcua = config.extensions.get("TM_OPCUA")
+if opcua:
+    print(list(opcua.children))                              # ['Client', 'Pipe', 'Triggers']
+    print(opcua.children["Client"].attrs["Server_URL"])      # Attr(dtype='utf8', value='opc.tcp://...')
+    print(canonical_digest(opcua))                           # identical in every language
 
 # Raw attribute map — returns {} for missing paths, never raises
 client = reader.get_raw_group("OPCUA/Client")
 print(client["Server_URL"])
-print(client["Auth_Mode"])
-
-interlock = reader.get_raw_group("OPCUA/Triggers/Laser Emission Interlock")
-print(interlock["Signal"])       # yellow_light
-print(interlock["Subsystem"])    # Chamber
 
 result = reader.get_raw_group("does/not/exist")   # {}
 ```
@@ -484,7 +480,7 @@ Source: [examples/full_workflow/python/main.py](../examples/full_workflow/python
 .\.venv\Scripts\python.exe -m pytest python/tests/test_reader.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_writer.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_writer_roundtrip.py -v
-.\.venv\Scripts\python.exe -m pytest python/tests/test_opcua_roundtrip.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_extensions.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_builder.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_cli.py -v
 .\.venv\Scripts\python.exe -m pytest python/tests/test_schema.py -v
@@ -497,10 +493,10 @@ Source: [examples/full_workflow/python/main.py](../examples/full_workflow/python
 
 | Suite | Tests | What it covers |
 |---|---|---|
-| `test_reader.py` | — | Full parse of real AconityMIDI fixtures; all HDF5→model field mappings; OPCUA; `get_raw_group`; `include_binary` flag |
+| `test_reader.py` | — | Full parse of real AconityMIDI fixtures; all HDF5→model field mappings; OPCUA group as an extension; `get_raw_group`; `include_binary` flag |
 | `test_writer.py` | — | HDF5 write→re-parse roundtrip for machine name, hash, build plate, ClearBox scalars, schema validity |
 | `test_writer_roundtrip.py` | — | Every scalar field; all 18 ClearBox scalar attributes; NaN↔None; axis configurations |
-| `test_opcua_roundtrip.py` | — | OpcuaConfig full roundtrip: client, pipe, triggers (known fields + extra), write with OPCUA→read back |
+| `test_extensions.py` | — | Extension contract: validation, pinned digest, JSON form, HDF5 round trips, Node/Rust fixtures, legacy OPCUA group, hash |
 | `test_builder.py` | — | `MockConfigBuilder`; `YamlConfigBuilder` roundtrip; `ConfigEditor` offset mutation |
 | `test_cli.py` | — | `inspect`, `validate`, `export-json`, `write`, `build --mock`, `build --from-yaml`, `demo` |
 | `test_schema.py` | — | Schema parses as JSON; draft 2020-12 meta-validation; all `required` constraints; golden file validation |

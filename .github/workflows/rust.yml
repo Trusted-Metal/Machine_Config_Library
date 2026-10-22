@@ -62,8 +62,8 @@ jobs:
       # docs/rust.md's Installation section — see VALIDATION_PLAN.md and the
       # conversation this was scoped in for the full reasoning.
       - name: Verify cargo package (packaging + isolated rebuild, not published)
-        run: cargo package
-        working-directory: rust
+        # --workspace so the path dependency on mcf-extension-contract resolves against the sibling crate being packaged.
+        run: cargo package --workspace
 
       - name: Build release binary
         run: cargo build --release

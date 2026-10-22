@@ -53,7 +53,7 @@ flowchart TD
     PEEK -->|"1.1"| V11["capabilities/v1_1/<br/>layout + hdf5 (reader) + writer<br/>— knows the v1.1 on-disk shape"]
     PEEK -->|"unrecognized version"| ERR["UnsupportedFileVersion error"]
 
-    V10 --> MODEL["StableModel — MachineConfig<br/>meta · machine · optical_trains[] · opcua<br/>(identical shape regardless of source version)"]
+    V10 --> MODEL["StableModel — MachineConfig<br/>meta · machine · optical_trains[] · extensions<br/>(identical shape regardless of source version)"]
     V11 --> MODEL
 
     MODEL --> FACADE["Public facade<br/>MachineConfigReader / MachineConfigWriter<br/>open_machine_config() · getScanner() / setScanner()"]
@@ -91,7 +91,7 @@ facade — never raw HDF5.
 ```mermaid
 flowchart TD
     MCF["machine-config crate<br/>(git dependency on Machine_Config_Library)"]
-    MCF -->|"open_machine_config()<br/>get_meta / get_machine / get_train / get_opcua"| FACADE["src-tauri/src/machine_config/<br/>thin facade wrapper<br/>(mod.rs, reader.rs, types.rs)"]
+    MCF -->|"open_machine_config()<br/>get_meta / get_machine / get_train / extensions"| FACADE["src-tauri/src/machine_config/<br/>thin facade wrapper<br/>(mod.rs, reader.rs, types.rs)"]
 
     FACADE --> CORE["clearbox_lib<br/>(shared core: capture_services, hdf5, opcua,<br/>daemon, settings, correction, protocol, ...)"]
 

@@ -14,7 +14,6 @@ file:
     - { name: machine, returns: MachineHandle }
     - { name: opticalTrains, returns: TrainCollection }
     - { name: opticalTrain, args: [index], returns: TrainHandle, result: true }
-    - { name: opcua, returns: OpcuaHandle, result: true }
     - { name: save, args: [path], path_optional: true, returns: void, result: true }
     - { name: close, returns: void }
 
@@ -42,9 +41,6 @@ handles:
   ClearBoxHandle:
     - { name: getModel, returns: ClearBox }
     - { name: setModel, args: [ClearBox, SetMode], mode_optional: true, returns: void, result: true }
-  OpcuaHandle:
-    - { name: getModel, returns: Opcua }
-    - { name: setModel, args: [Opcua, SetMode], mode_optional: true, returns: void, result: true }
   TrainCollection:
     - { name: length, returns: number }
     - { name: get, args: [index], returns: TrainHandle, result: true }

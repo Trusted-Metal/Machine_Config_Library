@@ -44,8 +44,25 @@ pub fn compute_configuration_hash(config: &MachineConfig) -> String {
         }
     }
 
+    // Extension content enters the hash as one canonical digest per extension; an empty map
+    // leaves the hash of every existing config unchanged. Trees read from a file are valid by
+    // construction and the writers validate before writing, so a contract violation here is a
+    // caller bug.
+    let extensions = std::mem::take(&mut config.extensions);
+
     let mut value =
         serde_json::to_value(&config).expect("MachineConfig always serializes to JSON");
+    if !extensions.is_empty() {
+        let digests: serde_json::Map<String, serde_json::Value> = extensions
+            .iter()
+            .map(|(name, tree)| {
+                let digest = mcf_extension_contract::canonical_digest(tree)
+                    .expect("extension tree violates the extension contract");
+                (name.clone(), serde_json::Value::String(digest))
+            })
+            .collect();
+        value["extensions"] = serde_json::Value::Object(digests);
+    }
     if let Some(meta) = value.get_mut("meta").and_then(|m| m.as_object_mut()) {
         meta.remove("configuration_hash");
         meta.remove("export_date");

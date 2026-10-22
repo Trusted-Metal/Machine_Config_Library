@@ -8,6 +8,7 @@ package machineconfig
 // reflection-derived rather than a hardcoded list.
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 
@@ -15,6 +16,8 @@ import (
 )
 
 var integerFieldNameSet = deriveIntegerFieldNames()
+
+var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 
 // IntegerFieldNames returns the set of JSON leaf key names classified as
 // integer-typed for configuration-hash rendering purposes. Exported for
@@ -55,6 +58,10 @@ func stripContainers(t reflect.Type) reflect.Type {
 func collectIntegerFieldNames(t reflect.Type, seen map[reflect.Type]bool, out map[string]struct{}) {
 	t = stripContainers(t)
 	if t.Kind() != reflect.Struct || seen[t] {
+		return
+	}
+	// A type with its own JSON encoding (extension.Tree) is opaque to the struct-tag walk.
+	if t.Implements(jsonMarshalerType) || reflect.PtrTo(t).Implements(jsonMarshalerType) {
 		return
 	}
 	seen[t] = true

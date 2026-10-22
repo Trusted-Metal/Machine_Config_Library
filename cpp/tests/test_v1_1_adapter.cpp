@@ -100,9 +100,9 @@ TEST_CASE("v1_1 read: natively-authored fixture, all 5 changes asserted") {
         REQUIRE_FALSE(t.scanner.y_axis.tuning_type.has_value());
     }
 
-    // Change 2: OPCUA relocated, contents unaffected.
-    REQUIRE(cfg.opcua.has_value());
-    REQUIRE(cfg.opcua->client.machine_profile.has_value());
+    // Change 2: the legacy OPCUA group is carried as the opaque "TM_OPCUA" extension, contents unaffected.
+    REQUIRE(cfg.extensions.count("TM_OPCUA") == 1);
+    REQUIRE(cfg.extensions.at("TM_OPCUA").children.at("Client").attrs.count("Machine_Profile") == 1);
 
     // Change 3: ClearBox Power_Characterization — train 1 LINEAR, train 2 POLYNOMIAL.
     const ClearBox& cb0 = *cfg.optical_trains[0].optional_components.clearbox;

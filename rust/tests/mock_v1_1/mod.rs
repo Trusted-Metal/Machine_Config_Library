@@ -93,53 +93,6 @@ const KNOWN_ROOT_KEYS: &[&str] = &[
     ATTR_CONFIG_AUTHOR,
 ];
 
-const KNOWN_CLIENT_KEYS: &[&str] = &[
-    "Server_URL",
-    "Auth_Mode",
-    "Security_Mode",
-    "Security_Policy",
-    "BFS_Max_Depth",
-    "Publish_Interval",
-    "Sampling_Interval",
-    "Session_Timeout",
-    "Keep_Alive_Count",
-    "Lifetime_Count",
-    "Machine_Profile",
-    "Queue_Policy",
-    "Queue_Size_Data_Change",
-    "Queue_Size_Events",
-    "Reconnect_Interval",
-    "Root_Node",
-    "Sync_Loop_Interval_Initial",
-    "Sync_Loop_Interval_Settled",
-];
-
-const KNOWN_PIPE_KEYS: &[&str] = &[
-    "Pipe_Enabled",
-    "Buffer_Size",
-    "Configure_Client",
-    "Inbound_Rate_Limit",
-    "Max_Inbound_Message_Size",
-    "Min_Integrity_Level",
-    "Pipe_Name",
-    "User_Access_Level",
-];
-
-const KNOWN_TRIGGER_KEYS: &[&str] = &[
-    "ID",
-    "Signal",
-    "Subsystem",
-    "Rule_Enabled",
-    "Start_Value",
-    "Stop_Value",
-    "Case_Sensitivity",
-    "Component",
-    "Cooldown_Period",
-    "Event",
-    "Max_Fires_Per_Job",
-    "Trigger_Label",
-];
-
 // ---------------------------------------------------------------------------
 // Attribute-reading helpers — local copies of the same-named helpers in
 // `capabilities::v1_0::hdf5` (which are private to that module). See that
@@ -280,21 +233,6 @@ fn read_bool_from_int(loc: &Location, key: &str) -> Result<Option<bool>> {
         Some(1) => Ok(Some(true)),
         Some(other) => Err(MachineConfigError::Parse(format!(
             "attribute '{key}' has value {other}; expected 0 or 1 (Rule 8)"
-        ))),
-    }
-}
-
-fn read_required_bool_from_int(loc: &Location, key: &str, default: i64) -> Result<bool> {
-    Ok(read_required_int(loc, key, default)? != 0)
-}
-
-fn read_bool_from_float(loc: &Location, key: &str) -> Result<Option<bool>> {
-    match read_float(loc, key)? {
-        None => Ok(None),
-        Some(v) if v == 0.0 => Ok(Some(false)),
-        Some(v) if v == 1.0 => Ok(Some(true)),
-        Some(other) => Err(MachineConfigError::Parse(format!(
-            "attribute '{key}' has value {other}; expected 0.0 or 1.0"
         ))),
     }
 }
@@ -521,9 +459,8 @@ impl MockV1_1Reader {
         let optical_trains =
             train_ids.iter().map(|tid| self.parse_train(&f, tid)).collect::<Result<Vec<_>>>()?;
 
-        let opcua = self.parse_opcua(&f)?;
 
-        Ok(MachineConfig { meta, machine, optical_trains, opcua })
+        Ok(MachineConfig { meta, machine, optical_trains, extensions: Default::default() })
     }
 
     fn parse_train(&self, f: &H5File, train_id: &str) -> Result<OpticalTrain> {
@@ -806,85 +743,6 @@ impl MockV1_1Reader {
             raw_bytes: None,
         })
     }
-
-    fn parse_opcua(&self, f: &H5File) -> Result<Option<OpcuaConfig>> {
-        let opcua_grp = match f.group("OPCUA") {
-            Ok(g) => g,
-            Err(_) => return Ok(None),
-        };
-
-        let client_grp = opcua_grp.group("Client")?;
-        let client = OpcuaClientConfig {
-            server_url: read_required_str(&client_grp, "Server_URL")?,
-            auth_mode: read_required_str(&client_grp, "Auth_Mode")?,
-            security_mode: read_required_str(&client_grp, "Security_Mode")?,
-            security_policy: read_required_str(&client_grp, "Security_Policy")?,
-            bfs_max_depth: read_required_int(&client_grp, "BFS_Max_Depth", 0)?,
-            publish_interval: read_required_int(&client_grp, "Publish_Interval", 0)?,
-            sampling_interval: read_required_int(&client_grp, "Sampling_Interval", 0)?,
-            session_timeout: read_required_int(&client_grp, "Session_Timeout", 0)?,
-            keep_alive_count: read_int(&client_grp, "Keep_Alive_Count")?,
-            lifetime_count: read_int(&client_grp, "Lifetime_Count")?,
-            machine_profile: read_str(&client_grp, "Machine_Profile")?,
-            queue_policy: read_str(&client_grp, "Queue_Policy")?,
-            queue_size_data_change: read_int(&client_grp, "Queue_Size_Data_Change")?,
-            queue_size_events: read_int(&client_grp, "Queue_Size_Events")?,
-            reconnect_interval: read_int(&client_grp, "Reconnect_Interval")?,
-            root_node: read_str(&client_grp, "Root_Node")?,
-            sync_loop_interval_initial: read_int(&client_grp, "Sync_Loop_Interval_Initial")?,
-            sync_loop_interval_settled: read_int(&client_grp, "Sync_Loop_Interval_Settled")?,
-            extra: collect_extra(&client_grp, KNOWN_CLIENT_KEYS)?,
-        };
-
-        let pipe_grp = opcua_grp.group("Pipe")?;
-        let pipe = OpcuaPipeConfig {
-            pipe_enabled: read_required_bool_from_int(&pipe_grp, "Pipe_Enabled", 0)?,
-            buffer_size: read_required_int(&pipe_grp, "Buffer_Size", 0)?,
-            configure_client: read_bool_from_int(&pipe_grp, "Configure_Client")?,
-            inbound_rate_limit: read_int(&pipe_grp, "Inbound_Rate_Limit")?,
-            max_inbound_message_size: read_int(&pipe_grp, "Max_Inbound_Message_Size")?,
-            min_integrity_level: read_str(&pipe_grp, "Min_Integrity_Level")?,
-            pipe_name: read_str(&pipe_grp, "Pipe_Name")?,
-            user_access_level: read_str(&pipe_grp, "User_Access_Level")?,
-            extra: collect_extra(&pipe_grp, KNOWN_PIPE_KEYS)?,
-        };
-
-        let triggers_grp = opcua_grp.group("Triggers")?;
-        let triggers_enabled = read_bool_from_float(&triggers_grp, "Triggers_Enabled")?;
-        let trigger_stop_ceiling_layers = read_int(&triggers_grp, "Trigger_Stop_Ceiling_Layers")?;
-
-        let mut triggers = IndexMap::new();
-        for name in triggers_grp.member_names()? {
-            let tg = triggers_grp.group(&name)?;
-            let extra = collect_extra(&tg, KNOWN_TRIGGER_KEYS)?;
-            triggers.insert(
-                name,
-                OpcuaTrigger {
-                    id: read_str(&tg, "ID")?,
-                    signal: read_str(&tg, "Signal")?,
-                    subsystem: read_str(&tg, "Subsystem")?,
-                    rule_enabled: read_bool_from_int(&tg, "Rule_Enabled")?,
-                    start_value: read_str(&tg, "Start_Value")?,
-                    stop_value: read_str(&tg, "Stop_Value")?,
-                    case_sensitivity: read_str(&tg, "Case_Sensitivity")?,
-                    component: read_str(&tg, "Component")?,
-                    cooldown_period: read_int(&tg, "Cooldown_Period")?,
-                    event: read_str(&tg, "Event")?,
-                    max_fires_per_job: read_int(&tg, "Max_Fires_Per_Job")?,
-                    trigger_label: read_str(&tg, "Trigger_Label")?,
-                    extra,
-                },
-            );
-        }
-
-        Ok(Some(OpcuaConfig {
-            client,
-            pipe,
-            triggers,
-            triggers_enabled,
-            trigger_stop_ceiling_layers,
-        }))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -936,9 +794,6 @@ impl<'a> MockV1_1Writer<'a> {
             }
         }
 
-        if let Some(opcua) = &self.config.opcua {
-            self.write_opcua(&f, opcua)?;
-        }
         Ok(())
     }
 
@@ -1226,75 +1081,6 @@ impl<'a> MockV1_1Writer<'a> {
         ws_ds(&ds, "document_created_at", sfcf.document_created_at.as_deref().unwrap_or(""))?;
         ws_ds(&ds, "document_type", sfcf.document_type.as_deref().unwrap_or(""))?;
         ws_ds(&ds, "original_uri", sfcf.original_uri.as_deref().unwrap_or(""))?;
-        Ok(())
-    }
-
-    fn write_opcua(&self, f: &H5File, opcua: &OpcuaConfig) -> Result<()> {
-        let opcua_grp = f.create_group("OPCUA")?;
-        let client_grp = opcua_grp.create_group("Client")?;
-        let c = &opcua.client;
-        ws(&client_grp, "Server_URL", &c.server_url)?;
-        ws(&client_grp, "Auth_Mode", &c.auth_mode)?;
-        ws(&client_grp, "Security_Mode", &c.security_mode)?;
-        ws(&client_grp, "Security_Policy", &c.security_policy)?;
-        client_grp.new_attr::<i64>().create("BFS_Max_Depth")?.write_scalar(&c.bfs_max_depth)?;
-        client_grp.new_attr::<i64>().create("Publish_Interval")?.write_scalar(&c.publish_interval)?;
-        client_grp.new_attr::<i64>().create("Sampling_Interval")?.write_scalar(&c.sampling_interval)?;
-        client_grp.new_attr::<i64>().create("Session_Timeout")?.write_scalar(&c.session_timeout)?;
-        wi(&client_grp, "Keep_Alive_Count", c.keep_alive_count)?;
-        wi(&client_grp, "Lifetime_Count", c.lifetime_count)?;
-        ws(&client_grp, "Machine_Profile", c.machine_profile.as_deref().unwrap_or(""))?;
-        ws(&client_grp, "Queue_Policy", c.queue_policy.as_deref().unwrap_or(""))?;
-        wi(&client_grp, "Queue_Size_Data_Change", c.queue_size_data_change)?;
-        wi(&client_grp, "Queue_Size_Events", c.queue_size_events)?;
-        wi(&client_grp, "Reconnect_Interval", c.reconnect_interval)?;
-        ws(&client_grp, "Root_Node", c.root_node.as_deref().unwrap_or(""))?;
-        wi(&client_grp, "Sync_Loop_Interval_Initial", c.sync_loop_interval_initial)?;
-        wi(&client_grp, "Sync_Loop_Interval_Settled", c.sync_loop_interval_settled)?;
-        for (k, v) in &c.extra {
-            write_extra_value(&client_grp, k, v)?;
-        }
-
-        let pipe_grp = opcua_grp.create_group("Pipe")?;
-        let p = &opcua.pipe;
-        pipe_grp.new_attr::<i64>().create("Pipe_Enabled")?.write_scalar(&(p.pipe_enabled as i64))?;
-        pipe_grp.new_attr::<i64>().create("Buffer_Size")?.write_scalar(&p.buffer_size)?;
-        wb(&pipe_grp, "Configure_Client", p.configure_client)?;
-        wi(&pipe_grp, "Inbound_Rate_Limit", p.inbound_rate_limit)?;
-        wi(&pipe_grp, "Max_Inbound_Message_Size", p.max_inbound_message_size)?;
-        ws(&pipe_grp, "Min_Integrity_Level", p.min_integrity_level.as_deref().unwrap_or(""))?;
-        ws(&pipe_grp, "Pipe_Name", p.pipe_name.as_deref().unwrap_or(""))?;
-        ws(&pipe_grp, "User_Access_Level", p.user_access_level.as_deref().unwrap_or(""))?;
-        for (k, v) in &p.extra {
-            write_extra_value(&pipe_grp, k, v)?;
-        }
-
-        let triggers_grp = opcua_grp.create_group("Triggers")?;
-        if let Some(te) = opcua.triggers_enabled {
-            triggers_grp
-                .new_attr::<f64>()
-                .create("Triggers_Enabled")?
-                .write_scalar(&(if te { 1.0_f64 } else { 0.0_f64 }))?;
-        }
-        wi(&triggers_grp, "Trigger_Stop_Ceiling_Layers", opcua.trigger_stop_ceiling_layers)?;
-        for (name, trigger) in &opcua.triggers {
-            let tg = triggers_grp.create_group(name)?;
-            ws(&tg, "ID", trigger.id.as_deref().unwrap_or(""))?;
-            ws(&tg, "Signal", trigger.signal.as_deref().unwrap_or(""))?;
-            ws(&tg, "Subsystem", trigger.subsystem.as_deref().unwrap_or(""))?;
-            wb(&tg, "Rule_Enabled", trigger.rule_enabled)?;
-            ws(&tg, "Start_Value", trigger.start_value.as_deref().unwrap_or(""))?;
-            ws(&tg, "Stop_Value", trigger.stop_value.as_deref().unwrap_or(""))?;
-            ws(&tg, "Case_Sensitivity", trigger.case_sensitivity.as_deref().unwrap_or(""))?;
-            ws(&tg, "Component", trigger.component.as_deref().unwrap_or(""))?;
-            wi(&tg, "Cooldown_Period", trigger.cooldown_period)?;
-            ws(&tg, "Event", trigger.event.as_deref().unwrap_or(""))?;
-            wi(&tg, "Max_Fires_Per_Job", trigger.max_fires_per_job)?;
-            ws(&tg, "Trigger_Label", trigger.trigger_label.as_deref().unwrap_or(""))?;
-            for (k, v) in &trigger.extra {
-                write_extra_value(&tg, k, v)?;
-            }
-        }
         Ok(())
     }
 }

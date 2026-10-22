@@ -24,7 +24,7 @@ external app at all: this library's dispatcher has no registry to inject a mock 
 [PASS] S-04: machine_name persisted, file_version and other fields unchanged
 [PASS] S-05: correction_data preserved: SHA-256=b3b95bf5d5e73119ad8c632e6f5b44ba3beada6f054e04797afd6f193f2cebc6
 [PASS] S-06: 2-laser build OK, center~=2.0, roundtrip OK
-[PASS] S-07: OPCUA roundtrip OK: 2 triggers, url="opc.tcp://172.17.20.240:62541/TM_OPCUA_DevTemplate_V0.1/TelemetryServer"
+[PASS] S-07: extension roundtrip OK: 2 trigger groups, digest=f7ba506abfe76096...
 [PASS] S-08: 3 trains, build_plate_x=350.0, rotation=90.0, clearbox cleared, machine_name OK
 [PASS] S-09: all public types resolve and are usable from the umbrella header
 [PASS] AV-01: error raised naming version '2.0': No adapter registered for File_Version "2.0"
@@ -60,8 +60,8 @@ Full repo suite reconfirmed green after adding these: **354 assertions in 79 tes
 | `correction_data` train 0 (reference_config.h5) | `b3b95bf5d5e73119ad8c632e6f5b44ba3beada6f054e04797afd6f193f2cebc6` |
 
 Matches Python's, Node.js's, and Rust's recorded hash for the same fixture/train exactly — confirms
-byte-identical correction-grid parity across all four finished languages. S-07's OPCUA server URL also
-matches all three exactly.
+byte-identical correction-grid parity across all four finished languages. S-07's TM_OPCUA extension digest also
+matches Go, Node.js, and Rust exactly.
 
 ---
 

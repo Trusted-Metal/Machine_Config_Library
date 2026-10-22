@@ -15,9 +15,6 @@ REFERENCE_SENSORS_H5 = _REPO_ROOT / "fixtures" / "reference_config_synchronous_s
 REFERENCE_OPCUA_SENSORS_H5 = (
     _REPO_ROOT / "fixtures" / "reference_config_opcua_synchronous_sensors.h5"
 )
-OPCUA_MISSING_REQUIRED_H5 = (
-    _REPO_ROOT / "docs" / "validation" / "fixtures" / "opcua_missing_required.h5"
-)
 
 
 # ---------------------------------------------------------------------------
@@ -38,10 +35,6 @@ def reference_config(reference_reader: MachineConfigReader):
 def opcua_reader() -> MachineConfigReader:
     return MachineConfigReader(REFERENCE_OPCUA_H5)
 
-
-@pytest.fixture(scope="session")
-def opcua_missing_required_reader() -> MachineConfigReader:
-    return MachineConfigReader(OPCUA_MISSING_REQUIRED_H5)
 
 
 @pytest.fixture(scope="session")

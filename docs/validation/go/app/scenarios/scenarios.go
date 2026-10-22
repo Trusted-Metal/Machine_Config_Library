@@ -14,6 +14,7 @@ import (
 
 	mc "machine-config-go"
 	"machine-config-go/capabilities"
+	"machine-config-go/extension"
 )
 
 // S-01: Read reference fixture, all scalar fields
@@ -255,29 +256,32 @@ func RunS06Builder(_, _ string) (bool, string) {
 	return true, "2-laser build OK, center~2.0, roundtrip OK"
 }
 
-// S-07: OPCUA config roundtrip
+// S-07: Read, write, and re-read the OPCUA fixture's extension tree
 //
 // ID:       S-07
-// Action:   Read reference_config_opcua.h5, verify OPCUA present, write ->
+// Action:   Read reference_config_opcua.h5, take the opaque "TM_OPCUA"
 //
-//	re-read, verify server_url survives.
+//	extension tree, write -> re-read.
+//
+// Expected: Canonical digest, Triggers child names and Client Server_URL are
+//
+//	identical after the roundtrip.
 func RunS07Opcua(fixturesDir, _ string) (bool, string) {
 	path := filepath.Join(fixturesDir, "reference_config_opcua.h5")
 	cfg, err := mc.NewReader(path).Parse()
 	if err != nil {
 		return false, fmt.Sprintf("read failed: %v", err)
 	}
-	if cfg.Opcua == nil || cfg.Opcua.Client.ServerURL == "" {
-		return false, "expected opcua client with non-empty server_url"
+	tree := cfg.Extensions["TM_OPCUA"]
+	if tree == nil {
+		return false, "TM_OPCUA extension missing after reading the OPCUA fixture"
 	}
-	origURL := cfg.Opcua.Client.ServerURL
-	// Newly-promoted fields (OPCUA_FIELD_PROMOTION_PLAN.md Phase 1) — a
-	// representative subset, proving the low-level roundtrip works through
-	// the public Reader/Writer API too, not just in unit tests.
-	origMachineProfile := cfg.Opcua.Client.MachineProfile
-	origRootNode := cfg.Opcua.Client.RootNode
-	origPipeName := cfg.Opcua.Pipe.PipeName
-	origCeilingLayers := cfg.Opcua.TriggerStopCeilingLayers
+	origDigest, err := extension.Digest(tree)
+	if err != nil {
+		return false, fmt.Sprintf("digest failed: %v", err)
+	}
+	origTriggers := childNames(tree.Children["Triggers"])
+	origURL := tree.Children["Client"].Attrs["Server_URL"].Value
 
 	tmpPath, err := tempH5("mcl_go_s07")
 	if err != nil {
@@ -292,26 +296,26 @@ func RunS07Opcua(fixturesDir, _ string) (bool, string) {
 	if err != nil {
 		return false, fmt.Sprintf("readback failed: %v", err)
 	}
-	if rb.Opcua == nil || rb.Opcua.Client.ServerURL != origURL {
-		return false, "server_url changed after roundtrip"
+	rbTree := rb.Extensions["TM_OPCUA"]
+	if rbTree == nil {
+		return false, "TM_OPCUA extension missing after roundtrip"
 	}
-
-	if !strPtrEqual(rb.Opcua.Client.MachineProfile, origMachineProfile) {
-		return false, "machine_profile changed after roundtrip"
+	rbDigest, err := extension.Digest(rbTree)
+	if err != nil {
+		return false, fmt.Sprintf("readback digest failed: %v", err)
 	}
-	if !strPtrEqual(rb.Opcua.Client.RootNode, origRootNode) {
-		return false, "root_node changed after roundtrip"
+	if rbDigest != origDigest {
+		return false, "extension digest changed across the roundtrip"
 	}
-	if !strPtrEqual(rb.Opcua.Pipe.PipeName, origPipeName) {
-		return false, "pipe_name changed after roundtrip"
+	if rbTriggers := childNames(rbTree.Children["Triggers"]); !stringSlicesEqual(rbTriggers, origTriggers) {
+		return false, fmt.Sprintf("trigger groups changed: %v -> %v", origTriggers, rbTriggers)
 	}
-	if !intPtrEqual(rb.Opcua.TriggerStopCeilingLayers, origCeilingLayers) {
-		return false, "trigger_stop_ceiling_layers changed after roundtrip"
+	if rbURL := rbTree.Children["Client"].Attrs["Server_URL"].Value; rbURL != origURL {
+		return false, fmt.Sprintf("Server_URL changed: %v -> %v", origURL, rbURL)
 	}
 
 	return true, fmt.Sprintf(
-		"opcua server_url=%q machine_profile=%v preserved through roundtrip",
-		origURL, strPtrOrNil(origMachineProfile),
+		"extension roundtrip OK: %d trigger groups, digest=%s...", len(origTriggers), origDigest[:16],
 	)
 }
 
@@ -401,10 +405,7 @@ func RunS08DrasticChange(_ string, realDir string) (bool, string) {
 // BuildPlate is type-annotated only, not constructed: it's a real, exported,
 // aliased type but nothing in go/ ever builds one today (Machine carries flat
 // BuildPlateX/Y/Z fields instead) — see VALIDATION_PLAN.md §9.4's open
-// question on whether to keep or remove it. OpcuaConfig/Client/Pipe/Trigger
-// are likewise type-annotated only: MockConfigBuilder never populates OPCUA
-// (only the fixture used by S-07 does) — same precedent Rust's S-09 already
-// established for the same situation.
+// question on whether to keep or remove it.
 func RunS09TypeExports(_, _ string) (bool, string) {
 	builder := mc.NewMockConfigBuilder()
 	cfg := builder.Build()
@@ -436,10 +437,6 @@ func RunS09TypeExports(_, _ string) (bool, string) {
 	var sfcf mc.ScanFieldCorrectionFile = *sfcfPtr
 
 	var correctionData mc.CorrectionData
-	var opcua mc.OpcuaConfig
-	var opcuaClient mc.OpcuaClientConfig
-	var opcuaPipe mc.OpcuaPipeConfig
-	var opcuaTrigger mc.OpcuaTrigger
 	var buildPlate mc.BuildPlate
 
 	var reader *mc.MachineConfigReader = mc.NewReader("unused-path-for-type-check-only")
@@ -460,10 +457,6 @@ func RunS09TypeExports(_, _ string) (bool, string) {
 
 	_ = axis
 	_ = correctionData
-	_ = opcua
-	_ = opcuaClient
-	_ = opcuaPipe
-	_ = opcuaTrigger
 	_ = buildPlate
 	_ = reader
 	_ = writer
@@ -681,71 +674,124 @@ func RunAv08VersionFidelity(fixturesDir, _ string) (bool, string) {
 	return true, fmt.Sprintf("File_Version survives roundtrip unchanged: %q", rbVersion)
 }
 
-// AV-12: capabilities facade GetOpcua() returns no error with the newly-
-// promoted typed fields readable, when every required field is present.
+// AV-12: the TM_OPCUA extension tree survives a capabilities-facade edit session.
 //
-// Nothing before this scenario exercised the capabilities facade at all —
-// S-07 above only goes through the plain Reader/Writer. See
-// OPCUA_FIELD_PROMOTION_PLAN.md's "Validation-app coverage" section for why
-// this is a real public-API guarantee, not just a unit-test concern.
+// Nothing else exercises extensions through the capabilities session API: an
+// edit session must never drop data core has no model for.
 func RunAv12OpcuaFacadeOk(fixturesDir, _ string) (bool, string) {
 	path := filepath.Join(fixturesDir, "reference_config_opcua.h5")
-	f, err := capabilities.OpenMachineConfig(path)
+	orig, err := mc.NewReader(path).Parse()
 	if err != nil {
-		return false, fmt.Sprintf("OpenMachineConfig failed: %v", err)
+		return false, fmt.Sprintf("read failed: %v", err)
+	}
+	before, err := extensionDigest(orig, "TM_OPCUA")
+	if err != nil {
+		return false, err.Error()
+	}
+
+	f, openErr := capabilities.OpenMachineConfig(path)
+	if openErr != nil {
+		return false, fmt.Sprintf("OpenMachineConfig failed: %v", openErr)
 	}
 	defer f.Close()
 
-	opc, capErr := f.GetOpcua()
+	scanner, capErr := f.GetScanner(0)
 	if capErr != nil {
-		return false, fmt.Sprintf("GetOpcua failed on fully-populated fixture: %v", capErr)
+		return false, fmt.Sprintf("GetScanner(0) failed: %v", capErr)
+	}
+	scanner.WorkingDistance = mc.Float64Ptr(77.5)
+	if capErr := f.SetScanner(0, scanner, capabilities.Merge); capErr != nil {
+		return false, fmt.Sprintf("SetScanner failed: %v", capErr)
 	}
 
-	return true, fmt.Sprintf(
-		"GetOpcua Ok: machine_profile=%v root_node=%v pipe_name=%v triggers_enabled=%v trigger_stop_ceiling_layers=%v",
-		strPtrOrNil(opc.Client.MachineProfile), strPtrOrNil(opc.Client.RootNode),
-		strPtrOrNil(opc.Pipe.PipeName), boolPtrOrNil(opc.TriggersEnabled), intPtrOrNil(opc.TriggerStopCeilingLayers),
-	)
+	tmpPath, err := tempH5("mcl_go_av12")
+	if err != nil {
+		return false, fmt.Sprintf("tempfile: %v", err)
+	}
+	defer os.Remove(tmpPath)
+	if capErr := f.Save(tmpPath); capErr != nil {
+		return false, fmt.Sprintf("Save failed: %v", capErr)
+	}
+
+	rb, err := mc.NewReader(tmpPath).Parse()
+	if err != nil {
+		return false, fmt.Sprintf("readback failed: %v", err)
+	}
+	after, err := extensionDigest(rb, "TM_OPCUA")
+	if err != nil {
+		return false, err.Error()
+	}
+	if after != before {
+		return false, fmt.Sprintf("extension digest changed across the session: %s... -> %s...", before[:16], after[:16])
+	}
+	return true, fmt.Sprintf("extension survived the edit session, digest=%s...", after[:16])
 }
 
-// AV-13: capabilities facade GetOpcua() returns an ErrValidation error with
-// Details naming exactly the seven missing required fields, when OPCUA is
-// present but incomplete.
+// AV-13: the writer rejects an invalid extension tree before creating any file.
+//
+// Validation is part of the stable extension contract; a rejected config must
+// never leave a half-written file behind.
 func RunAv13OpcuaFacadeValidation(fixturesDir, _ string) (bool, string) {
-	fixture := avFixture(fixturesDir, "opcua_missing_required.h5")
-	f, err := capabilities.OpenMachineConfig(fixture)
+	cfg, err := mc.NewReader(filepath.Join(fixturesDir, "reference_config.h5")).Parse()
 	if err != nil {
-		return false, fmt.Sprintf("OpenMachineConfig failed: %v", err)
+		return false, fmt.Sprintf("read failed: %v", err)
 	}
-	defer f.Close()
+	bad := extension.NewTree()
+	bad.Attrs["A"] = extension.Attr{Dtype: extension.U8, Value: uint64(999)}
+	cfg.Extensions = map[string]*extension.Tree{"Bad": bad}
+	cfg.Meta.FileVersion = "1.1"
 
-	_, capErr := f.GetOpcua()
-	if capErr == nil {
-		return false, "GetOpcua returned no error on a fixture missing required fields"
+	dir, err := os.MkdirTemp("", "mcl_go_av13_")
+	if err != nil {
+		return false, fmt.Sprintf("tempdir: %v", err)
 	}
-	if capErr.Code != capabilities.ErrValidation {
-		return false, fmt.Sprintf("wrong error code: %q", capErr.Code)
-	}
+	defer os.RemoveAll(dir)
+	out := filepath.Join(dir, "never.h5")
 
-	expected := map[string]bool{
-		"Machine_Profile":                true,
-		"Root_Node":                      true,
-		"Configure_Client":               true,
-		"Pipe_Name":                      true,
-		"Triggers_Enabled":               true,
-		"Trigger_Stop_Ceiling_Layers":    true,
-		"Laser Emission Interlock.Event": true,
+	writeErr := mc.NewWriter().Write(cfg, out)
+	if writeErr == nil {
+		return false, "writer accepted an out-of-range extension attribute"
 	}
-	if len(capErr.Details) != len(expected) {
-		return false, fmt.Sprintf("details = %v, want exactly %d items", capErr.Details, len(expected))
+	var extErr *extension.Error
+	if !errors.As(writeErr, &extErr) || !strings.Contains(extErr.Path, "@A") {
+		return false, fmt.Sprintf("error does not name the attribute: %v", writeErr)
 	}
-	for _, d := range capErr.Details {
-		if !expected[d] {
-			return false, fmt.Sprintf("unexpected detail %q in %v", d, capErr.Details)
+	if _, statErr := os.Stat(out); statErr == nil {
+		return false, "a file was created despite the rejected extension"
+	}
+	return true, fmt.Sprintf("extension.Error at %q, no file created", extErr.Path)
+}
+
+// extensionDigest returns the canonical digest of the named extension tree.
+func extensionDigest(cfg *mc.MachineConfig, name string) (string, error) {
+	tree := cfg.Extensions[name]
+	if tree == nil {
+		return "", fmt.Errorf("%s extension missing", name)
+	}
+	return extension.Digest(tree)
+}
+
+// childNames returns the sorted child group names of a (possibly nil) tree.
+func childNames(t *extension.Tree) []string {
+	if t == nil {
+		return nil
+	}
+	names := make([]string, 0, len(t.Children))
+	for n := range t.Children {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
 	}
-
-	sorted := append([]string{}, capErr.Details...)
-	sort.Strings(sorted)
-	return true, fmt.Sprintf("ValidationError with details=%v", sorted)
+	return true
 }

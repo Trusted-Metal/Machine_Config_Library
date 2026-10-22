@@ -115,8 +115,8 @@ describe('Hdf5AdapterV1_1 — read', () => {
     }
 
     // Change 2: OPCUA relocated, contents unaffected
-    expect(cfg.opcua).toBeDefined();
-    expect(cfg.opcua?.client.machine_profile).not.toBeNull();
+    expect(cfg.extensions?.TM_OPCUA).toBeDefined();
+    expect(cfg).not.toHaveProperty('opcua');
 
     // Change 3: ClearBox Power_Characterization — train 1 LINEAR, train 2 POLYNOMIAL
     const cb0 = cfg.optical_trains[0].optional_components.clearbox as ClearBox;

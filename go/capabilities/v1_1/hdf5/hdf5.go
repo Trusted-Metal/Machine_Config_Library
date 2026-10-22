@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"machine-config-go/capabilities/v1_1/layout"
+	"machine-config-go/extension"
+	"machine-config-go/internal/extio"
 	"machine-config-go/internal/h5c"
 	. "machine-config-go/internal/models"
 )
@@ -131,7 +133,7 @@ func (r *Adapter) parse(f *h5c.File, includeBinary bool) (*MachineConfig, error)
 		trains = append(trains, train)
 	}
 
-	opcua, err := parseOpcua(f, root)
+	extensions, err := parseExtensions(root)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +142,7 @@ func (r *Adapter) parse(f *h5c.File, includeBinary bool) (*MachineConfig, error)
 		Meta:          meta,
 		Machine:       machine,
 		OpticalTrains: trains,
-		Opcua:         opcua,
+		Extensions:    extensions,
 	}, nil
 }
 
@@ -780,173 +782,6 @@ func parseSFCF(f *h5c.File, path string, includeBinary bool) (*ScanFieldCorrecti
 	return sfcf, nil
 }
 
-// parseOpcua: Change 2 — reads from Extensions/TM_OPCUA/ now, not root-level
-// OPCUA/. Internal Client/Pipe/Triggers shape is unchanged.
-func parseOpcua(f *h5c.File, root *h5c.Group) (*OpcuaConfig, error) {
-	if !root.LinkExists(layout.RootOPCUA) {
-		return nil, nil
-	}
-	og, err := f.Group(layout.RootOPCUA)
-	if err != nil {
-		return nil, err
-	}
-	defer og.Close()
-	if !og.LinkExists("Client") {
-		return nil, nil
-	}
-	cg, err := og.OpenGroup("Client")
-	if err != nil {
-		return nil, err
-	}
-	defer cg.Close()
-	clientKnownKeys := map[string]bool{
-		"Server_URL": true, "Auth_Mode": true, "Security_Mode": true,
-		"Security_Policy": true, "BFS_Max_Depth": true, "Publish_Interval": true,
-		"Sampling_Interval": true, "Session_Timeout": true,
-		"Keep_Alive_Count": true, "Lifetime_Count": true, "Machine_Profile": true,
-		"Queue_Policy": true, "Queue_Size_Data_Change": true, "Queue_Size_Events": true,
-		"Reconnect_Interval": true, "Root_Node": true,
-		"Sync_Loop_Interval_Initial": true, "Sync_Loop_Interval_Settled": true,
-	}
-	client := OpcuaClientConfig{
-		ServerURL:      readRequiredStr(cg, "Server_URL"),
-		AuthMode:       readRequiredStr(cg, "Auth_Mode"),
-		SecurityMode:   readRequiredStr(cg, "Security_Mode"),
-		SecurityPolicy: readRequiredStr(cg, "Security_Policy"),
-		Extra:          readGroupExtras(cg, clientKnownKeys),
-	}
-	if v, err := readIntAttr(cg, "BFS_Max_Depth"); err == nil && v != nil {
-		client.BfsMaxDepth = *v
-	}
-	if v, err := readIntAttr(cg, "Publish_Interval"); err == nil && v != nil {
-		client.PublishInterval = *v
-	}
-	if v, err := readIntAttr(cg, "Sampling_Interval"); err == nil && v != nil {
-		client.SamplingInterval = *v
-	}
-	if v, err := readIntAttr(cg, "Session_Timeout"); err == nil && v != nil {
-		client.SessionTimeout = *v
-	}
-	if v, err := readIntAttr(cg, "Keep_Alive_Count"); err == nil {
-		client.KeepAliveCount = v
-	}
-	if v, err := readIntAttr(cg, "Lifetime_Count"); err == nil {
-		client.LifetimeCount = v
-	}
-	client.MachineProfile = readStrAttr(cg, "Machine_Profile")
-	client.QueuePolicy = readStrAttr(cg, "Queue_Policy")
-	if v, err := readIntAttr(cg, "Queue_Size_Data_Change"); err == nil {
-		client.QueueSizeDataChange = v
-	}
-	if v, err := readIntAttr(cg, "Queue_Size_Events"); err == nil {
-		client.QueueSizeEvents = v
-	}
-	if v, err := readIntAttr(cg, "Reconnect_Interval"); err == nil {
-		client.ReconnectInterval = v
-	}
-	client.RootNode = readStrAttr(cg, "Root_Node")
-	if v, err := readIntAttr(cg, "Sync_Loop_Interval_Initial"); err == nil {
-		client.SyncLoopIntervalInitial = v
-	}
-	if v, err := readIntAttr(cg, "Sync_Loop_Interval_Settled"); err == nil {
-		client.SyncLoopIntervalSettled = v
-	}
-
-	pipeKnownKeys := map[string]bool{
-		"Pipe_Enabled": true, "Buffer_Size": true,
-		"Configure_Client": true, "Inbound_Rate_Limit": true,
-		"Max_Inbound_Message_Size": true, "Min_Integrity_Level": true,
-		"Pipe_Name": true, "User_Access_Level": true,
-	}
-	pipe := OpcuaPipeConfig{Extra: map[string]any{}}
-	if og.LinkExists("Pipe") {
-		pg, err := og.OpenGroup("Pipe")
-		if err == nil {
-			if b, err := readBoolFromIntAttr(pg, "Pipe_Enabled"); err == nil && b != nil {
-				pipe.PipeEnabled = *b
-			}
-			if v, err := readIntAttr(pg, "Buffer_Size"); err == nil && v != nil {
-				pipe.BufferSize = *v
-			}
-			if b, err := readBoolFromIntAttr(pg, "Configure_Client"); err == nil {
-				pipe.ConfigureClient = b
-			}
-			if v, err := readIntAttr(pg, "Inbound_Rate_Limit"); err == nil {
-				pipe.InboundRateLimit = v
-			}
-			if v, err := readIntAttr(pg, "Max_Inbound_Message_Size"); err == nil {
-				pipe.MaxInboundMessageSize = v
-			}
-			pipe.MinIntegrityLevel = readStrAttr(pg, "Min_Integrity_Level")
-			pipe.PipeName = readStrAttr(pg, "Pipe_Name")
-			pipe.UserAccessLevel = readStrAttr(pg, "User_Access_Level")
-			pipe.Extra = readGroupExtras(pg, pipeKnownKeys)
-			pg.Close()
-		}
-	}
-
-	triggers := map[string]OpcuaTrigger{}
-	var triggersEnabled *bool
-	var triggerStopCeilingLayers *int
-	if og.LinkExists("Triggers") {
-		tg, err := og.OpenGroup("Triggers")
-		if err == nil {
-			if b, err := readBoolFromIntAttr(tg, "Triggers_Enabled"); err == nil {
-				triggersEnabled = b
-			}
-			if v, err := readIntAttr(tg, "Trigger_Stop_Ceiling_Layers"); err == nil {
-				triggerStopCeilingLayers = v
-			}
-			triggerKnownKeys := map[string]bool{
-				"ID": true, "Signal": true, "Subsystem": true,
-				"Rule_Enabled": true, "Start_Value": true, "Stop_Value": true,
-				"Case_Sensitivity": true, "Component": true, "Cooldown_Period": true,
-				"Event": true, "Max_Fires_Per_Job": true, "Trigger_Label": true,
-			}
-			for _, subname := range tg.SubGroupNames() {
-				sg, err := tg.OpenGroup(subname)
-				if err != nil {
-					continue
-				}
-				re, _ := readBoolFromIntAttr(sg, "Rule_Enabled")
-				var cooldownPeriod, maxFiresPerJob *int
-				if v, err := readIntAttr(sg, "Cooldown_Period"); err == nil {
-					cooldownPeriod = v
-				}
-				if v, err := readIntAttr(sg, "Max_Fires_Per_Job"); err == nil {
-					maxFiresPerJob = v
-				}
-				trig := OpcuaTrigger{
-					ID:              readStrAttr(sg, "ID"),
-					Signal:          readStrAttr(sg, "Signal"),
-					Subsystem:       readStrAttr(sg, "Subsystem"),
-					RuleEnabled:     re,
-					StartValue:      readStrAttr(sg, "Start_Value"),
-					StopValue:       readStrAttr(sg, "Stop_Value"),
-					CaseSensitivity: readStrAttr(sg, "Case_Sensitivity"),
-					Component:       readStrAttr(sg, "Component"),
-					CooldownPeriod:  cooldownPeriod,
-					Event:           readStrAttr(sg, "Event"),
-					MaxFiresPerJob:  maxFiresPerJob,
-					TriggerLabel:    readStrAttr(sg, "Trigger_Label"),
-					Extra:           readGroupExtras(sg, triggerKnownKeys),
-				}
-				sg.Close()
-				triggers[subname] = trig
-			}
-			tg.Close()
-		}
-	}
-
-	return &OpcuaConfig{
-		Client:                   client,
-		Pipe:                     pipe,
-		Triggers:                 triggers,
-		TriggersEnabled:          triggersEnabled,
-		TriggerStopCeilingLayers: triggerStopCeilingLayers,
-	}, nil
-}
-
 // GetCorrectionData loads the ClearBox Correction_Data grid for train index.
 func (r *Adapter) GetCorrectionData(trainIndex int) (*CorrectionData, error) {
 	return r.readCorrection(layout.ClearboxPath(trainIndex) + "/" + layout.DSCorrectionData)
@@ -981,4 +816,43 @@ func (r *Adapter) readCorrection(path string) (*CorrectionData, error) {
 		Data:  data,
 		Shape: [3]int{int(dims[0]), int(dims[1]), int(dims[2])},
 	}, nil
+}
+
+// parseExtensions reads every Extensions/ group core does not model, verbatim, as an opaque tree.
+func parseExtensions(root *h5c.Group) (map[string]*extension.Tree, error) {
+	if !root.LinkExists(layout.RootExtensions) {
+		return nil, nil
+	}
+	eg, err := root.OpenGroup(layout.RootExtensions)
+	if err != nil {
+		return nil, err
+	}
+	defer eg.Close()
+	members, err := eg.Members()
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]*extension.Tree
+	for _, m := range members {
+		if _, modelled := layout.ModelledExtensionNames[m.Name]; modelled {
+			continue
+		}
+		if !m.IsGroup {
+			return nil, fmt.Errorf("HDF5: expected Group at %q", layout.RootExtensions+"/"+m.Name)
+		}
+		g, err := eg.OpenGroup(m.Name)
+		if err != nil {
+			return nil, err
+		}
+		tree, err := extio.ReadTree(g, m.Name)
+		g.Close()
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = map[string]*extension.Tree{}
+		}
+		out[m.Name] = tree
+	}
+	return out, nil
 }

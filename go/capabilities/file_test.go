@@ -6,11 +6,11 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
-	"strings"
 	"testing"
 
 	machineconfig "machine-config-go"
 	"machine-config-go/capabilities"
+	"machine-config-go/extension"
 )
 
 // correctionDataEqual compares two CorrectionData buffers treating "both NaN"
@@ -46,11 +46,6 @@ func fixturesDir(t *testing.T) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "fixtures"))
-}
-
-func validationFixturesDir(t *testing.T) string {
-	t.Helper()
-	return filepath.Clean(filepath.Join(fixturesDir(t), "..", "docs", "validation", "fixtures"))
 }
 
 func TestOpenGetScanner(t *testing.T) {
@@ -98,7 +93,7 @@ func TestMergeSetScannerInMemory(t *testing.T) {
 	}
 }
 
-func TestInvalidIndexAndOpcua(t *testing.T) {
+func TestInvalidIndex(t *testing.T) {
 	dir := fixturesDir(t)
 	f, err := capabilities.OpenMachineConfig(filepath.Join(dir, "reference_config.h5"))
 	if err != nil {
@@ -107,17 +102,6 @@ func TestInvalidIndexAndOpcua(t *testing.T) {
 	defer f.Close()
 	if _, e := f.GetScanner(999); e == nil || e.Code != capabilities.ErrInvalidIndex {
 		t.Fatalf("expected InvalidIndex, got %#v", e)
-	}
-	if _, e := f.GetOpcua(); e == nil || e.Code != capabilities.ErrNotPresent {
-		t.Fatalf("expected NotPresent, got %#v", e)
-	}
-	f2, err := capabilities.OpenMachineConfig(filepath.Join(dir, "reference_config_opcua.h5"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f2.Close()
-	if _, e := f2.GetOpcua(); e != nil {
-		t.Fatal(e)
 	}
 }
 
@@ -196,117 +180,6 @@ func TestSyntheticTwoTrains(t *testing.T) {
 	}
 	if _, e := f.GetScanner(2); e == nil || e.Code != capabilities.ErrInvalidIndex {
 		t.Fatalf("expected ErrInvalidIndex for train 2, got %#v", e)
-	}
-}
-
-func TestOpcuaStructuredFields(t *testing.T) {
-	dir := fixturesDir(t)
-	f, err := capabilities.OpenMachineConfig(filepath.Join(dir, "reference_config_opcua.h5"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	opc, e := f.GetOpcua()
-	if e != nil {
-		t.Fatal(e)
-	}
-	if opc.Client.ServerURL == "" {
-		t.Fatal("opcua client server_url is empty")
-	}
-}
-
-func TestOpcuaRequiredFieldsPresentOnReferenceFixture(t *testing.T) {
-	f, err := capabilities.OpenMachineConfig(filepath.Join(fixturesDir(t), "reference_config_opcua.h5"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	opc, e := f.GetOpcua()
-	if e != nil {
-		t.Fatalf("expected Ok, got %#v", e)
-	}
-	if opc.Client.MachineProfile == nil {
-		t.Fatal("client.machine_profile should be populated")
-	}
-	for name, trigger := range opc.Triggers {
-		if trigger.Event == nil {
-			t.Fatalf("trigger %q event should be populated", name)
-		}
-	}
-}
-
-func TestOpcuaMissingRequiredFieldsReportsAllSevenAtOnce(t *testing.T) {
-	path := filepath.Join(validationFixturesDir(t), "opcua_missing_required.h5")
-	f, err := capabilities.OpenMachineConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-
-	_, e := f.GetOpcua()
-	if e == nil {
-		t.Fatal("expected ValidationError, got nil")
-	}
-	if e.Code != capabilities.ErrValidation {
-		t.Fatalf("expected ErrValidation, got %q", e.Code)
-	}
-
-	expected := map[string]bool{
-		"Machine_Profile":                true,
-		"Root_Node":                      true,
-		"Configure_Client":               true,
-		"Pipe_Name":                      true,
-		"Triggers_Enabled":               true,
-		"Trigger_Stop_Ceiling_Layers":    true,
-		"Laser Emission Interlock.Event": true,
-	}
-	if len(e.Details) != len(expected) {
-		t.Fatalf("details = %v, want exactly %d items", e.Details, len(expected))
-	}
-	for _, d := range e.Details {
-		if !expected[d] {
-			t.Errorf("unexpected detail %q", d)
-		}
-		if strings.HasPrefix(d, "Chamber Oxygen Level") {
-			t.Errorf("Chamber Oxygen Level must not be reported, got %q", d)
-		}
-	}
-}
-
-func TestOpcuaOptionalFieldNeverAppearsInMissingDetails(t *testing.T) {
-	// opcua_missing_required.h5 only clears the 7 required fields — every
-	// optional field is still present there, so absence of an optional field
-	// from Details would be trivially true. Also clear an optional field
-	// (keep_alive_count) in memory, re-write to a temp file, and confirm
-	// Details still names exactly the same 7 items, not 8.
-	src := filepath.Join(validationFixturesDir(t), "opcua_missing_required.h5")
-	cfg, err := machineconfig.NewReader(src).Parse()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Opcua.Client.KeepAliveCount = nil
-	tmp := filepath.Join(t.TempDir(), "missing_required_plus_optional.h5")
-	if err := machineconfig.NewWriter().Write(cfg, tmp); err != nil {
-		t.Fatal(err)
-	}
-
-	f, capErr := capabilities.OpenMachineConfig(tmp)
-	if capErr != nil {
-		t.Fatal(capErr)
-	}
-	defer f.Close()
-
-	_, e := f.GetOpcua()
-	if e == nil {
-		t.Fatal("expected ValidationError, got nil")
-	}
-	for _, d := range e.Details {
-		if strings.Contains(d, "Keep_Alive_Count") {
-			t.Fatalf("optional field must never appear in details, got %v", e.Details)
-		}
-	}
-	if len(e.Details) != 7 {
-		t.Fatalf("clearing an optional field must not change the missing count: got %v", e.Details)
 	}
 }
 
@@ -391,37 +264,42 @@ func TestSaveRoundTrip(t *testing.T) {
 		}
 	})
 
-	t.Run("opcua roundtrip", func(t *testing.T) {
+	t.Run("extension roundtrip", func(t *testing.T) {
 		path := filepath.Join(fixturesDir(t), "reference_config_opcua.h5")
-		f, err := capabilities.OpenMachineConfig(path)
+		before, err := machineconfig.NewReader(path).Parse()
 		if err != nil {
 			t.Fatal(err)
+		}
+		want, err := extension.Digest(before.Extensions["TM_OPCUA"])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		f, ferr := capabilities.OpenMachineConfig(path)
+		if ferr != nil {
+			t.Fatal(ferr)
 		}
 		defer f.Close()
-
-		opcua, err := f.GetOpcua()
-		if err != nil {
+		sc, _ := f.GetScanner(0)
+		sc.WorkingDistance = machineconfig.Float64Ptr(77.5)
+		if err := f.SetScanner(0, sc, capabilities.Merge); err != nil {
 			t.Fatal(err)
 		}
-		origURL := opcua.Client.ServerURL
 
-		out := filepath.Join(t.TempDir(), "opcua_rt.h5")
+		out := filepath.Join(t.TempDir(), "ext_rt.h5")
 		if err := f.Save(out); err != nil {
 			t.Fatal(err)
 		}
-
-		f2, err := capabilities.OpenMachineConfig(out)
-		if err != nil {
-			t.Fatal(err)
+		after, err2 := machineconfig.NewReader(out).Parse()
+		if err2 != nil {
+			t.Fatal(err2)
 		}
-		defer f2.Close()
-
-		opcua2, err := f2.GetOpcua()
-		if err != nil {
-			t.Fatal(err)
+		got, err2 := extension.Digest(after.Extensions["TM_OPCUA"])
+		if err2 != nil {
+			t.Fatal(err2)
 		}
-		if opcua2.Client.ServerURL != origURL {
-			t.Errorf("server_url: got %q want %q", opcua2.Client.ServerURL, origURL)
+		if got != want {
+			t.Errorf("extension digest changed across an open/edit/save session: %s != %s", got, want)
 		}
 	})
 
@@ -619,9 +497,6 @@ func (fakeFile) GetScanner(int) (machineconfig.Scanner, *capabilities.Error) {
 }
 func (fakeFile) SetScanner(int, machineconfig.Scanner, capabilities.SetMode) *capabilities.Error {
 	return nil
-}
-func (fakeFile) GetOpcua() (machineconfig.OpcuaConfig, *capabilities.Error) {
-	return machineconfig.OpcuaConfig{}, nil
 }
 func (fakeFile) GetClearbox(int) (machineconfig.ClearBox, *capabilities.Error) {
 	return machineconfig.ClearBox{}, nil

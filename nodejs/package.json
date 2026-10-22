@@ -10,6 +10,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./extension-contract": {
+      "import": "./dist/extensions/contract.js",
+      "types": "./dist/extensions/contract.d.ts"
     }
   },
   "bin": {

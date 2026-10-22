@@ -104,9 +104,9 @@ def test_v1_1_read():
         assert t.scanner.y_axis.tuning_parameters is None
         assert t.scanner.y_axis.tuning_type is None
 
-    # Change 2: OPCUA relocated, contents unaffected
-    assert cfg.opcua is not None
-    assert cfg.opcua.client.machine_profile is not None
+    # Change 2: the legacy OPCUA group is carried as the opaque "TM_OPCUA" extension, contents unaffected
+    assert "TM_OPCUA" in cfg.extensions
+    assert "Machine_Profile" in cfg.extensions["TM_OPCUA"].children["Client"].attrs
 
     # Change 3: ClearBox Power_Characterization — train 1 LINEAR, train 2 POLYNOMIAL
     cb0 = cfg.optical_trains[0].optional_components.clearbox
