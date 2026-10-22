@@ -180,11 +180,14 @@ TEST_CASE("ExtensionHdf5HandlesAllDtypesAndShapes") {
         HighFive::File f(path, HighFive::File::ReadWrite | HighFive::File::Create | HighFive::File::Truncate);
         ext::writeExtensionTree(f.getId(), "T", tree);
     }
-    HighFive::File f(path, HighFive::File::ReadOnly);
-    auto g = f.getGroup("T");
-    auto back = ext::readExtensionTree(g.getId(), "T");
-    REQUIRE(ext::canonicalDigest(back) == want);
+    ext::Tree back;
+    {
+        HighFive::File f(path, HighFive::File::ReadOnly);
+        auto g = f.getGroup("T");
+        back = ext::readExtensionTree(g.getId(), "T");
+    }
     std::filesystem::remove(path);
+    REQUIRE(ext::canonicalDigest(back) == want);
 }
 
 TEST_CASE("ExtensionOpcuaGroupIsAnOpaqueExtension") {
