@@ -29,7 +29,7 @@ thiserror   = "1"
 indexmap    = { version = "2", features = ["serde"] }
 clap        = { version = "4", features = ["derive"] }
 sha2        = "0.10"
-mcf-extension-contract = { path = "../extension-contract" }
+mcf-extension-contract = { version = "0.1.0", path = "../extension-contract" }
 
 [dev-dependencies]
 tempfile    = "3"
