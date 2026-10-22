@@ -1,3 +1,10 @@
+## 0.2.0-rc.9 (2026-10-22)
+
+* Merge pull request #22 from Trusted-Metal/SD-1738 ([c6318c0](https://github.com/Trusted-Metal/Machine_Config_Library/commit/c6318c0)), closes [#22](https://github.com/Trusted-Metal/Machine_Config_Library/issues/22)
+* fix: fix package verification ([2299bc0](https://github.com/Trusted-Metal/Machine_Config_Library/commit/2299bc0))
+* fix: order of operations issue in windows test ([1506ef3](https://github.com/Trusted-Metal/Machine_Config_Library/commit/1506ef3))
+* chore: Remove OPCUA extension from MCF lib ([6928c5a](https://github.com/Trusted-Metal/Machine_Config_Library/commit/6928c5a))
+
 ## 0.2.0-rc.8 (2026-09-15)
 
 * Merge pull request #21 from Trusted-Metal/SD-1710 ([dd6832d](https://github.com/Trusted-Metal/Machine_Config_Library/commit/dd6832d)), closes [#21](https://github.com/Trusted-Metal/Machine_Config_Library/issues/21)
