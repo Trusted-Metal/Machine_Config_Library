@@ -9,40 +9,14 @@ import { MachineConfigWriter, canonicalDigest } from '../src/index.js';
 import { MachineConfigReader } from '../src/index.js';
 import { UnsupportedFileVersion } from '../src/capabilities/index.js';
 import { MockConfigBuilder } from '../src/builder.js';
-import type { MachineConfig, SynchronousSensor } from '../src/index.js';
+import type { MachineConfig } from '../src/index.js';
+import { addSensor, clearbox, grid, sensorTree, text } from './clearboxHelpers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REFERENCE      = join(__dirname, '../../fixtures/reference_config.h5');
 const REFERENCE_OPCUA = join(__dirname, '../../fixtures/reference_config_opcua.h5');
 const REFERENCE_SENSORS = join(__dirname, '../../fixtures/reference_config_synchronous_sensors.h5');
 const SYNTHETIC      = join(__dirname, '../../fixtures/synthetic_2laser.h5');
-
-/** A SynchronousSensor with every field null/empty except what the caller overrides. */
-function blankSensor(overrides: Partial<SynchronousSensor> = {}): SynchronousSensor {
-  return {
-    enabled: null,
-    sensor_name: null,
-    sensor_output_range_low: null,
-    sensor_output_range_high: null,
-    sensor_output_space: null,
-    sensor_model: null,
-    sensor_manufacturer: null,
-    sensor_scope: null,
-    units_derived_quantity: null,
-    port_id: null,
-    sensor_type: null,
-    input_type: null,
-    algorithm_type: null,
-    algorithm_equation: null,
-    calibration_source: null,
-    calibration_verified: null,
-    sample_period: null,
-    metadata: null,
-    derivation_equation_constants: [],
-    calibration_points: [],
-    ...overrides,
-  };
-}
 
 /** Absolute path to a unique temp HDF5 file that does not exist yet. */
 function tmpH5(): string {
@@ -210,18 +184,20 @@ describe('MachineConfigWriter — reference roundtrip', () => {
     expect(back?.file_size).toBe(orig?.file_size);
   });
 
-  it('ClearBox ip_address survives roundtrip', () => {
-    const orig = reference.optical_trains[0].optional_components.clearbox;
-    const back = rt.optical_trains[0].optional_components.clearbox;
-    expect(back?.ip_address).toBe(orig?.ip_address);
+  it('ClearBox Ip_Address survives roundtrip', () => {
+    expect(text(clearbox(rt, 0), 'Ip_Address')).toBe(text(clearbox(reference, 0), 'Ip_Address'));
   });
 
-  it('no extensions in a fixture without an OPCUA group roundtrip', () => {
-    expect(rt.extensions).toBeUndefined();
+  it('the whole ClearBox tree survives roundtrip (same canonical digest)', () => {
+    expect(canonicalDigest(rt.extensions!.ClearBox)).toBe(canonicalDigest(reference.extensions!.ClearBox));
   });
 
-  it('synchronous_sensors survives roundtrip as omitted (undefined), not {}', () => {
-    expect(rt.optical_trains[0].optional_components.clearbox?.synchronous_sensors).toBeUndefined();
+  it('only the ClearBox extension appears for a fixture without an OPCUA group', () => {
+    expect(Object.keys(rt.extensions!)).toEqual(['ClearBox']);
+  });
+
+  it('Synchronous_Sensors survives roundtrip as absent', () => {
+    expect(clearbox(rt, 0).children).not.toHaveProperty('Synchronous_Sensors');
   });
 });
 
@@ -286,90 +262,53 @@ describe('MachineConfigWriter — Scanner invert_* flags', () => {
 describe('MachineConfigWriter — SynchronousSensor roundtrip', () => {
   it('the real ZR800 example survives roundtrip with exact compound-dataset values in order', async () => {
     const rt = await roundtrip(referenceSensors);
-    const sensor = rt.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
-    expect(sensor.sensor_name).toBe('ZR800 Oxygen Analyzer');
-    expect(sensor.derivation_equation_constants).toEqual([
-      { name: 'a', value: 0.4375 },
-      { name: 'b', value: -2.75 },
-    ]);
-    expect(sensor.calibration_points).toEqual([
-      { input_value: 4.0, output_value: -1.0 },
-      { input_value: 20.0, output_value: 6.0 },
-    ]);
+    const sensor = clearbox(rt, 0).children['Synchronous_Sensors'].children['Oxygen Sensor'];
+    expect(text(sensor, 'Sensor_Name')).toBe('ZR800 Oxygen Analyzer');
+    const constants = sensor.tables!['Derivation_Equation_Constants'];
+    expect(constants.columns['name']).toEqual(['a', 'b']);
+    expect(Array.from(constants.columns['value'] as Float64Array)).toEqual([0.4375, -2.75]);
+    const points = sensor.tables!['Calibration_Points'];
+    expect(Array.from(points.columns['input_value'] as Float64Array)).toEqual([4.0, 20.0]);
+    expect(Array.from(points.columns['output_value'] as Float64Array)).toEqual([-1.0, 6.0]);
   });
 
   it('a sensor that exists but has zero-row compound datasets roundtrips correctly', async () => {
-    // Distinct from the empty-*map* case above: here the sensor itself
-    // exists (its group is created), but both compound datasets have zero
-    // rows — proving 0-length compound dataset creation/read works, not
-    // just that an absent group defaults to empty.
+    // The sensor group exists but its compound dataset has zero rows — proves 0-length compound
+    // dataset creation/read works, not just that an absent group defaults to empty.
     const cfg: MachineConfig = structuredClone(reference);
-    cfg.optical_trains[0].optional_components.clearbox!.synchronous_sensors = {
-      'Untested Sensor': blankSensor({ enabled: false, sensor_name: 'Placeholder' }),
-    };
+    addSensor(cfg, 'Untested Sensor', sensorTree([]));
     const rt = await roundtrip(cfg);
-    const sensor = rt.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Untested Sensor'];
-    expect(sensor.derivation_equation_constants).toEqual([]);
-    expect(sensor.calibration_points).toEqual([]);
-    expect(sensor.sensor_name).toBe('Placeholder');
+    const sensor = clearbox(rt, 0).children['Synchronous_Sensors'].children['Untested Sensor'];
+    expect(sensor.tables!['Derivation_Equation_Constants'].rows).toBe(0);
   });
 
-  it('an arbitrary, differently-styled key survives roundtrip verbatim', () => {
-    return roundtrip(
-      (() => {
-        const cfg: MachineConfig = structuredClone(reference);
-        cfg.optical_trains[0].optional_components.clearbox!.synchronous_sensors = {
-          HUMIDITY_SENSOR_2: blankSensor({ enabled: true, port_id: 9 }),
-        };
-        return cfg;
-      })(),
-    ).then((rt) => {
-      const sensors = rt.optical_trains[0].optional_components.clearbox!.synchronous_sensors!;
-      expect(Object.keys(sensors)).toContain('HUMIDITY_SENSOR_2');
-      expect(sensors.HUMIDITY_SENSOR_2.port_id).toBe(9);
-    });
+  it('an arbitrary, differently-styled key survives roundtrip verbatim', async () => {
+    const cfg: MachineConfig = structuredClone(reference);
+    addSensor(cfg, 'HUMIDITY_SENSOR_2', sensorTree([], { Port_ID: { dtype: 'i64', value: 9n } }));
+    const rt = await roundtrip(cfg);
+    const sensors = clearbox(rt, 0).children['Synchronous_Sensors'].children;
+    expect(Object.keys(sensors)).toContain('HUMIDITY_SENSOR_2');
+    expect(Number(sensors.HUMIDITY_SENSOR_2.attrs['Port_ID'].value)).toBe(9);
   });
 
   it('OPCUA and a newly-added sensor coexist through the writer', async () => {
-    // Parses a real OPCUA-only fixture, adds a sensor purely in memory, writes, and
-    // confirms the OPCUA extension tree and the sensor both survive re-reading.
+    // Parses a real OPCUA fixture, adds a sensor purely in memory, writes, and confirms the OPCUA
+    // extension tree and the sensor both survive re-reading.
     const cfg: MachineConfig = structuredClone(referenceOpcua);
     expect(cfg.extensions?.TM_OPCUA).toBeDefined();
-    cfg.optical_trains[0].optional_components.clearbox!.synchronous_sensors = {
-      'Oxygen Sensor': blankSensor({
-        enabled: true,
-        sensor_name: 'ZR800 Oxygen Analyzer',
-        calibration_verified: false,
-        sample_period: 5.0,
-        derivation_equation_constants: [
-          { name: 'a', value: 0.4375 },
-          { name: 'b', value: -2.75 },
-        ],
-        calibration_points: [
-          { input_value: 4.0, output_value: -1.0 },
-          { input_value: 20.0, output_value: 6.0 },
-        ],
-      }),
-    };
+    addSensor(cfg, 'Oxygen Sensor', sensorTree([['a', 0.4375], ['b', -2.75]]));
     const rt = await roundtrip(cfg);
     expect(canonicalDigest(rt.extensions!.TM_OPCUA)).toBe(canonicalDigest(referenceOpcua.extensions!.TM_OPCUA));
-    const sensor = rt.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
-    expect(sensor.derivation_equation_constants).toEqual([
-      { name: 'a', value: 0.4375 },
-      { name: 'b', value: -2.75 },
-    ]);
+    const sensor = clearbox(rt, 0).children['Synchronous_Sensors'].children['Oxygen Sensor'];
+    const constants = sensor.tables!['Derivation_Equation_Constants'];
+    expect(constants.columns['name']).toEqual(['a', 'b']);
   });
 
-  it('a constant name too long for the 64-byte fixed-length field is rejected, not truncated', async () => {
+  it('a constant name too long for the 64-byte fixed-length field is rejected, not truncated', () => {
     const cfg: MachineConfig = structuredClone(reference);
-    cfg.optical_trains[0].optional_components.clearbox!.synchronous_sensors = {
-      'Oversized Name Sensor': blankSensor({
-        derivation_equation_constants: [{ name: 'a'.repeat(65), value: 1.0 }],
-      }),
-    };
-    const out = tmpH5();
-    tmpFiles.push(out);
-    await expect(new MachineConfigWriter(cfg).write(out)).rejects.toThrow(/does not fit/);
+    addSensor(cfg, 'Oversized Name Sensor', sensorTree([['a'.repeat(65), 1.0]]));
+    // The writer hashes the config on construction, which already validates every tree.
+    expect(() => new MachineConfigWriter(cfg)).toThrow(/do not fit/);
   });
 });
 
@@ -450,28 +389,14 @@ function correctionHash(data: Float64Array): string {
 
 describe('MachineConfigWriter — correction data hash roundtrip', () => {
   it('forward correction data hash is preserved across write roundtrip', async () => {
-    const srcReader = new MachineConfigReader(REFERENCE);
-    const originalFwd = await srcReader.getCorrectionData(0);
-    const originalHash = correctionHash(originalFwd.data);
-
-    const src = await srcReader.parse({ includeBinary: true });
-    const out = tmpH5();
-    tmpFiles.push(out);
-    await new MachineConfigWriter(src).write(out);
-    const rtFwd = await new MachineConfigReader(out).getCorrectionData(0);
-    expect(correctionHash(rtFwd.data)).toBe(originalHash);
+    const originalHash = correctionHash(grid(reference, 0, 'Correction_Data').data);
+    const rt = await roundtrip(reference);
+    expect(correctionHash(grid(rt, 0, 'Correction_Data').data)).toBe(originalHash);
   }, 60_000);
 
   it('inverse correction data hash is preserved across write roundtrip', async () => {
-    const srcReader = new MachineConfigReader(REFERENCE);
-    const originalInv = await srcReader.getInverseCorrectionData(0);
-    const originalHash = correctionHash(originalInv.data);
-
-    const src = await srcReader.parse({ includeBinary: true });
-    const out = tmpH5();
-    tmpFiles.push(out);
-    await new MachineConfigWriter(src).write(out);
-    const rtInv = await new MachineConfigReader(out).getInverseCorrectionData(0);
-    expect(correctionHash(rtInv.data)).toBe(originalHash);
+    const originalHash = correctionHash(grid(reference, 0, 'Inverse_Correction_Data').data);
+    const rt = await roundtrip(reference);
+    expect(correctionHash(grid(rt, 0, 'Inverse_Correction_Data').data)).toBe(originalHash);
   }, 60_000);
 });

@@ -135,9 +135,9 @@ for i, train in enumerate(config.optical_trains):
 ## Use case 2 — Export to canonical JSON
 
 By default, `to_json()` produces a compact, human-readable JSON snapshot containing all
-**scalar and metadata fields**. Binary datasets — ClearBox correction arrays and raw `.fc3`
-scan-field correction bytes — are intentionally excluded. Use the dedicated accessors or
-`include_binary=True` when you need them.
+**scalar and metadata fields** plus every extension tree, including `extensions["ClearBox"]` with its
+correction grids (`dtype`, `shape` and the flat row-major `data`). Only the raw `.fc3`
+scan-field correction bytes are excluded; pass `include_binary=True` to add them.
 
 ```python
 from machine_config import MachineConfigReader
@@ -149,17 +149,17 @@ reader = MachineConfigReader("fixtures/reference_config.h5")
 print(reader.to_json(indent=2))
 pathlib.Path("output.json").write_text(reader.to_json(indent=2), encoding="utf-8")
 
-# With binary data included: adds correction_data, inverse_correction_data (257×257×2
-# float64 arrays as nested lists) and raw_bytes (base64-encoded .fc3 file bytes).
-# Output is large (~14 MB for a 2-laser config with ClearBox).
+# With binary data included: adds raw_bytes (base64-encoded .fc3 file bytes).
+# The ClearBox correction grids are extension datasets and are always included, so the
+# output is large either way (~14 MB for a 2-laser config).
 pathlib.Path("output_full.json").write_text(
     reader.to_json(indent=2, include_binary=True), encoding="utf-8"
 )
 ```
 
-> **Accessing binary data without JSON**: use `reader.get_correction_data(train_index)` (returns
-> `numpy.ndarray` shape `(257, 257, 2)`) and `reader.get_scan_field_correction_bytes(train_index)`
-> (returns raw `bytes`). These are the recommended paths for numerical work.
+> **Accessing binary data without JSON**: ClearBox grids are in the `ClearBox` extension tree (see
+> use case 9) and `reader.get_scan_field_correction_bytes(train_index)` returns the raw `.fc3`
+> `bytes`. These are the recommended paths for numerical work.
 
 ---
 
@@ -300,27 +300,31 @@ result = reader.get_raw_group("does/not/exist")   # {}
 
 ## Use case 9 — Access ClearBox correction arrays
 
-ClearBox correction grids are stored as `(257, 257, 2)` float64 arrays in HDF5 and
-represented in JSON as nested Python lists. Out-of-field points that are `NaN` in HDF5
-become `None` in the list (and `null` in JSON); finite floats pass through as-is.
+ClearBox is not a typed model in core: it is the opaque `ClearBox` extension tree
+(`config.extensions["ClearBox"]`), in the File_Version 1.1 layout for both file versions (see
+[EXTENSION_CONTRACT.md](EXTENSION_CONTRACT.md#clearbox)). Each train has a child
+`Optical_Train_NN` with `Correction_Data` / `Inverse_Correction_Data` datasets, stored as
+`(257, 257, 2)` float64 with `NaN` for out-of-field points, in a flat row-major `data` list.
 
 ```python
 from machine_config import MachineConfigReader
 import numpy as np
 
-reader = MachineConfigReader("fixtures/reference_config.h5")
-config = reader.parse()
+config = MachineConfigReader("fixtures/reference_config.h5").parse()
 
-cb = config.optical_trains[0].clearbox
-if cb is not None:
-    data = cb.correction_data        # list[list[list[float | None]]], shape 257×257×2
-    centre_x = data[128][128][0]     # X-channel at centre; float or None
-    centre_y = data[128][128][1]
-
-# For bulk numerical work, use the raw numpy API:
-arr = reader.get_correction_data(0)          # np.ndarray, shape (257, 257, 2), float64
-inv = reader.get_inverse_correction_data(0)  # same shape; NaN preserved
+root = config.extensions["ClearBox"]
+train = root.children["Optical_Train_01"]
+ds = train.datasets["Correction_Data"]
+arr = np.asarray(ds.data, dtype=np.float64).reshape(ds.shape)   # (257, 257, 2)
 print(f"Non-finite cells: {np.sum(~np.isfinite(arr))}")
+centre = arr[128, 128]                                          # X and Y channel at centre
+
+# Per-train scalars are extension attrs (with their stored dtypes); shared values are on the root:
+print(train.attrs["Ip_Address"].value, root.attrs["Output_Path"].value)
+
+# Power characterization is a child group with two tables:
+pc = train.children["Power_Characterization"]
+constants = pc.tables["Derivation_Equation_Constants"].columns   # {"name": [...], "value": [...]}
 ```
 
 ---

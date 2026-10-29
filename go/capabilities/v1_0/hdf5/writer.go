@@ -17,6 +17,10 @@ func Write(cfg *MachineConfig, path string) error {
 	if err := validateExtensions(cfg); err != nil {
 		return err
 	}
+	clearBox, err := clearBoxGroups(cfg)
+	if err != nil {
+		return err
+	}
 	f, err := h5c.Create(path)
 	if err != nil {
 		return fmt.Errorf("create %q: %w", path, err)
@@ -54,7 +58,7 @@ func Write(cfg *MachineConfig, path string) error {
 		if err != nil {
 			return err
 		}
-		err = writeTrain(trainGrp, &cfg.OpticalTrains[i])
+		err = writeTrain(trainGrp, &cfg.OpticalTrains[i], clearBox[layout.TrainID(i)])
 		trainGrp.Close()
 		if err != nil {
 			return err
@@ -70,13 +74,13 @@ func Write(cfg *MachineConfig, path string) error {
 }
 
 // validateExtensions runs before the output file is created, so a rejected config never leaves a
-// partial file behind. File_Version 1.0 can only hold the legacy OPCUA/ extension.
+// File_Version 1.0 can only hold the legacy OPCUA/ extension and ClearBox (split per train).
 func validateExtensions(cfg *MachineConfig) error {
 	for name, tree := range cfg.Extensions {
 		if err := extension.Validate(tree, name); err != nil {
 			return err
 		}
-		if name != layout.LegacyOpcuaExtensionName {
+		if name != layout.LegacyOpcuaExtensionName && name != ClearBoxExtensionName {
 			return fmt.Errorf("File_Version 1.0 has no Extensions group; cannot write extension %q", name)
 		}
 	}
@@ -298,7 +302,7 @@ func writeMachine(g *h5c.Group, ma *Machine) error {
 // Machine/Optical_Trains/<tid>/
 // ---------------------------------------------------------------------------
 
-func writeTrain(g *h5c.Group, t *OpticalTrain) error {
+func writeTrain(g *h5c.Group, t *OpticalTrain, clearBox *extension.Tree) error {
 	if err := ws(g, "ID", strOrEmpty(t.ID)); err != nil {
 		return err
 	}
@@ -423,18 +427,8 @@ func writeTrain(g *h5c.Group, t *OpticalTrain) error {
 		return err
 	}
 
-	if t.OptionalComponents.Clearbox != nil {
-		optGrp, err := g.CreateGroup(layout.GroupOptionalComponents)
-		if err != nil {
-			return err
-		}
-		defer optGrp.Close()
-		cbGrp, err := optGrp.CreateGroup(layout.GroupClearBox)
-		if err != nil {
-			return err
-		}
-		defer cbGrp.Close()
-		if err := writeClearBox(cbGrp, t.OptionalComponents.Clearbox); err != nil {
+	if clearBox != nil {
+		if err := writeClearBoxGroup(g, clearBox); err != nil {
 			return err
 		}
 	}
@@ -677,208 +671,42 @@ func writeScannerCard(g *h5c.Group, sc *ScannerCard) error {
 }
 
 // ---------------------------------------------------------------------------
-// Optional_Components/ClearBox/
+// Optional_Components/ClearBox/ — the opaque ClearBox extension tree, split per train
 // ---------------------------------------------------------------------------
 
-func writeClearBox(g *h5c.Group, cb *ClearBox) error {
-	if err := ws(g, "Ip_Address", cb.IPAddress); err != nil {
-		return err
+// clearBoxGroups returns each optical train's verbatim File_Version 1.0 ClearBox group, keyed by
+// train id, or nil when cfg has no ClearBox. It runs before the output file is created so a tree
+// File_Version 1.0 cannot hold never leaves a partial file behind.
+func clearBoxGroups(cfg *MachineConfig) (map[string]*extension.Tree, error) {
+	tree, ok := cfg.Extensions[ClearBoxExtensionName]
+	if !ok {
+		return nil, nil
 	}
-	if err := ws(g, "Serial_Number", strOrEmpty(cb.SerialNumber)); err != nil {
-		return err
-	}
-	if err := wi(g, "Data_Port", cb.DataPort); err != nil {
-		return err
-	}
-	if err := wi(g, "Server_Port", cb.ServerPort); err != nil {
-		return err
-	}
-	if err := wi(g, "Actual_Timing_Offset", cb.ActualTimingOffset); err != nil {
-		return err
-	}
-	if err := wi(g, "Commanded_Timing_Offset", cb.CommandedTimingOffset); err != nil {
-		return err
-	}
-	if err := ws(g, "Manufacturer", strOrEmpty(cb.Manufacturer)); err != nil {
-		return err
-	}
-	if err := ws(g, "Model", strOrEmpty(cb.Model)); err != nil {
-		return err
-	}
-	if err := ws(g, "Output_Path", strOrEmpty(cb.OutputPath)); err != nil {
-		return err
-	}
-	if err := ws(g, "Selected_Camera", strOrEmpty(cb.SelectedCamera)); err != nil {
-		return err
-	}
-	if err := ws(g, "Custom_Video_Format", strOrEmpty(cb.CustomVideoFormat)); err != nil {
-		return err
-	}
-	if err := ws(g, "Video_Output", strOrEmpty(cb.VideoOutput)); err != nil {
-		return err
-	}
-	if err := wb(g, "Show_Console", cb.ShowConsole); err != nil {
-		return err
-	}
-	if err := wi(g, "Software_Trigger_Delay", cb.SoftwareTriggerDelay); err != nil {
-		return err
-	}
-	cbAlgorithm, cbParams := BackwardFlatFieldsCoefficients(cb.PowerCharacterization)
-	if err := ws(g, "Volts_To_Watts_Algorithm", strOrEmpty(cbAlgorithm)); err != nil {
-		return err
-	}
-	if err := ws(g, "Volts_To_Watts_Params", strOrEmpty(cbParams)); err != nil {
-		return err
-	}
-	if err := ws(g, "Correction_Grid_Domain_Shape", strOrEmpty(cb.CorrectionGridDomainShape)); err != nil {
-		return err
-	}
-	if err := ws(g, "Inverse_Grid_Domain_Shape", strOrEmpty(cb.InverseGridDomainShape)); err != nil {
-		return err
-	}
-
-	cdFlat := FlatFromNestedGrid(cb.CorrectionData)
-	cdDS, err := g.CreateFloat64DatasetOpen(layout.DSCorrectionData, []uint64{257, 257, 2}, cdFlat)
+	groups, err := ClearBoxToV10Trains(tree)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := wsDS(cdDS, "dimensions", "H,W,D"); err != nil {
-		cdDS.Close()
-		return err
-	}
-	if err := wsDS(cdDS, "dtype", "float64"); err != nil {
-		cdDS.Close()
-		return err
-	}
-	if err := wsDS(cdDS, "shape", "257x257x2"); err != nil {
-		cdDS.Close()
-		return err
-	}
-	cdDS.Close()
-
-	icdFlat := FlatFromNestedGrid(cb.InverseCorrectionData)
-	icdDS, err := g.CreateFloat64DatasetOpen(layout.DSInverseCorrectionData, []uint64{257, 257, 2}, icdFlat)
-	if err != nil {
-		return err
-	}
-	if err := wsDS(icdDS, "dimensions", "H,W,D"); err != nil {
-		icdDS.Close()
-		return err
-	}
-	if err := wsDS(icdDS, "dtype", "float64"); err != nil {
-		icdDS.Close()
-		return err
-	}
-	if err := wsDS(icdDS, "shape", "257x257x2"); err != nil {
-		icdDS.Close()
-		return err
-	}
-	icdDS.Close()
-
-	// Only create the Synchronous_Sensors group at all when the map is
-	// non-empty, so a ClearBox with zero sensors is byte-identical on disk
-	// to before this field existed — no empty placeholder group. Matches
-	// Rust's/Python's/Node's choice, deliberately different from
-	// OPCUA/Triggers (always created, even with zero triggers).
-	if len(cb.SynchronousSensors) > 0 {
-		sensorsGrp, err := g.CreateGroup("Synchronous_Sensors")
-		if err != nil {
-			return err
+	for id := range groups {
+		matched := false
+		for i := range cfg.OpticalTrains {
+			if layout.TrainID(i) == id {
+				matched = true
+			}
 		}
-		defer sensorsGrp.Close()
-		for name, sensor := range cb.SynchronousSensors {
-			sGrp, err := sensorsGrp.CreateGroup(name)
-			if err != nil {
-				return err
-			}
-			if err := writeSynchronousSensor(sGrp, &sensor); err != nil {
-				sGrp.Close()
-				return err
-			}
-			sGrp.Close()
+		if !matched {
+			return nil, fmt.Errorf("ClearBox: %s has no matching optical train", id)
 		}
 	}
-
-	return nil
+	return groups, nil
 }
 
-// writeSynchronousSensor writes one Synchronous Sensor's 18 scalar
-// attributes plus its two compound datasets. A zero-length row slice
-// produces a valid zero-row dataset (see h5c.CreateEquationConstantsDataset/
-// CreateCalibrationPointsDataset), not an absent dataset.
-func writeSynchronousSensor(g *h5c.Group, s *SynchronousSensor) error {
-	if err := wb(g, "Enabled", s.Enabled); err != nil {
+func writeClearBoxGroup(g *h5c.Group, tree *extension.Tree) error {
+	optGrp, err := g.CreateGroup(layout.GroupOptionalComponents)
+	if err != nil {
 		return err
 	}
-	if err := ws(g, "Sensor_Name", strOrEmpty(s.SensorName)); err != nil {
-		return err
-	}
-	if err := wf(g, "Sensor_Output_Range_Low", s.SensorOutputRangeLow); err != nil {
-		return err
-	}
-	if err := wf(g, "Sensor_Output_Range_High", s.SensorOutputRangeHigh); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Output_Space", strOrEmpty(s.SensorOutputSpace)); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Model", strOrEmpty(s.SensorModel)); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Manufacturer", strOrEmpty(s.SensorManufacturer)); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Scope", strOrEmpty(s.SensorScope)); err != nil {
-		return err
-	}
-	if err := ws(g, "Units_Derived_Quantity", strOrEmpty(s.UnitsDerivedQuantity)); err != nil {
-		return err
-	}
-	if err := wi(g, "Port_ID", s.PortID); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Type", strOrEmpty(s.SensorType)); err != nil {
-		return err
-	}
-	if err := ws(g, "Input_Type", strOrEmpty(s.InputType)); err != nil {
-		return err
-	}
-	if err := ws(g, "Algorithm_Type", strOrEmpty(s.AlgorithmType)); err != nil {
-		return err
-	}
-	if err := ws(g, "Algorithm_Equation", strOrEmpty(s.AlgorithmEquation)); err != nil {
-		return err
-	}
-	if err := ws(g, "Calibration_Source", strOrEmpty(s.CalibrationSource)); err != nil {
-		return err
-	}
-	if err := wb(g, "Calibration_Verified", s.CalibrationVerified); err != nil {
-		return err
-	}
-	if err := wf(g, "Sample_Period", s.SamplePeriod); err != nil {
-		return err
-	}
-	if err := ws(g, "Metadata", strOrEmpty(s.Metadata)); err != nil {
-		return err
-	}
-
-	constRows := make([]h5c.EquationConstantRow, len(s.DerivationEquationConstants))
-	for i, c := range s.DerivationEquationConstants {
-		constRows[i] = h5c.EquationConstantRow{Name: c.Name, Value: c.Value}
-	}
-	if err := g.CreateEquationConstantsDataset("Derivation_Equation_Constants", constRows); err != nil {
-		return err
-	}
-
-	pointRows := make([]h5c.CalibrationPointRow, len(s.CalibrationPoints))
-	for i, p := range s.CalibrationPoints {
-		pointRows[i] = h5c.CalibrationPointRow{InputValue: p.InputValue, OutputValue: p.OutputValue}
-	}
-	if err := g.CreateCalibrationPointsDataset("Calibration_Points", pointRows); err != nil {
-		return err
-	}
-
-	return nil
+	defer optGrp.Close()
+	return extio.WriteTree(optGrp, layout.GroupClearBox, tree)
 }
 
 // ---------------------------------------------------------------------------

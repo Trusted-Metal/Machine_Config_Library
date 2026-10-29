@@ -42,57 +42,6 @@ TEST_CASE("PresentOptionalSerializesValue") {
 }
 
 // ---------------------------------------------------------------------------
-// NanCellSerializesAsNull
-// Grid cells are std::optional<double>; nullopt (representing HDF5 NaN) → JSON null.
-// ---------------------------------------------------------------------------
-TEST_CASE("NanCellSerializesAsNull") {
-    // 1×1×2 grid: first cell nullopt (NaN), second cell has a value.
-    Grid3D grid = {{{std::nullopt, GridCell{1.5}}}};
-
-    ClearBox cb;
-    cb.ip_address       = "192.168.1.1";
-    cb.correction_data  = grid;
-
-    nlohmann::json j = cb;
-    REQUIRE(j.contains("correction_data"));
-    REQUIRE(j["correction_data"][0][0][0].is_null());
-    REQUIRE_THAT(j["correction_data"][0][0][1].get<double>(),
-                 Catch::Matchers::WithinRel(1.5));
-}
-
-// ---------------------------------------------------------------------------
-// OmitCorrectionDataWhenNullopt
-// correction_data must be absent from JSON (not null) when not populated.
-// ---------------------------------------------------------------------------
-TEST_CASE("OmitCorrectionDataWhenNullopt") {
-    ClearBox cb;
-    cb.ip_address      = "192.168.1.1";
-    cb.correction_data = std::nullopt;
-
-    nlohmann::json j = cb;
-    REQUIRE_FALSE(j.contains("correction_data"));
-    REQUIRE_FALSE(j.contains("inverse_correction_data"));
-}
-
-// ---------------------------------------------------------------------------
-// CorrectionDataFlatIndexing
-// Element at (i, j, k) lives at data[i*d1*d2 + j*d2 + k].
-// ---------------------------------------------------------------------------
-TEST_CASE("CorrectionDataFlatIndexing") {
-    CorrectionData cd;
-    cd.shape = {3, 4, 2};
-    const auto [d0, d1, d2] = cd.shape;
-    cd.data.resize(d0 * d1 * d2, 0.0);
-
-    // Write known value at (1, 2, 1).
-    const std::size_t i = 1, j = 2, k = 1;
-    cd.data[i * d1 * d2 + j * d2 + k] = 42.0;
-
-    REQUIRE(cd.data[1 * 4 * 2 + 2 * 2 + 1] == 42.0);
-    REQUIRE(cd.data.size() == d0 * d1 * d2);
-}
-
-// ---------------------------------------------------------------------------
 // MachineConfigRoundtrip
 // Serialise a minimal MachineConfig to JSON and deserialise it back.
 // Verifies that to_json / from_json are inverse operations for required fields.

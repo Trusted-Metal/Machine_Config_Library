@@ -65,6 +65,18 @@ func main() {
 	}
 	fmt.Printf("Optical trains : %d\n", n)
 
+	// ClearBox is an opaque extension tree: Extensions["ClearBox"].Children["Optical_Train_NN"].
+	cfg, err := machineconfig.NewReader(path).Parse()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse failed: %v\n", err)
+		os.Exit(1)
+	}
+	clearbox := cfg.Extensions["ClearBox"]
+	if clearbox == nil {
+		fmt.Fprintln(os.Stderr, "ClearBox extension missing")
+		os.Exit(1)
+	}
+
 	for i := 0; i < n; i++ {
 		sc, capErr := f.GetScanner(i)
 		if capErr != nil {
@@ -78,18 +90,14 @@ func main() {
 		fmt.Printf("  Train %d  wd=%s %s  offset x=%v, y=%v\n",
 			i, wd, ptrStr(sc.WorkingDistanceUnit),
 			ptrF(sc.ScanHeadOffsetX), ptrF(sc.ScanHeadOffsetY))
-		if _, e := f.GetClearbox(i); e != nil {
-			fmt.Printf("           clearbox: %s\n", e.Code)
-		} else {
+		if _, ok := clearbox.Children[fmt.Sprintf("Optical_Train_%02d", i+1)]; ok {
 			fmt.Println("           clearbox: present")
+		} else {
+			fmt.Println("           clearbox: none")
 		}
 	}
 
-	cd, err := machineconfig.NewReader(path).GetCorrectionData(0)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "correction: %v\n", err)
-		os.Exit(1)
-	}
+	cd := clearbox.Children["Optical_Train_01"].Datasets["Correction_Data"]
 	fmt.Printf("Correction grid: %v   (train 0)\n", cd.Shape)
 
 	if n != 2 {

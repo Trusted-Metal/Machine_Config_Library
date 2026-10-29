@@ -10,6 +10,7 @@ add_executable(machine_config_tests
   test_power_characterization.cpp # shared shape-conversion functions (Phase 2)
   test_version_adapter_isolation.cpp # cross-version import guard
   test_extensions.cpp       # extension contract + HDF5 round trips
+  test_extension_tables.cpp # compound tables (contract 0.1.1)
   test_hash.cpp             # CONFIGURATION_HASH_PLAN.md Step 5
 )
 

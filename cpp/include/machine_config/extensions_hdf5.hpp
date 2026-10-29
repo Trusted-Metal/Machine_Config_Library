@@ -14,6 +14,7 @@
 #include <hdf5.h>
 
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <string>
@@ -250,6 +251,192 @@ inline Dataset readDataset(hid_t group, const std::string& name, const std::stri
     return out;
 }
 
+/// True when the named dataset has a compound type.
+inline bool isCompoundDataset(hid_t group, const std::string& name) {
+    Handle ds(H5Dopen2(group, name.c_str(), H5P_DEFAULT), H5Dclose);
+    if (!ds.ok()) return false;
+    Handle tid(H5Dget_type(ds.id()), H5Tclose);
+    return tid.ok() && H5Tget_class(tid.id()) == H5T_COMPOUND;
+}
+
+inline std::size_t memberWidth(const TableField& f) {
+    if (f.dtype == "utf8") return static_cast<std::size_t>(f.size);
+    if (f.dtype == "i8" || f.dtype == "u8") return 1;
+    if (f.dtype == "i16" || f.dtype == "u16") return 2;
+    if (f.dtype == "i32" || f.dtype == "u32" || f.dtype == "f32") return 4;
+    return 8;
+}
+
+template <typename T>
+inline T loadNative(const unsigned char* p) {
+    T v;
+    std::memcpy(&v, p, sizeof(T));
+    return v;
+}
+
+/// Reads a 1-D compound dataset as a Table; members the contract cannot carry fail with the
+/// member's path.
+inline Table readTable(hid_t group, const std::string& name, const std::string& path) {
+    Handle ds(H5Dopen2(group, name.c_str(), H5P_DEFAULT), H5Dclose);
+    if (!ds.ok()) throw ContractError(path, "cannot open dataset");
+    Handle ftid(H5Dget_type(ds.id()), H5Tclose);
+    Handle space(H5Dget_space(ds.id()), H5Sclose);
+    const int rank = H5Sget_simple_extent_ndims(space.id());
+    if (rank != 1)
+        throw ContractError(path, "compound datasets must be 1-D, got rank " + std::to_string(rank));
+    const std::size_t rows = static_cast<std::size_t>(H5Sget_simple_extent_npoints(space.id()));
+    Handle ntid(H5Tget_native_type(ftid.id(), H5T_DIR_ASCEND), H5Tclose);
+    if (!ntid.ok()) throw ContractError(path, "cannot read the compound type");
+    const std::size_t rowSize = H5Tget_size(ntid.id());
+
+    Table table;
+    table.rows = rows;
+    std::vector<std::size_t> offsets;
+    const unsigned n = static_cast<unsigned>(H5Tget_nmembers(ftid.id()));
+    for (unsigned i = 0; i < n; ++i) {
+        char* raw = H5Tget_member_name(ftid.id(), i);
+        const std::string member = raw ? raw : "";
+        if (raw) H5free_memory(raw);
+        const std::string memberPath = detail::joinPath(path, member);
+        Handle mt(H5Tget_member_type(ftid.id(), i), H5Tclose);
+        if (!mt.ok()) throw ContractError(memberPath, "cannot read the member type");
+        TableField f;
+        f.name = member;
+        const H5T_class_t cls = H5Tget_class(mt.id());
+        if (cls == H5T_STRING) {
+            if (H5Tis_variable_str(mt.id()) > 0)
+                throw ContractError(memberPath, "variable-length strings are not supported in a compound type");
+            f.dtype = "utf8";
+            f.size = H5Tget_size(mt.id());
+        } else if (cls == H5T_INTEGER || cls == H5T_FLOAT) {
+            if (H5Tget_order(mt.id()) == H5T_ORDER_BE)
+                throw ContractError(memberPath, "big-endian compound members are not supported");
+            f.dtype = dtypeOf(mt.id());
+        }
+        if (f.dtype.empty())
+            throw ContractError(memberPath,
+                                "unsupported compound member type (nested compound, array, enum and bool members are not supported)");
+        offsets.push_back(H5Tget_member_offset(ntid.id(), i));
+        table.fields.push_back(std::move(f));
+    }
+
+    std::vector<unsigned char> buf(rows * rowSize);
+    if (rows && H5Dread(ds.id(), ntid.id(), H5S_ALL, H5S_ALL, H5P_DEFAULT, buf.data()) < 0)
+        throw ContractError(path, "HDF5 read failed");
+
+    for (std::size_t c = 0; c < table.fields.size(); ++c) {
+        const TableField& f = table.fields[c];
+        const std::size_t w = memberWidth(f);
+        auto at = [&](std::size_t r) { return buf.data() + r * rowSize + offsets[c]; };
+        if (f.dtype == "utf8") {
+            std::vector<std::string> v;
+            for (std::size_t r = 0; r < rows; ++r)
+                v.emplace_back(reinterpret_cast<const char*>(at(r)), strnlen(reinterpret_cast<const char*>(at(r)), w));
+            table.columns[f.name] = std::move(v);
+        } else if (detail::isSigned(f.dtype)) {
+            std::vector<std::int64_t> v;
+            for (std::size_t r = 0; r < rows; ++r) {
+                switch (w) {
+                    case 1: v.push_back(loadNative<std::int8_t>(at(r))); break;
+                    case 2: v.push_back(loadNative<std::int16_t>(at(r))); break;
+                    case 4: v.push_back(loadNative<std::int32_t>(at(r))); break;
+                    default: v.push_back(loadNative<std::int64_t>(at(r))); break;
+                }
+            }
+            table.columns[f.name] = std::move(v);
+        } else if (detail::isUnsigned(f.dtype)) {
+            std::vector<std::uint64_t> v;
+            for (std::size_t r = 0; r < rows; ++r) {
+                switch (w) {
+                    case 1: v.push_back(loadNative<std::uint8_t>(at(r))); break;
+                    case 2: v.push_back(loadNative<std::uint16_t>(at(r))); break;
+                    case 4: v.push_back(loadNative<std::uint32_t>(at(r))); break;
+                    default: v.push_back(loadNative<std::uint64_t>(at(r))); break;
+                }
+            }
+            table.columns[f.name] = std::move(v);
+        } else {
+            std::vector<double> v;
+            for (std::size_t r = 0; r < rows; ++r)
+                v.push_back(w == 4 ? static_cast<double>(loadNative<float>(at(r))) : loadNative<double>(at(r)));
+            table.columns[f.name] = std::move(v);
+        }
+    }
+    table.attrs = readAttrs(ds.id(), path);
+    return table;
+}
+
+template <typename T>
+inline void storeLE(unsigned char* p, T v) {
+    std::memcpy(p, &v, sizeof(T));
+}
+
+inline void writeTable(hid_t group, const std::string& name, const Table& table, const std::string& path) {
+    std::size_t rowSize = 0;
+    for (const TableField& f : table.fields) rowSize += memberWidth(f);
+    Handle tid(H5Tcreate(H5T_COMPOUND, rowSize), H5Tclose);
+    if (!tid.ok()) throw ContractError(path, "HDF5 write failed");
+    std::size_t offset = 0;
+    std::vector<std::size_t> offsets;
+    for (const TableField& f : table.fields) {
+        herr_t rc;
+        if (f.dtype == "utf8") {
+            Handle st(H5Tcopy(H5T_C_S1), H5Tclose);
+            if (H5Tset_size(st.id(), static_cast<std::size_t>(f.size)) < 0 ||
+                H5Tset_cset(st.id(), H5T_CSET_UTF8) < 0 || H5Tset_strpad(st.id(), H5T_STR_NULLPAD) < 0)
+                throw ContractError(detail::joinPath(path, f.name), "HDF5 write failed");
+            rc = H5Tinsert(tid.id(), f.name.c_str(), offset, st.id());
+        } else {
+            rc = H5Tinsert(tid.id(), f.name.c_str(), offset, fileTypeFor(f.dtype));
+        }
+        if (rc < 0) throw ContractError(detail::joinPath(path, f.name), "HDF5 write failed");
+        offsets.push_back(offset);
+        offset += memberWidth(f);
+    }
+    hsize_t dim = table.rows;
+    Handle space(H5Screate_simple(1, &dim, nullptr), H5Sclose);
+    Handle id(H5Dcreate2(group, name.c_str(), tid.id(), space.id(), H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT),
+              H5Dclose);
+    if (!id.ok()) throw ContractError(path, "HDF5 write failed");
+
+    if (table.rows > 0) {
+        std::vector<unsigned char> buf(static_cast<std::size_t>(table.rows) * rowSize, 0);
+        for (std::size_t c = 0; c < table.fields.size(); ++c) {
+            const TableField& f = table.fields[c];
+            const ColumnData& column = table.columns.at(f.name);
+            for (std::size_t r = 0; r < table.rows; ++r) {
+                unsigned char* p = buf.data() + r * rowSize + offsets[c];
+                if (const auto* s = std::get_if<std::vector<std::string>>(&column)) {
+                    std::memcpy(p, (*s)[r].data(), (*s)[r].size());
+                } else if (const auto* i = std::get_if<std::vector<std::int64_t>>(&column)) {
+                    const std::int64_t v = (*i)[r];
+                    switch (memberWidth(f)) {
+                        case 1: storeLE(p, static_cast<std::int8_t>(v)); break;
+                        case 2: storeLE(p, static_cast<std::int16_t>(v)); break;
+                        case 4: storeLE(p, static_cast<std::int32_t>(v)); break;
+                        default: storeLE(p, v); break;
+                    }
+                } else if (const auto* u = std::get_if<std::vector<std::uint64_t>>(&column)) {
+                    const std::uint64_t v = (*u)[r];
+                    switch (memberWidth(f)) {
+                        case 1: storeLE(p, static_cast<std::uint8_t>(v)); break;
+                        case 2: storeLE(p, static_cast<std::uint16_t>(v)); break;
+                        case 4: storeLE(p, static_cast<std::uint32_t>(v)); break;
+                        default: storeLE(p, v); break;
+                    }
+                } else {
+                    const double v = std::get<std::vector<double>>(column)[r];
+                    if (memberWidth(f) == 4) storeLE(p, static_cast<float>(v));
+                    else storeLE(p, v);
+                }
+            }
+        }
+        if (H5Dwrite(id.id(), tid.id(), H5S_ALL, H5S_ALL, H5P_DEFAULT, buf.data()) < 0)
+            throw ContractError(path, "HDF5 write failed");
+    }
+    writeAttrs(id.id(), table.attrs, path);
+}
+
 }  // namespace h5
 
 /// Reads a group and everything below it verbatim; unsupported HDF5 types fail with their path.
@@ -270,7 +457,10 @@ inline Tree readExtensionTree(hid_t group, const std::string& path) {
         if (!obj.ok()) throw ContractError(childPath, "cannot open member");
         const H5I_type_t kind = H5Iget_type(obj.id());
         if (kind == H5I_GROUP) tree.children[name] = readExtensionTree(obj.id(), childPath);
-        else if (kind == H5I_DATASET) tree.datasets[name] = h5::readDataset(group, name, childPath);
+        else if (kind == H5I_DATASET) {
+            if (h5::isCompoundDataset(group, name)) tree.tables[name] = h5::readTable(group, name, childPath);
+            else tree.datasets[name] = h5::readDataset(group, name, childPath);
+        }
         else throw ContractError(childPath, "only groups and datasets are supported");
     }
     return tree;
@@ -305,6 +495,7 @@ inline void writeGroup(hid_t group, const Tree& t, const std::string& path) {
         if (rc < 0) throw ContractError(dsPath, "HDF5 write failed");
         writeAttrs(id.id(), ds.attrs, dsPath);
     }
+    for (const auto& [name, table] : t.tables) writeTable(group, name, table, detail::joinPath(path, name));
     for (const auto& [name, child] : t.children) {
         const std::string childPath = detail::joinPath(path, name);
         Handle g(H5Gcreate2(group, name.c_str(), H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT), H5Gclose);

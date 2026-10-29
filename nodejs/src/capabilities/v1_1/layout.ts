@@ -10,9 +10,6 @@ export const FILE_VERSION = '1.1';
 export const ROOT_MACHINE = 'Machine';
 export const ROOT_OPTICAL_TRAINS = 'Machine/Optical_Trains';
 export const ROOT_EXTENSIONS = 'Extensions';
-export const GROUP_CLEARBOX = 'Extensions/ClearBox';
-/** Group names under Extensions/ that core still models and therefore never exposes as extension trees. */
-export const MODELLED_EXTENSION_NAMES: ReadonlySet<string> = new Set(['ClearBox']);
 
 export const TRAIN_ID_PREFIX = 'Optical_Train_';
 export const GROUP_SCANNER = 'Scanner';
@@ -22,8 +19,6 @@ export const GROUP_SCANNER_CARD = 'Scanner_Card';
 export const GROUP_POWER_CHARACTERIZATION = 'Power_Characterization';
 export const DS_DERIVATION_EQUATION_CONSTANTS = 'Derivation_Equation_Constants';
 export const DS_CHARACTERIZATION_POINTS = 'Characterization_Points';
-export const DS_CORRECTION_DATA = 'Correction_Data';
-export const DS_INVERSE_CORRECTION_DATA = 'Inverse_Correction_Data';
 export const DS_SCAN_FIELD_CORRECTION_FILE = 'scan_field_correction_file';
 
 export function trainId(index: number): string {
@@ -56,23 +51,6 @@ export function collimatorPathById(tid: string): string {
 
 export function scannerCardPathById(tid: string): string {
   return `${trainPathById(tid)}/${GROUP_SCANNER_CARD}`;
-}
-
-/** Per-train ClearBox subgroup — `Extensions/ClearBox/<train_id>/`. */
-export function clearboxPathById(tid: string): string {
-  return `${GROUP_CLEARBOX}/${tid}`;
-}
-
-export function clearboxPath(index: number): string {
-  return clearboxPathById(trainId(index));
-}
-
-export function correctionDataPathById(tid: string): string {
-  return `${clearboxPathById(tid)}/${DS_CORRECTION_DATA}`;
-}
-
-export function inverseCorrectionDataPathById(tid: string): string {
-  return `${clearboxPathById(tid)}/${DS_INVERSE_CORRECTION_DATA}`;
 }
 
 export function scanFieldCorrectionFilePath(index: number): string {

@@ -30,6 +30,7 @@ To add a new language, add one entry to RUNNERS — no other file needs changing
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -66,6 +67,7 @@ FIXTURES: dict[str, Path] = {
     "synthetic":         REPO / "fixtures" / "synthetic_2laser.h5",
     "v1_1":              REPO / "fixtures" / "reference_config_v1_1.h5",
     "v1_1_migrated":     REPO / "fixtures" / "reference_config_v1_1_migrated.h5",
+    "extension_tables":  REPO / "fixtures" / "extension_table_sample_node_v1_1.h5",
 }
 
 _EXT = ".exe" if platform.system() == "Windows" else ""
@@ -212,6 +214,28 @@ def _normalize_numbers(obj: Any) -> Any:
     return obj
 
 
+def _summarize_dataset_data(obj: Any) -> Any:
+    """Replace large extension-dataset ``data`` lists by a digest of their normalised values.
+
+    ClearBox grids are ~132k numbers each; DeepDiff on lists that size takes minutes per
+    comparison.  Hashing the (number-normalised) values keeps the comparison exact while
+    ``dtype``/``shape``/``attrs`` are still diffed field by field.
+    """
+    if isinstance(obj, dict):
+        out = {k: _summarize_dataset_data(v) for k, v in obj.items() if k != "data"}
+        if "data" in obj:
+            data = obj["data"]
+            if isinstance(data, list) and len(data) > 64 and "dtype" in obj and "shape" in obj:
+                blob = json.dumps(_normalize_numbers(data), sort_keys=True).encode()
+                out["data"] = {"sha256": hashlib.sha256(blob).hexdigest(), "len": len(data)}
+            else:
+                out["data"] = _summarize_dataset_data(data)
+        return out
+    if isinstance(obj, list):
+        return [_summarize_dataset_data(v) for v in obj]
+    return obj
+
+
 def _diff(a: dict, b: dict) -> list[str]:
     """Return human-readable differences; empty list means equal.
 
@@ -221,6 +245,8 @@ def _diff(a: dict, b: dict) -> list[str]:
     (e.g. a string where a number is expected) are still caught by Phase 1
     schema validation before _diff is ever called.
     """
+    a = _summarize_dataset_data(a)
+    b = _summarize_dataset_data(b)
     if _DEEPDIFF:
         d = DeepDiff(
             a, b,

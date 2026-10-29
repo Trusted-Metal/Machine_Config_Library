@@ -21,6 +21,7 @@ import (
 	machineconfig "machine-config-go"
 	"machine-config-go/capabilities"
 	v1_1hdf5 "machine-config-go/capabilities/v1_1/hdf5"
+	"machine-config-go/extension"
 	"machine-config-go/internal/models"
 )
 
@@ -123,6 +124,22 @@ func parseFile(t *testing.T, path string) *machineconfig.MachineConfig {
 // TestV1_1AdapterRead
 // ---------------------------------------------------------------------------
 
+func cbNames(pc *extension.Tree) []string {
+	var out []string
+	for _, c := range cbConstants(pc) {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+func cbValues(pc *extension.Tree) []float64 {
+	var out []float64
+	for _, c := range cbConstants(pc) {
+		out = append(out, c.Value)
+	}
+	return out
+}
+
 func TestV1_1AdapterRead(t *testing.T) {
 	cfg, err := v1_1hdf5.Parse(referenceV1_1Fixture(t), true)
 	if err != nil {
@@ -132,26 +149,26 @@ func TestV1_1AdapterRead(t *testing.T) {
 		t.Fatalf("file_version = %q", cfg.Meta.FileVersion)
 	}
 
-	for _, train := range cfg.OpticalTrains {
-		cb := train.OptionalComponents.Clearbox
-		if cb == nil {
-			t.Fatal("expected clearbox present on every train")
-		}
-		// Change 1: Consolidate — same shared value on every train.
-		if cb.OutputPath == nil || *cb.OutputPath != "/recordings/" {
-			t.Fatalf("output_path = %v", cb.OutputPath)
-		}
-		if cb.SoftwareTriggerDelay == nil || *cb.SoftwareTriggerDelay != 3000 {
-			t.Fatalf("software_trigger_delay = %v", cb.SoftwareTriggerDelay)
-		}
+	// Change 1: Consolidate — one shared value, on the extension root.
+	root := clearboxRoot(t, cfg)
+	if got := cbText(root, "Output_Path"); got != "/recordings/" {
+		t.Fatalf("output_path = %q", got)
+	}
+	if got, ok := cbInt(root, "Software_Trigger_Delay"); !ok || got != 3000 {
+		t.Fatalf("software_trigger_delay = %v", got)
+	}
+
+	for i, train := range cfg.OpticalTrains {
+		cb := clearboxTrain(t, cfg, i)
 		// Change 1: Addition.
-		if cb.FirmwareVersion == nil || *cb.FirmwareVersion != "2.4.1" {
-			t.Fatalf("firmware_version = %v", cb.FirmwareVersion)
+		if got := cbText(cb, "Firmware_Version"); got != "2.4.1" {
+			t.Fatalf("firmware_version = %q", got)
 		}
 		// Change 1: Removal.
-		if cb.SelectedCamera != nil || cb.CustomVideoFormat != nil || cb.VideoOutput != nil ||
-			cb.ShowConsole != nil || cb.CorrectionGridDomainShape != nil || cb.InverseGridDomainShape != nil {
-			t.Fatalf("expected all removed ClearBox fields nil, got %+v", cb)
+		for _, removed := range []string{"Selected_Camera", "Custom_Video_Format", "Video_Output", "Show_Console", "Output_Path", "Software_Trigger_Delay"} {
+			if _, ok := cb.Attrs[removed]; ok {
+				t.Fatalf("expected %s absent from a v1.1 ClearBox train", removed)
+			}
 		}
 		// Change 5: no on-disk source in v1.1, always nil.
 		if train.Scanner.XAxis.TuningParameters != nil || train.Scanner.XAxis.TuningType != nil {
@@ -172,43 +189,33 @@ func TestV1_1AdapterRead(t *testing.T) {
 	}
 
 	// Change 3: ClearBox Power_Characterization — train 1 LINEAR, train 2 POLYNOMIAL.
-	cb0 := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	pc0 := cb0.PowerCharacterization
-	if pc0 == nil {
-		t.Fatal("expected pc0 present")
+	pc0 := cbPowerCharacterization(t, cfg, 0)
+	for field, want := range map[string]string{
+		"Algorithm_Type":         "LINEAR",
+		"Algorithm_Equation":     "W = a*V + b",
+		"Input_Type":             "0-10 V",
+		"Units_Derived_Quantity": "Watts",
+	} {
+		if got := cbText(pc0, field); got != want {
+			t.Fatalf("pc0.%s = %q, want %q", field, got, want)
+		}
 	}
-	if pc0.AlgorithmType == nil || *pc0.AlgorithmType != "LINEAR" {
-		t.Fatalf("pc0.algorithm_type = %v", pc0.AlgorithmType)
+	if !strSliceEqual(cbNames(pc0), []string{"b", "a"}) {
+		t.Fatalf("pc0 constant names = %v", cbNames(pc0))
 	}
-	if pc0.AlgorithmEquation == nil || *pc0.AlgorithmEquation != "W = a*V + b" {
-		t.Fatalf("pc0.algorithm_equation = %v", pc0.AlgorithmEquation)
-	}
-	if pc0.InputType == nil || *pc0.InputType != "0-10 V" {
-		t.Fatalf("pc0.input_type = %v", pc0.InputType)
-	}
-	if pc0.UnitsDerivedQuantity == nil || *pc0.UnitsDerivedQuantity != "Watts" {
-		t.Fatalf("pc0.units_derived_quantity = %v", pc0.UnitsDerivedQuantity)
-	}
-	if !strSliceEqual(equationConstantNames(pc0.DerivationEquationConstants), []string{"b", "a"}) {
-		t.Fatalf("pc0 constant names = %v", equationConstantNames(pc0.DerivationEquationConstants))
-	}
-	if len(pc0.CharacterizationPoints) != 3 {
-		t.Fatalf("pc0 characterization_points len = %d, want 3", len(pc0.CharacterizationPoints))
+	if cbPointCount(pc0) != 3 {
+		t.Fatalf("pc0 characterization_points = %d, want 3", cbPointCount(pc0))
 	}
 
-	cb1 := cfg.OpticalTrains[1].OptionalComponents.Clearbox
-	pc1 := cb1.PowerCharacterization
-	if pc1 == nil {
-		t.Fatal("expected pc1 present")
+	pc1 := cbPowerCharacterization(t, cfg, 1)
+	if got := cbText(pc1, "Algorithm_Type"); got != "POLYNOMIAL" {
+		t.Fatalf("pc1.algorithm_type = %q", got)
 	}
-	if pc1.AlgorithmType == nil || *pc1.AlgorithmType != "POLYNOMIAL" {
-		t.Fatalf("pc1.algorithm_type = %v", pc1.AlgorithmType)
+	if got := cbText(pc1, "Algorithm_Equation"); got != "W = c0 + c1*V + c2*V^2" {
+		t.Fatalf("pc1.algorithm_equation = %q", got)
 	}
-	if pc1.AlgorithmEquation == nil || *pc1.AlgorithmEquation != "W = c0 + c1*V + c2*V^2" {
-		t.Fatalf("pc1.algorithm_equation = %v", pc1.AlgorithmEquation)
-	}
-	if !strSliceEqual(equationConstantNames(pc1.DerivationEquationConstants), []string{"c0", "c1", "c2"}) {
-		t.Fatalf("pc1 constant names = %v", equationConstantNames(pc1.DerivationEquationConstants))
+	if !strSliceEqual(cbNames(pc1), []string{"c0", "c1", "c2"}) {
+		t.Fatalf("pc1 constant names = %v", cbNames(pc1))
 	}
 
 	// Change 4: LightSource Power_Characterization — inverse data availability.
@@ -229,47 +236,17 @@ func TestV1_1AdapterRead(t *testing.T) {
 		t.Fatal("expected lspc0 derivation_equation_constants non-empty (natively-authored fixture)")
 	}
 
-	// JSON-serialization verification (Go's encoding/json is reflection-
-	// driven via struct tags, not hand-written per-field like Python's/
-	// C++'s facades — but verify directly rather than assuming the tags
-	// are enough): firmware_version and power_characterization must
-	// actually appear in the marshaled output.
+	// JSON-serialization verification: the ClearBox extension tree and the light source's
+	// power_characterization must actually appear in the marshaled output.
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(b, &top); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(string(b), `"Firmware_Version"`) {
+		t.Error("expected JSON to contain the ClearBox \"Firmware_Version\" attribute")
 	}
-	var trains []json.RawMessage
-	if err := json.Unmarshal(top["optical_trains"], &trains); err != nil {
-		t.Fatal(err)
-	}
-	var train0 map[string]json.RawMessage
-	if err := json.Unmarshal(trains[0], &train0); err != nil {
-		t.Fatal(err)
-	}
-	var oc map[string]json.RawMessage
-	if err := json.Unmarshal(train0["optional_components"], &oc); err != nil {
-		t.Fatal(err)
-	}
-	var cbJSON map[string]json.RawMessage
-	if err := json.Unmarshal(oc["clearbox"], &cbJSON); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := cbJSON["firmware_version"]; !ok {
-		t.Error("expected clearbox JSON to contain \"firmware_version\"")
-	}
-	if _, ok := cbJSON["power_characterization"]; !ok {
-		t.Error("expected clearbox JSON to contain \"power_characterization\"")
-	}
-	var lsJSON map[string]json.RawMessage
-	if err := json.Unmarshal(train0["light_source"], &lsJSON); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := lsJSON["power_characterization"]; !ok {
-		t.Error("expected light_source JSON to contain \"power_characterization\"")
+	if !strings.Contains(string(b), `"power_characterization"`) {
+		t.Error("expected JSON to contain the light_source \"power_characterization\"")
 	}
 }
 
@@ -280,19 +257,10 @@ func TestV1_1AdapterRead(t *testing.T) {
 func TestV1_1AdapterRoundtrip(t *testing.T) {
 	// write -> read -> write -> read, no drift. ClearBox's and Light_Source's
 	// power_characterization are deliberately given different values in the
-	// same object — the direct test for the cross-wiring risk (same struct,
-	// two HDF5 paths per train; a swapped read/write assignment would only
-	// be caught if the two instances are actually distinguishable).
+	// same object — the direct test for the cross-wiring risk.
 	cfg := mockV1_1Config(t, 1)
-	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	pc := *cb.PowerCharacterization
-	pc.AlgorithmType = machineconfig.StrPtr("LINEAR")
-	pc.DerivationEquationConstants = []machineconfig.EquationConstant{
-		{Name: "b", Value: 1.0},
-		{Name: "a", Value: 2.0},
-	}
-	pc.CharacterizationPoints = []machineconfig.CalibrationPoint{}
-	cb.PowerCharacterization = &pc
+	clearboxTrain(t, cfg, 0).Children["Power_Characterization"] = cbMakePowerCharacterization(
+		"LINEAR", []cbConstant{{"b", 1.0}, {"a", 2.0}})
 
 	lsPC := *cfg.OpticalTrains[0].LightSource.PowerCharacterization
 	lsPC.AlgorithmType = machineconfig.StrPtr("POLYNOMIAL")
@@ -317,21 +285,19 @@ func TestV1_1AdapterRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cbR := result.OpticalTrains[0].OptionalComponents.Clearbox
-	lsR := result.OpticalTrains[0].LightSource
-	cbPC := cbR.PowerCharacterization
-	lsPCR := lsR.PowerCharacterization
-	if cbPC == nil || lsPCR == nil {
-		t.Fatal("expected both power_characterization instances present")
+	cbPC := cbPowerCharacterization(t, result, 0)
+	lsPCR := result.OpticalTrains[0].LightSource.PowerCharacterization
+	if lsPCR == nil {
+		t.Fatal("expected light source power_characterization present")
 	}
-	if cbPC.AlgorithmType == nil || *cbPC.AlgorithmType != "LINEAR" {
-		t.Fatalf("cb power_characterization.algorithm_type = %v", cbPC.AlgorithmType)
+	if got := cbText(cbPC, "Algorithm_Type"); got != "LINEAR" {
+		t.Fatalf("cb power_characterization.algorithm_type = %q", got)
 	}
-	if !strSliceEqual(equationConstantNames(cbPC.DerivationEquationConstants), []string{"b", "a"}) {
-		t.Fatalf("cb constant names = %v", equationConstantNames(cbPC.DerivationEquationConstants))
+	if !strSliceEqual(cbNames(cbPC), []string{"b", "a"}) {
+		t.Fatalf("cb constant names = %v", cbNames(cbPC))
 	}
-	if len(cbPC.CharacterizationPoints) != 0 {
-		t.Fatalf("cb characterization_points should be empty, got %v", cbPC.CharacterizationPoints)
+	if cbPointCount(cbPC) != 0 {
+		t.Fatalf("cb characterization_points should be empty, got %d", cbPointCount(cbPC))
 	}
 	if lsPCR.AlgorithmType == nil || *lsPCR.AlgorithmType != "POLYNOMIAL" {
 		t.Fatalf("ls power_characterization.algorithm_type = %v", lsPCR.AlgorithmType)
@@ -343,8 +309,14 @@ func TestV1_1AdapterRoundtrip(t *testing.T) {
 		t.Fatalf("ls characterization_points = %v", lsPCR.CharacterizationPoints)
 	}
 	// Cross-wiring guard: the two instances must not have swapped.
-	if *cbPC.AlgorithmType == *lsPCR.AlgorithmType {
+	if cbText(cbPC, "Algorithm_Type") == *lsPCR.AlgorithmType {
 		t.Fatal("cross-wiring guard failed: clearbox and light_source power_characterization have the same algorithm_type")
+	}
+	// The whole ClearBox tree, grids included, is bit-stable across the double round trip.
+	want, _ := extension.Digest(cfg.Extensions["ClearBox"])
+	got, _ := extension.Digest(result.Extensions["ClearBox"])
+	if got != want {
+		t.Fatalf("ClearBox digest drifted across a v1.1 round trip: %s != %s", got, want)
 	}
 }
 
@@ -361,44 +333,40 @@ func TestV1_1AdapterForwardMigration(t *testing.T) {
 		t.Fatalf("file_version = %q", migrated.Meta.FileVersion)
 	}
 
+	// The shimmed tree is already in the v1.1 layout, so it survives unchanged.
+	want, _ := extension.Digest(source.Extensions["ClearBox"])
+	got, _ := extension.Digest(migrated.Extensions["ClearBox"])
+	if got != want {
+		t.Fatalf("ClearBox digest changed across the v1.0 -> v1.1 write: %s != %s", got, want)
+	}
+	root := clearboxRoot(t, migrated)
+	if _, ok := root.Attrs["Output_Path"]; !ok {
+		t.Fatal("expected shared Output_Path on the extension root")
+	}
+	if _, ok := root.Attrs["Software_Trigger_Delay"]; !ok {
+		t.Fatal("expected shared Software_Trigger_Delay on the extension root")
+	}
+
 	for i, train := range migrated.OpticalTrains {
-		srcCB := source.OpticalTrains[i].OptionalComponents.Clearbox
-		cb := train.OptionalComponents.Clearbox
-		if cb == nil || srcCB == nil {
-			t.Fatal("expected clearbox on both source and migrated")
-		}
-		// Consolidate: same per-train value carried straight through (real
-		// fixture already agrees).
-		if (cb.OutputPath == nil) != (srcCB.OutputPath == nil) || (srcCB.OutputPath != nil && *cb.OutputPath != *srcCB.OutputPath) {
-			t.Fatalf("output_path: got %v want %v", cb.OutputPath, srcCB.OutputPath)
-		}
-		if (cb.SoftwareTriggerDelay == nil) != (srcCB.SoftwareTriggerDelay == nil) ||
-			(srcCB.SoftwareTriggerDelay != nil && *cb.SoftwareTriggerDelay != *srcCB.SoftwareTriggerDelay) {
-			t.Fatalf("software_trigger_delay: got %v want %v", cb.SoftwareTriggerDelay, srcCB.SoftwareTriggerDelay)
-		}
+		cb := clearboxTrain(t, migrated, i)
 		// Addition: no v1.0 source.
-		if cb.FirmwareVersion != nil {
-			t.Fatalf("firmware_version = %v, want nil", cb.FirmwareVersion)
+		if _, ok := cb.Attrs["Firmware_Version"]; ok {
+			t.Fatal("firmware_version must be absent")
 		}
-		// Removal.
-		if cb.SelectedCamera != nil || cb.CustomVideoFormat != nil {
-			t.Fatal("expected removed fields nil")
+		// v1.0-only attributes ride along as extra per-train attributes.
+		if _, ok := cb.Attrs["Selected_Camera"]; !ok {
+			t.Fatal("expected the v1.0-only Selected_Camera to ride along")
 		}
 		// Change 3: derived ClearBox data has real constants, zero points.
-		pc := cb.PowerCharacterization
-		if pc == nil {
-			t.Fatal("expected clearbox power_characterization present")
+		pc := cbPowerCharacterization(t, migrated, i)
+		if cbPointCount(pc) != 0 {
+			t.Fatalf("expected zero characterization_points, got %d", cbPointCount(pc))
 		}
-		if len(pc.CharacterizationPoints) != 0 {
-			t.Fatalf("expected zero characterization_points, got %d", len(pc.CharacterizationPoints))
-		}
-		if len(pc.DerivationEquationConstants) == 0 {
+		if len(cbConstants(pc)) == 0 {
 			t.Fatal("expected non-empty derivation_equation_constants")
 		}
-		srcPC := srcCB.PowerCharacterization
-		if (pc.AlgorithmType == nil) != (srcPC.AlgorithmType == nil) ||
-			(srcPC.AlgorithmType != nil && *pc.AlgorithmType != *srcPC.AlgorithmType) {
-			t.Fatalf("algorithm_type: got %v want %v", pc.AlgorithmType, srcPC.AlgorithmType)
+		if cbText(pc, "Algorithm_Type") != cbText(cbPowerCharacterization(t, source, i), "Algorithm_Type") {
+			t.Fatal("algorithm_type changed across the forward migration")
 		}
 
 		// Change 4: derived Light_Source data is the inverse — zero
@@ -416,33 +384,26 @@ func TestV1_1AdapterForwardMigration(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Change 1 Consolidate hard-error tests
-// ---------------------------------------------------------------------------
-
-func TestV1_1AdapterOutputPathDisagreementRaises(t *testing.T) {
+func TestV1_0FirstTrainWinsForSharedValues(t *testing.T) {
+	// File_Version 1.0 stores Output_Path/Software_Trigger_Delay per train; the extension tree
+	// holds one value each, taken from the first train.
 	cfg := mockV1_0Config(t, 2)
-	cfg.OpticalTrains[1].OptionalComponents.Clearbox.OutputPath = machineconfig.StrPtr("/other/")
-	tmp := filepath.Join(t.TempDir(), "conflict.h5")
-	werr := machineconfig.NewWriter().WriteAs(cfg, tmp, "1.1")
-	if werr == nil {
-		t.Fatal("expected an error, got nil")
-	}
-	if !strings.Contains(werr.Error(), `consolidate conflict on "Output_Path"`) {
-		t.Fatalf("unexpected message: %v", werr)
-	}
-}
+	second := clearboxTrain(t, cfg, 1)
+	second.Attrs["Output_Path"] = extension.Attr{Dtype: extension.Utf8, Value: "/other/"}
+	second.Attrs["Software_Trigger_Delay"] = extension.Attr{Dtype: extension.I64, Value: int64(9999)}
 
-func TestV1_1AdapterSoftwareTriggerDelayDisagreementRaises(t *testing.T) {
-	cfg := mockV1_0Config(t, 2)
-	cfg.OpticalTrains[1].OptionalComponents.Clearbox.SoftwareTriggerDelay = machineconfig.IntPtr(9999)
-	tmp := filepath.Join(t.TempDir(), "conflict2.h5")
-	werr := machineconfig.NewWriter().WriteAs(cfg, tmp, "1.1")
-	if werr == nil {
-		t.Fatal("expected an error, got nil")
+	tmp := filepath.Join(t.TempDir(), "first_train_wins.h5")
+	writeAs(t, cfg, tmp, "1.0")
+	back := parseFile(t, tmp)
+	root := clearboxRoot(t, back)
+	if got := cbText(root, "Output_Path"); got != "/recordings/" {
+		t.Fatalf("Output_Path = %q, want the first train's value", got)
 	}
-	if !strings.Contains(werr.Error(), `consolidate conflict on "Software_Trigger_Delay"`) {
-		t.Fatalf("unexpected message: %v", werr)
+	if got, ok := cbInt(root, "Software_Trigger_Delay"); !ok || got != 3000 {
+		t.Fatalf("Software_Trigger_Delay = %v, want the first train's 3000", got)
+	}
+	if _, ok := clearboxTrain(t, back, 1).Attrs["Output_Path"]; ok {
+		t.Fatal("Output_Path must not be repeated per train after the shim")
 	}
 }
 
@@ -451,49 +412,36 @@ func TestV1_1AdapterSoftwareTriggerDelayDisagreementRaises(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestV1_1AdapterUnrecognizedAlgorithmTypeBestEffortClearbox(t *testing.T) {
-	cfg := mockV1_0Config(t, 1)
-	inputPC, err := models.ForwardPowerCharacterizationCoefficients(machineconfig.StrPtr("EXPONENTIAL"), machineconfig.StrPtr("1.5,2.5,3.5"))
-	if err != nil {
-		t.Fatal(err)
+	cfg := mockV1_1Config(t, 1)
+	clearboxTrain(t, cfg, 0).Children["Power_Characterization"] = cbMakePowerCharacterization(
+		"EXPONENTIAL", []cbConstant{{"0", 1.5}, {"1", 2.5}, {"2", 3.5}})
+
+	v1_0Out := filepath.Join(t.TempDir(), "unrecognized_clearbox_v1_0.h5")
+	writeAs(t, cfg, v1_0Out, "1.0")
+	v1_0 := parseFile(t, v1_0Out)
+	pc := cbPowerCharacterization(t, v1_0, 0)
+	if got := cbText(pc, "Algorithm_Type"); got != "EXPONENTIAL" {
+		t.Fatalf("algorithm_type = %q", got)
 	}
-	cfg.OpticalTrains[0].OptionalComponents.Clearbox.PowerCharacterization = inputPC
-	tmp := filepath.Join(t.TempDir(), "unrecognized_clearbox.h5")
-	writeAs(t, cfg, tmp, "1.1")
-	result := parseFile(t, tmp)
-	pc := result.OpticalTrains[0].OptionalComponents.Clearbox.PowerCharacterization
-	if pc == nil {
-		t.Fatal("expected power_characterization present")
+	if got := cbText(pc, "Algorithm_Equation"); got != "" {
+		t.Fatalf("algorithm_equation = %q, want blank", got)
 	}
-	if pc.AlgorithmType == nil || *pc.AlgorithmType != "EXPONENTIAL" {
-		t.Fatalf("algorithm_type = %v", pc.AlgorithmType)
+	if !strSliceEqual(cbNames(pc), []string{"0", "1", "2"}) {
+		t.Fatalf("constant names = %v", cbNames(pc))
 	}
-	if pc.AlgorithmEquation != nil {
-		t.Fatalf("algorithm_equation = %v, want nil", pc.AlgorithmEquation)
-	}
-	if !strSliceEqual(equationConstantNames(pc.DerivationEquationConstants), []string{"0", "1", "2"}) {
-		t.Fatalf("constant names = %v", equationConstantNames(pc.DerivationEquationConstants))
-	}
-	gotValues := []float64{
-		pc.DerivationEquationConstants[0].Value,
-		pc.DerivationEquationConstants[1].Value,
-		pc.DerivationEquationConstants[2].Value,
-	}
-	if !floatSliceEqual(gotValues, []float64{1.5, 2.5, 3.5}) {
-		t.Fatalf("constant values = %v", gotValues)
+	if !floatSliceEqual(cbValues(pc), []float64{1.5, 2.5, 3.5}) {
+		t.Fatalf("constant values = %v", cbValues(pc))
 	}
 
-	// Round trip: writing back to v1.0 reproduces the original CSV exactly
-	// (checked via the structured shape, since the flat field no longer
-	// exists to compare against directly).
-	v1_0Out := filepath.Join(t.TempDir(), "unrecognized_clearbox_roundtrip.h5")
-	writeAs(t, result, v1_0Out, "1.0")
-	back := parseFile(t, v1_0Out)
-	backPC := back.OpticalTrains[0].OptionalComponents.Clearbox.PowerCharacterization
-	if backPC == nil || backPC.AlgorithmType == nil || *backPC.AlgorithmType != "EXPONENTIAL" {
-		t.Fatalf("algorithm_type = %v, want \"EXPONENTIAL\"", backPC)
+	v1_1Out := filepath.Join(t.TempDir(), "unrecognized_clearbox_v1_1.h5")
+	writeAs(t, v1_0, v1_1Out, "1.1")
+	back := parseFile(t, v1_1Out)
+	backPC := cbPowerCharacterization(t, back, 0)
+	if got := cbText(backPC, "Algorithm_Type"); got != "EXPONENTIAL" {
+		t.Fatalf("algorithm_type = %q, want \"EXPONENTIAL\"", got)
 	}
-	if !floatSliceEqual(constantValues(backPC), []float64{1.5, 2.5, 3.5}) {
-		t.Fatalf("constant values = %v, want [1.5 2.5 3.5]", constantValues(backPC))
+	if !floatSliceEqual(cbValues(backPC), []float64{1.5, 2.5, 3.5}) {
+		t.Fatalf("constant values = %v, want [1.5 2.5 3.5]", cbValues(backPC))
 	}
 }
 
@@ -522,6 +470,15 @@ func TestV1_1AdapterUnrecognizedAlgorithmTypeBestEffortLightSource(t *testing.T)
 	}
 }
 
+func TestClearboxTrainWithNoMatchingOpticalTrainIsRejectedForV1_0(t *testing.T) {
+	cfg := mockV1_1Config(t, 1)
+	cfg.Extensions["ClearBox"].Children["Optical_Train_07"] = models.CloneTree(clearboxTrain(t, cfg, 0))
+	werr := machineconfig.NewWriter().WriteAs(cfg, filepath.Join(t.TempDir(), "no_matching_train.h5"), "1.0")
+	if werr == nil || !strings.Contains(werr.Error(), "Optical_Train_07") {
+		t.Fatalf("expected an error naming Optical_Train_07, got %v", werr)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // v1.1 fixture written as v1.0
 // ---------------------------------------------------------------------------
@@ -535,31 +492,27 @@ func TestV1_1AdapterBackwardMigration(t *testing.T) {
 		t.Fatalf("file_version = %q", back.Meta.FileVersion)
 	}
 
-	srcCB0 := source.OpticalTrains[0].OptionalComponents.Clearbox
-	cb0 := back.OpticalTrains[0].OptionalComponents.Clearbox
-	srcPC0 := srcCB0.PowerCharacterization
-	pc0 := cb0.PowerCharacterization
-	if pc0.AlgorithmType == nil || srcPC0.AlgorithmType == nil || *pc0.AlgorithmType != *srcPC0.AlgorithmType {
-		t.Fatalf("algorithm_type: got %v want %v", pc0.AlgorithmType, srcPC0.AlgorithmType)
+	srcPC0 := cbPowerCharacterization(t, source, 0)
+	pc0 := cbPowerCharacterization(t, back, 0)
+	if cbText(pc0, "Algorithm_Type") != cbText(srcPC0, "Algorithm_Type") {
+		t.Fatalf("algorithm_type: got %q want %q", cbText(pc0, "Algorithm_Type"), cbText(srcPC0, "Algorithm_Type"))
 	}
-	expected := constantValues(srcPC0)
-	actual := constantValues(pc0)
-	if len(actual) != len(expected) {
-		t.Fatalf("derivation_equation_constants count: got %v want %v", actual, expected)
+	if len(cbValues(pc0)) != len(cbValues(srcPC0)) {
+		t.Fatalf("derivation_equation_constants: got %v want %v", cbValues(pc0), cbValues(srcPC0))
 	}
 
-	if (cb0.OutputPath == nil) != (srcCB0.OutputPath == nil) || (srcCB0.OutputPath != nil && *cb0.OutputPath != *srcCB0.OutputPath) {
-		t.Fatalf("output_path: got %v want %v", cb0.OutputPath, srcCB0.OutputPath)
+	srcRoot, root := clearboxRoot(t, source), clearboxRoot(t, back)
+	if cbText(root, "Output_Path") != cbText(srcRoot, "Output_Path") {
+		t.Fatalf("output_path: got %q want %q", cbText(root, "Output_Path"), cbText(srcRoot, "Output_Path"))
 	}
-	if (cb0.SoftwareTriggerDelay == nil) != (srcCB0.SoftwareTriggerDelay == nil) ||
-		(srcCB0.SoftwareTriggerDelay != nil && *cb0.SoftwareTriggerDelay != *srcCB0.SoftwareTriggerDelay) {
-		t.Fatalf("software_trigger_delay: got %v want %v", cb0.SoftwareTriggerDelay, srcCB0.SoftwareTriggerDelay)
+	g1, _ := cbInt(root, "Software_Trigger_Delay")
+	g2, _ := cbInt(srcRoot, "Software_Trigger_Delay")
+	if g1 != g2 {
+		t.Fatalf("software_trigger_delay: got %v want %v", g1, g2)
 	}
 
-	srcLS0 := source.OpticalTrains[0].LightSource
-	ls0 := back.OpticalTrains[0].LightSource
-	srcLsPC0 := srcLS0.PowerCharacterization
-	lsPC0 := ls0.PowerCharacterization
+	srcLsPC0 := source.OpticalTrains[0].LightSource.PowerCharacterization
+	lsPC0 := back.OpticalTrains[0].LightSource.PowerCharacterization
 	if lsPC0.AlgorithmType == nil || srcLsPC0.AlgorithmType == nil || *lsPC0.AlgorithmType != *srcLsPC0.AlgorithmType {
 		t.Fatalf("algorithm_type: got %v want %v", lsPC0.AlgorithmType, srcLsPC0.AlgorithmType)
 	}
@@ -567,9 +520,13 @@ func TestV1_1AdapterBackwardMigration(t *testing.T) {
 		t.Fatalf("characterization_points: got %v want %v", pointValues(lsPC0), pointValues(srcLsPC0))
 	}
 
-	// Change 1 Removal fields: lost forever, not restored.
-	if cb0.SelectedCamera != nil {
-		t.Fatalf("selected_camera = %v, want nil", cb0.SelectedCamera)
+	// v1.1-only fields: lost on the way down, not restored.
+	cb0 := clearboxTrain(t, back, 0)
+	if _, ok := cb0.Attrs["Firmware_Version"]; ok {
+		t.Fatal("Firmware_Version must not exist in a v1.0 file")
+	}
+	if _, ok := cb0.Attrs["Selected_Camera"]; ok {
+		t.Fatal("Selected_Camera was never in the v1.1 source and must not appear")
 	}
 }
 
@@ -577,46 +534,31 @@ func TestV1_1AdapterBackwardMigrationReordersConstantsByName(t *testing.T) {
 	// Change 3 backward: Derivation_Equation_Constants rows aren't
 	// positionally guaranteed — must re-sort by name before joining as CSV.
 	cfg := mockV1_1Config(t, 1)
-	cb0 := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	pc := *cb0.PowerCharacterization
-	pc.AlgorithmType = machineconfig.StrPtr("LINEAR")
-	pc.DerivationEquationConstants = []machineconfig.EquationConstant{
-		{Name: "a", Value: 2.0},
-		{Name: "b", Value: 1.0},
-	}
-	cb0.PowerCharacterization = &pc
+	clearboxTrain(t, cfg, 0).Children["Power_Characterization"] = cbMakePowerCharacterization(
+		"LINEAR", []cbConstant{{"a", 2.0}, {"b", 1.0}})
 
 	tmp := filepath.Join(t.TempDir(), "backward_reorders.h5")
 	writeAs(t, cfg, tmp, "1.0")
 	back := parseFile(t, tmp)
 	// Written CSV is "1.0,2.0" (b before a); the v1.0 reader forward-derives
 	// that back into named constants positionally (b, then a) for LINEAR.
-	backConstants := back.OpticalTrains[0].OptionalComponents.Clearbox.PowerCharacterization.DerivationEquationConstants
-	if len(backConstants) != 2 || backConstants[0].Name != "b" || backConstants[0].Value != 1.0 ||
-		backConstants[1].Name != "a" || backConstants[1].Value != 2.0 {
-		t.Fatalf("derivation_equation_constants = %+v, want [{b 1} {a 2}]", backConstants)
+	got := cbConstants(cbPowerCharacterization(t, back, 0))
+	if len(got) != 2 || got[0] != (cbConstant{"b", 1.0}) || got[1] != (cbConstant{"a", 2.0}) {
+		t.Fatalf("derivation_equation_constants = %+v, want [{b 1} {a 2}]", got)
 	}
 }
 
 func TestV1_1AdapterBackwardMigrationMissingDerivationConstantsWritesBlank(t *testing.T) {
 	cfg := mockV1_1Config(t, 1)
-	cb0 := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	pc := *cb0.PowerCharacterization
-	pc.DerivationEquationConstants = []machineconfig.EquationConstant{}
-	cb0.PowerCharacterization = &pc
+	clearboxTrain(t, cfg, 0).Children["Power_Characterization"] = cbMakePowerCharacterization("LINEAR", nil)
 
 	tmp := filepath.Join(t.TempDir(), "backward_blank_constants.h5")
 	writeAs(t, cfg, tmp, "1.0")
 	back := parseFile(t, tmp)
-	// Backward derivation produces "" for Volts_To_Watts_Params (blank, not
-	// an error) — a real disk round-trip normalizes an empty string
-	// attribute back to nil on read, this codebase's standard convention
-	// for absent optional strings (confirmed against Python's/Rust's/C++'s
-	// identical finding), so forward re-derivation on read produces zero
-	// constants.
-	backConstants := back.OpticalTrains[0].OptionalComponents.Clearbox.PowerCharacterization.DerivationEquationConstants
-	if len(backConstants) != 0 {
-		t.Fatalf("derivation_equation_constants = %v, want empty", backConstants)
+	// Backward derivation produces "" for Volts_To_Watts_Params (blank, not an error); forward
+	// re-derivation on read then produces zero constants.
+	if got := cbConstants(cbPowerCharacterization(t, back, 0)); len(got) != 0 {
+		t.Fatalf("derivation_equation_constants = %v, want empty", got)
 	}
 }
 
@@ -641,8 +583,7 @@ func TestV1_1AdapterBackwardMigrationMissingCharacterizationPointsWritesBlank(t 
 // ---------------------------------------------------------------------------
 
 func TestV1_1AdapterV1Unaffected(t *testing.T) {
-	// v1.0 read path forward-derives power_characterization from the flat
-	// fields, unconditionally, on every read.
+	// v1.0 read path surfaces the flat Volts_To_Watts fields as Power_Characterization.
 	cfg := parseFile(t, referenceV1_0Fixture(t))
 	if cfg.Meta.FileVersion != "1.0" {
 		t.Fatalf("file_version = %q", cfg.Meta.FileVersion)
@@ -650,12 +591,11 @@ func TestV1_1AdapterV1Unaffected(t *testing.T) {
 	if len(cfg.OpticalTrains) == 0 {
 		t.Fatal("expected optical trains")
 	}
-	cb0 := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb0 == nil || cb0.PowerCharacterization == nil {
-		t.Fatalf("expected power_characterization present, got %v", cb0)
+	if got := cbText(cbPowerCharacterization(t, cfg, 0), "Algorithm_Type"); got != "LINEAR" {
+		t.Fatalf("algorithm_type = %q", got)
 	}
-	if cb0.PowerCharacterization.AlgorithmType == nil || *cb0.PowerCharacterization.AlgorithmType != "LINEAR" {
-		t.Fatalf("algorithm_type = %v", cb0.PowerCharacterization.AlgorithmType)
+	if _, ok := clearboxTrain(t, cfg, 0).Attrs["Volts_To_Watts_Algorithm"]; ok {
+		t.Fatal("the flat Volts_To_Watts_Algorithm must not survive the shim")
 	}
 }
 
@@ -675,30 +615,14 @@ func TestV1_1AdapterRoundtripV1_0ToV1_1ToV1_0(t *testing.T) {
 	if back.Meta.FileVersion != "1.0" {
 		t.Fatalf("file_version = %q", back.Meta.FileVersion)
 	}
+	want, _ := extension.Digest(source.Extensions["ClearBox"])
+	got, _ := extension.Digest(back.Extensions["ClearBox"])
+	if got != want {
+		t.Fatalf("ClearBox digest changed across v1.0 -> v1.1 -> v1.0: %s != %s", got, want)
+	}
 	for i, train := range back.OpticalTrains {
-		srcCB := source.OpticalTrains[i].OptionalComponents.Clearbox
-		cb := train.OptionalComponents.Clearbox
-		if (cb.OutputPath == nil) != (srcCB.OutputPath == nil) || (srcCB.OutputPath != nil && *cb.OutputPath != *srcCB.OutputPath) {
-			t.Fatalf("output_path: got %v want %v", cb.OutputPath, srcCB.OutputPath)
-		}
-		if (cb.SoftwareTriggerDelay == nil) != (srcCB.SoftwareTriggerDelay == nil) ||
-			(srcCB.SoftwareTriggerDelay != nil && *cb.SoftwareTriggerDelay != *srcCB.SoftwareTriggerDelay) {
-			t.Fatalf("software_trigger_delay: got %v want %v", cb.SoftwareTriggerDelay, srcCB.SoftwareTriggerDelay)
-		}
-		pc := cb.PowerCharacterization
-		srcPC := srcCB.PowerCharacterization
-		if (pc.AlgorithmType == nil) != (srcPC.AlgorithmType == nil) ||
-			(srcPC.AlgorithmType != nil && *pc.AlgorithmType != *srcPC.AlgorithmType) {
-			t.Fatalf("algorithm_type: got %v want %v", pc.AlgorithmType, srcPC.AlgorithmType)
-		}
-		if !floatSliceEqual(constantValues(pc), constantValues(srcPC)) {
-			t.Fatalf("derivation_equation_constants: got %v want %v", constantValues(pc), constantValues(srcPC))
-		}
-
-		srcLS := source.OpticalTrains[i].LightSource
-		ls := train.LightSource
-		lsPC := ls.PowerCharacterization
-		srcLsPC := srcLS.PowerCharacterization
+		srcLsPC := source.OpticalTrains[i].LightSource.PowerCharacterization
+		lsPC := train.LightSource.PowerCharacterization
 		if (lsPC.AlgorithmType == nil) != (srcLsPC.AlgorithmType == nil) ||
 			(srcLsPC.AlgorithmType != nil && *lsPC.AlgorithmType != *srcLsPC.AlgorithmType) {
 			t.Fatalf("algorithm_type: got %v want %v", lsPC.AlgorithmType, srcLsPC.AlgorithmType)
@@ -725,30 +649,25 @@ func TestV1_1AdapterRoundtripV1_1ToV1_0ToV1_1(t *testing.T) {
 	if back.Meta.FileVersion != "1.1" {
 		t.Fatalf("file_version = %q", back.Meta.FileVersion)
 	}
-	for i, train := range back.OpticalTrains {
-		srcCB := source.OpticalTrains[i].OptionalComponents.Clearbox
-		cb := train.OptionalComponents.Clearbox
-		srcPC := srcCB.PowerCharacterization
-		pc := cb.PowerCharacterization
-		if (pc.AlgorithmType == nil) != (srcPC.AlgorithmType == nil) || (srcPC.AlgorithmType != nil && *pc.AlgorithmType != *srcPC.AlgorithmType) {
-			t.Fatalf("algorithm_type: got %v want %v", pc.AlgorithmType, srcPC.AlgorithmType)
+	for i := range back.OpticalTrains {
+		srcPC := cbPowerCharacterization(t, source, i)
+		pc := cbPowerCharacterization(t, back, i)
+		if cbText(pc, "Algorithm_Type") != cbText(srcPC, "Algorithm_Type") {
+			t.Fatalf("algorithm_type: got %q want %q", cbText(pc, "Algorithm_Type"), cbText(srcPC, "Algorithm_Type"))
 		}
-		if len(pc.DerivationEquationConstants) != len(srcPC.DerivationEquationConstants) {
-			t.Fatalf("derivation_equation_constants count: got %d want %d",
-				len(pc.DerivationEquationConstants), len(srcPC.DerivationEquationConstants))
+		if len(cbConstants(pc)) != len(cbConstants(srcPC)) {
+			t.Fatalf("derivation_equation_constants count: got %d want %d", len(cbConstants(pc)), len(cbConstants(srcPC)))
 		}
 		// Expected loss: v1.1-only fields have no v1.0 round-trip path.
-		if cb.FirmwareVersion != nil {
-			t.Fatalf("firmware_version = %v, want nil", cb.FirmwareVersion)
+		if _, ok := clearboxTrain(t, back, i).Attrs["Firmware_Version"]; ok {
+			t.Fatal("firmware_version must not survive a v1.0 round trip")
 		}
-		if pc.InputType != nil {
-			t.Fatalf("input_type = %v, want nil", pc.InputType)
+		if cbText(pc, "Input_Type") != "" || cbText(pc, "Units_Derived_Quantity") != "" {
+			t.Fatalf("input_type/units_derived_quantity should be blank, got %q/%q",
+				cbText(pc, "Input_Type"), cbText(pc, "Units_Derived_Quantity"))
 		}
-		if pc.UnitsDerivedQuantity != nil {
-			t.Fatalf("units_derived_quantity = %v, want nil", pc.UnitsDerivedQuantity)
-		}
-		if len(pc.CharacterizationPoints) != 0 {
-			t.Fatalf("characterization_points = %v, want empty", pc.CharacterizationPoints)
+		if cbPointCount(pc) != 0 {
+			t.Fatalf("characterization_points = %d, want 0", cbPointCount(pc))
 		}
 	}
 }
@@ -812,11 +731,10 @@ func TestV1_1AdapterDispatcherForward(t *testing.T) {
 	if result.Meta.FileVersion != "1.1" {
 		t.Fatalf("file_version = %q", result.Meta.FileVersion)
 	}
-	cb := result.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb == nil || cb.OutputPath == nil || *cb.OutputPath != "/recordings/" {
-		t.Fatalf("output_path = %v", cb)
+	if got := cbText(clearboxRoot(t, result), "Output_Path"); got != "/recordings/" {
+		t.Fatalf("output_path = %q", got)
 	}
-	if cb.PowerCharacterization == nil {
+	if cbPowerCharacterization(t, result, 0) == nil {
 		t.Fatal("expected power_characterization present")
 	}
 
@@ -839,10 +757,8 @@ func TestV1_1AdapterDispatcherBackward(t *testing.T) {
 	if result.Meta.FileVersion != "1.0" {
 		t.Fatalf("file_version = %q", result.Meta.FileVersion)
 	}
-	cb := result.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb == nil || cb.PowerCharacterization == nil || cb.PowerCharacterization.AlgorithmType == nil ||
-		*cb.PowerCharacterization.AlgorithmType != "LINEAR" {
-		t.Fatalf("power_characterization.algorithm_type = %v", cb)
+	if got := cbText(cbPowerCharacterization(t, result, 0), "Algorithm_Type"); got != "LINEAR" {
+		t.Fatalf("power_characterization.algorithm_type = %q", got)
 	}
 }
 
@@ -854,12 +770,9 @@ func TestV1_1AdapterDispatcherBackward(t *testing.T) {
 // map[string]func(path string) ReaderAdapter / map[string]WriterAdapter —
 // so a v1.1 entry satisfying ReaderAdapter/WriterAdapter is primarily a
 // compile-time fact enforced by reader.go's/writer.go's own type
-// signatures (the package would not compile otherwise), the same framing
-// Rust's equivalent test uses. This test makes it a concrete,
-// runtime-checked fact too: the production registries (exercised via the
-// public API, since the registries themselves are unexported) actually
-// dispatch "1.1" to a working reader/writer pair, and SupportedFileVersions
-// reports it.
+// signatures. This test makes it a concrete, runtime-checked fact too: the
+// production registries (exercised via the public API) actually dispatch
+// "1.1" to a working reader/writer pair, and SupportedFileVersions reports it.
 func TestV1_1AdapterSatisfiesRegistryProtocol(t *testing.T) {
 	versions := capabilities.SupportedFileVersions()
 	found := false
@@ -883,11 +796,5 @@ func TestV1_1AdapterSatisfiesRegistryProtocol(t *testing.T) {
 	}
 	if result.Meta.FileVersion != "1.1" {
 		t.Fatalf("file_version = %q", result.Meta.FileVersion)
-	}
-	if _, err := machineconfig.NewReader(tmp).GetCorrectionData(0); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := machineconfig.NewReader(tmp).GetInverseCorrectionData(0); err != nil {
-		t.Fatal(err)
 	}
 }

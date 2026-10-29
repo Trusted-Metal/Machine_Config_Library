@@ -12,6 +12,7 @@
 #include "machine_config/builder.hpp"
 #include "machine_config/reader.hpp"
 #include "machine_config/writer.hpp"
+#include "clearbox_helpers.hpp"
 
 #include <highfive/H5File.hpp>
 
@@ -20,6 +21,7 @@
 #endif
 
 using namespace machine_config;
+namespace ext = machine_config::extension;
 
 static const std::string REF      = std::string(FIXTURES_DIR) + "/reference_config.h5";
 static const std::string OPCUA_REF= std::string(FIXTURES_DIR) + "/reference_config_opcua.h5";
@@ -115,12 +117,11 @@ TEST_CASE("RoundtripAllScalarFields") {
     REQUIRE_THAT(*rb0.scanner.working_distance,
                  Catch::Matchers::WithinRel(*t0.scanner.working_distance));
 
-    // ClearBox scalar
-    REQUIRE(rb0.optional_components.clearbox.has_value());
-    REQUIRE(rb0.optional_components.clearbox->ip_address ==
-            t0.optional_components.clearbox->ip_address);
-    REQUIRE(rb0.optional_components.clearbox->data_port ==
-            t0.optional_components.clearbox->data_port);
+    // ClearBox: the whole extension tree (attrs with stored dtypes, grids) is bit-stable.
+    REQUIRE(ext::canonicalDigest(rb.extensions.at("ClearBox")) ==
+            ext::canonicalDigest(orig.extensions.at("ClearBox")));
+    REQUIRE(cbtest::text(cbtest::clearbox(rb, 0), "Ip_Address") ==
+            cbtest::text(cbtest::clearbox(orig, 0), "Ip_Address"));
 
     // SFCF
     REQUIRE(rb0.scan_field_correction_file.has_value());
@@ -129,8 +130,8 @@ TEST_CASE("RoundtripAllScalarFields") {
     REQUIRE(rb0.scan_field_correction_file->file_size ==
             t0.scan_field_correction_file->file_size);
 
-    // synchronous_sensors: reference_config.h5 has none — stays empty, not absent.
-    REQUIRE(rb0.optional_components.clearbox->synchronous_sensors.empty());
+    // synchronous sensors: reference_config.h5 has none.
+    REQUIRE(cbtest::clearbox(rb, 0).children.count("Synchronous_Sensors") == 0);
 
     std::filesystem::remove(out);
 }
@@ -149,7 +150,6 @@ TEST_CASE("RoundtripWithoutClearBox") {
 
     REQUIRE(rb.meta.machine_name == "MinimalMachine");
     REQUIRE(rb.optical_trains.size() == 1);
-    REQUIRE_FALSE(rb.optical_trains[0].optional_components.clearbox.has_value());
     REQUIRE(rb.extensions.empty());
 
     std::filesystem::remove(out);
@@ -216,10 +216,10 @@ TEST_CASE("OnlyTrueInvertFlagsSurviveAsRealHDF5Attributes") {
 }
 
 // ---------------------------------------------------------------------------
-// SynchronousSensor
+// Synchronous sensors
 // ---------------------------------------------------------------------------
 
-TEST_CASE("RoundtripSynchronousSensorCompoundDatasetsExactValuesInOrder") {
+TEST_CASE("RoundtripSynchronousSensorTablesExactValuesInOrder") {
     auto out = tmpPath("sensor_roundtrip");
     MachineConfigReader src{SENSORS_REF};
     auto orig = src.parse();
@@ -227,42 +227,38 @@ TEST_CASE("RoundtripSynchronousSensorCompoundDatasetsExactValuesInOrder") {
 
     MachineConfigReader back{out};
     auto rb = back.parse();
-    const auto& s = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors.at("Oxygen Sensor");
-    REQUIRE(s.sensor_name == std::optional<std::string>{"ZR800 Oxygen Analyzer"});
-    REQUIRE(s.derivation_equation_constants.size() == 2);
-    REQUIRE(s.derivation_equation_constants[0].name == "a");
-    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
-    REQUIRE(s.derivation_equation_constants[1].name == "b");
-    REQUIRE(s.derivation_equation_constants[1].value == -2.75);
-    REQUIRE(s.calibration_points.size() == 2);
-    REQUIRE(s.calibration_points[0].input_value == 4.0);
-    REQUIRE(s.calibration_points[0].output_value == -1.0);
-    REQUIRE(s.calibration_points[1].input_value == 20.0);
-    REQUIRE(s.calibration_points[1].output_value == 6.0);
+    const auto& s = cbtest::clearbox(rb, 0).children.at("Synchronous_Sensors").children.at("Oxygen Sensor");
+    REQUIRE(cbtest::text(s, "Sensor_Name") == "ZR800 Oxygen Analyzer");
+    const auto constants = cbtest::constants(s);
+    REQUIRE(constants.size() == 2);
+    REQUIRE(constants[0].first == "a");
+    REQUIRE(constants[0].second == 0.4375);
+    REQUIRE(constants[1].first == "b");
+    REQUIRE(constants[1].second == -2.75);
+    const auto& points = s.tables.at("Calibration_Points");
+    REQUIRE(std::get<std::vector<double>>(points.columns.at("input_value")) == std::vector<double>{4.0, 20.0});
+    REQUIRE(std::get<std::vector<double>>(points.columns.at("output_value")) == std::vector<double>{-1.0, 6.0});
 
     std::filesystem::remove(out);
 }
 
-// Distinct from the empty-*map* case above: here the sensor itself exists
-// (its group is created), but both compound datasets have zero rows —
-// proving 0-length compound dataset creation/read genuinely works, not
-// assumed.
-TEST_CASE("RoundtripSynchronousSensorWithZeroRowCompoundDatasets") {
+// The sensor itself exists (its group is created), but its compound dataset
+// has zero rows — proving 0-length compound dataset creation/read genuinely
+// works, not assumed.
+TEST_CASE("RoundtripSynchronousSensorWithZeroRowTable") {
     auto out = tmpPath("sensor_zero_row");
     MachineConfigReader src{REF};
     auto cfg = src.parse();
-    SynchronousSensor sensor;
-    sensor.enabled = false;
-    sensor.sensor_name = "Placeholder";
-    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["Untested Sensor"] = sensor;
+    auto sensor = cbtest::sensorTree({});
+    sensor.attrs["Sensor_Name"] = {"utf8", std::string("Placeholder")};
+    cbtest::addSensor(cfg, "Untested Sensor", sensor);
 
     REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
     MachineConfigReader back{out};
     auto rb = back.parse();
-    const auto& s = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors.at("Untested Sensor");
-    REQUIRE(s.derivation_equation_constants.empty());
-    REQUIRE(s.calibration_points.empty());
-    REQUIRE(s.sensor_name == std::optional<std::string>{"Placeholder"});
+    const auto& s = cbtest::clearbox(rb, 0).children.at("Synchronous_Sensors").children.at("Untested Sensor");
+    REQUIRE(s.tables.at("Derivation_Equation_Constants").rows == 0);
+    REQUIRE(cbtest::text(s, "Sensor_Name") == "Placeholder");
 
     std::filesystem::remove(out);
 }
@@ -274,17 +270,18 @@ TEST_CASE("RoundtripSynchronousSensorArbitraryDifferentlyStyledKey") {
     auto out = tmpPath("sensor_arbitrary_key");
     MachineConfigReader src{REF};
     auto cfg = src.parse();
-    SynchronousSensor sensor;
-    sensor.enabled = true;
-    sensor.port_id = 9;
-    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["HUMIDITY_SENSOR_2"] = sensor;
+    ext::Tree sensor;
+    sensor.attrs["Port_ID"] = {"i32", std::int64_t{9}};
+    cbtest::addSensor(cfg, "HUMIDITY_SENSOR_2", sensor);
 
     REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
     MachineConfigReader back{out};
     auto rb = back.parse();
-    const auto& sensors = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors;
+    const auto& sensors = cbtest::clearbox(rb, 0).children.at("Synchronous_Sensors").children;
     REQUIRE(sensors.count("HUMIDITY_SENSOR_2") == 1);
-    REQUIRE(sensors.at("HUMIDITY_SENSOR_2").port_id == std::optional<int64_t>{9});
+    std::int64_t port = 0;
+    REQUIRE(cbtest::integer(sensors.at("HUMIDITY_SENSOR_2"), "Port_ID", port));
+    REQUIRE(port == 9);
 
     std::filesystem::remove(out);
 }
@@ -299,23 +296,17 @@ TEST_CASE("RoundtripOpcuaAndSynchronousSensorCoexist") {
     auto cfg = src.parse();
     REQUIRE(cfg.extensions.count("TM_OPCUA") == 1);
 
-    SynchronousSensor sensor;
-    sensor.enabled = true;
-    sensor.sensor_name = "ZR800 Oxygen Analyzer";
-    sensor.calibration_verified = false;
-    sensor.sample_period = 5.0;
-    sensor.derivation_equation_constants = {{"a", 0.4375}, {"b", -2.75}};
-    sensor.calibration_points = {{4.0, -1.0}, {20.0, 6.0}};
-    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["Oxygen Sensor"] = sensor;
+    cbtest::addSensor(cfg, "Oxygen Sensor", cbtest::sensorTree({{"a", 0.4375}, {"b", -2.75}}));
 
     REQUIRE_NOTHROW(MachineConfigWriter{cfg}.write(out));
     MachineConfigReader back{out};
     auto rb = back.parse();
     REQUIRE(rb.extensions.count("TM_OPCUA") == 1);
-    const auto& s = rb.optical_trains[0].optional_components.clearbox->synchronous_sensors.at("Oxygen Sensor");
-    REQUIRE(s.derivation_equation_constants.size() == 2);
-    REQUIRE(s.derivation_equation_constants[0].name == "a");
-    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
+    const auto& s = cbtest::clearbox(rb, 0).children.at("Synchronous_Sensors").children.at("Oxygen Sensor");
+    const auto constants = cbtest::constants(s);
+    REQUIRE(constants.size() == 2);
+    REQUIRE(constants[0].first == "a");
+    REQUIRE(constants[0].second == 0.4375);
 
     std::filesystem::remove(out);
 }
@@ -328,11 +319,9 @@ TEST_CASE("WriterRejectsEquationConstantNameOver64Bytes") {
     auto out = tmpPath("oversized_name");
     MachineConfigReader src{REF};
     auto cfg = src.parse();
-    SynchronousSensor sensor;
-    sensor.derivation_equation_constants = {{std::string(65, 'a'), 1.0}};
-    cfg.optical_trains[0].optional_components.clearbox->synchronous_sensors["Oversized Name Sensor"] = sensor;
+    cbtest::addSensor(cfg, "Oversized Name Sensor", cbtest::sensorTree({{std::string(65, 'a'), 1.0}}));
 
-    REQUIRE_THROWS_WITH(MachineConfigWriter{cfg}.write(out), Catch::Matchers::ContainsSubstring("does not fit"));
+    REQUIRE_THROWS_WITH(MachineConfigWriter{cfg}.write(out), Catch::Matchers::ContainsSubstring("fit"));
 }
 
 // ---------------------------------------------------------------------------
@@ -370,7 +359,6 @@ TEST_CASE("WrittenHdf5ValidatesSchema") {
         REQUIRE(train.contains("light_source"));
         REQUIRE(train.contains("collimator"));
         REQUIRE(train.contains("scanner_card"));
-        REQUIRE(train.contains("optional_components"));
         REQUIRE(train.contains("train_id"));
     }
 
@@ -385,17 +373,20 @@ TEST_CASE("BinaryRoundtripCorrectionGridHash") {
     auto out = tmpPath("bin_hash");
     MachineConfigWriter{MachineConfigReader{REF}.parseWithBinary()}.write(out);
 
-    auto orig = MachineConfigReader{REF}.getCorrectionData(0);
-    auto copy = MachineConfigReader{out}.getCorrectionData(0);
-    REQUIRE(copy.data.size() == orig.data.size());
-
-    auto hashOf = [](const CorrectionData& cd) {
-        const auto* p = reinterpret_cast<const unsigned char*>(cd.data.data());
-        std::vector<unsigned char> h;
-        picosha2::hash256(p, p + cd.data.size() * sizeof(double), h);
-        return h;
-    };
-    REQUIRE(hashOf(copy) == hashOf(orig));
+    auto orig = MachineConfigReader{REF}.parse();
+    auto copy = MachineConfigReader{out}.parse();
+    for (const char* name : {"Correction_Data", "Inverse_Correction_Data"}) {
+        const auto& a = cbtest::grid(orig, 0, name);
+        const auto& b = cbtest::grid(copy, 0, name);
+        REQUIRE(a.size() == b.size());
+        auto hashOf = [](const std::vector<double>& data) {
+            const auto* p = reinterpret_cast<const unsigned char*>(data.data());
+            std::vector<unsigned char> h;
+            picosha2::hash256(p, p + data.size() * sizeof(double), h);
+            return h;
+        };
+        REQUIRE(hashOf(a) == hashOf(b));
+    }
 
     std::filesystem::remove(out);
 }

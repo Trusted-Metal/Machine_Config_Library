@@ -12,8 +12,6 @@ import type {
   LightSource,
   Collimator,
   ScannerCard,
-  ClearBox,
-  CorrectionData,
 } from "../models.js";
 
 /** Write mode for set* model APIs. Default is Merge. */
@@ -28,7 +26,6 @@ export type ScannerModel = Scanner & { extra?: Record<string, unknown> };
 export type LightSourceModel = LightSource & { extra?: Record<string, unknown> };
 export type CollimatorModel = Collimator & { extra?: Record<string, unknown> };
 export type ScannerCardModel = ScannerCard & { extra?: Record<string, unknown> };
-export type ClearBoxModel = ClearBox & { extra?: Record<string, unknown> };
 export type OpticalTrainModel = OpticalTrain & { extra?: Record<string, unknown> };
 
 export interface MetaHandle {
@@ -38,13 +35,6 @@ export interface MetaHandle {
 export interface MachineHandle {
   getModel(): MachineModel;
   setModel(model: MachineModel, mode?: SetMode): Result<void, CapabilityError>;
-}
-export interface ClearBoxHandle {
-  getModel(): ClearBoxModel;
-  setModel(model: ClearBoxModel, mode?: SetMode): Result<void, CapabilityError>;
-}
-export interface OptionalComponentsHandle {
-  clearbox(): Result<ClearBoxHandle, CapabilityError>;
 }
 export interface TrainHandle {
   getModel(): OpticalTrainModel;
@@ -57,7 +47,6 @@ export interface TrainHandle {
   setCollimator(model: CollimatorModel, mode?: SetMode): Result<void, CapabilityError>;
   getScannerCard(): ScannerCardModel;
   setScannerCard(model: ScannerCardModel, mode?: SetMode): Result<void, CapabilityError>;
-  optionalComponents(): OptionalComponentsHandle | null;
 }
 export interface TrainCollection {
   readonly length: number;
@@ -70,8 +59,6 @@ export interface MachineConfigFile {
   machine(): MachineHandle;
   opticalTrains(): TrainCollection;
   opticalTrain(index: number): Result<TrainHandle, CapabilityError>;
-  getCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;
-  getInverseCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;
   isValid(): boolean;
   save(path?: string): Promise<Result<void, CapabilityError>>;
   close(): void;

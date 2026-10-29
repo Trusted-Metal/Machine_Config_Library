@@ -16,11 +16,10 @@ package machineconfig
 // file tampered with since MCF itself last touched it," not "does this
 // match some other system's proprietary algorithm."
 //
-// Binary correction-grid data (CorrectionData/InverseCorrectionData/
-// RawBytes) is always excluded regardless of whether the *MachineConfig
-// passed in happens to carry it (e.g. a config obtained via
-// ParseWithOptions{IncludeBinary: true}) — a separate, dedicated mechanism
-// (correction-hash) already exists for binary-grid integrity.
+// Binary RawBytes of the scan-field correction file is always excluded regardless of whether the
+// *MachineConfig passed in happens to carry it (e.g. a config obtained via
+// ParseWithOptions{IncludeBinary: true}). ClearBox's correction grids are ordinary extension datasets
+// and enter the hash through the extension digest.
 //
 // # Float-vs-integer rendering
 //
@@ -117,8 +116,8 @@ func CanonicalizeForHash(cfg *MachineConfig) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// sanitizeForHash returns a copy of cfg with the binary correction-grid
-// fields removed from every optical train, regardless of whether they were
+// sanitizeForHash returns a copy of cfg with the scan-field correction file's raw bytes
+// removed from every optical train, regardless of whether they were
 // populated — mirrors Python's _config_to_dict(config, include_binary=False),
 // which always builds the non-binary shape irrespective of what the input
 // carries. Does not mutate cfg.
@@ -128,12 +127,6 @@ func sanitizeForHash(cfg *MachineConfig) *MachineConfig {
 	trains := make([]models.OpticalTrain, len(cfg.OpticalTrains))
 	for i, train := range cfg.OpticalTrains {
 		trains[i] = train
-		if train.OptionalComponents.Clearbox != nil {
-			cb := *train.OptionalComponents.Clearbox
-			cb.CorrectionData = nil
-			cb.InverseCorrectionData = nil
-			trains[i].OptionalComponents.Clearbox = &cb
-		}
 		if train.ScanFieldCorrectionFile != nil {
 			sfcf := *train.ScanFieldCorrectionFile
 			sfcf.RawBytes = nil

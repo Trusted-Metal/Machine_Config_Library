@@ -7,8 +7,28 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <set>
 #include <sstream>
+#include <variant>
+#include <vector>
+
+namespace {
+
+// ClearBox is an opaque extension tree: extensions["ClearBox"] / Optical_Train_NN / <dataset>.
+// The returned reference points into `cfg`, which must outlive it.
+const std::vector<double>& clearboxGrid(const machine_config::MachineConfig& cfg, std::size_t index,
+                                        const std::string& name,
+                                        std::vector<std::uint64_t>* shape = nullptr) {
+    char key[32];
+    std::snprintf(key, sizeof key, "Optical_Train_%02d", static_cast<int>(index) + 1);
+    const auto& ds = cfg.extensions.at("ClearBox").children.at(key).datasets.at(name);
+    if (shape) *shape = ds.shape;
+    return std::get<std::vector<double>>(ds.data);
+}
+
+} // namespace
 
 // S-01: Read reference fixture, all scalar fields
 //
@@ -82,27 +102,28 @@ using namespace machine_config;
 scenarios::Result run(const std::filesystem::path& fixturesDir, const std::filesystem::path&) {
     auto path = fixturesDir / "reference_config.h5";
     try {
-        MachineConfigReader reader{path};
-        CorrectionData cd = reader.getCorrectionData(0);
-        CorrectionData icd = reader.getInverseCorrectionData(0);
+        MachineConfig cfg = MachineConfigReader{path}.parse();
+        std::vector<std::uint64_t> cdShape, icdShape;
+        const auto& cd = clearboxGrid(cfg, 0, "Correction_Data", &cdShape);
+        const auto& icd = clearboxGrid(cfg, 0, "Inverse_Correction_Data", &icdShape);
 
-        if (cd.shape != std::array<std::size_t, 3>{257, 257, 2}) {
+        if (cdShape != std::vector<std::uint64_t>{257, 257, 2}) {
             return {false, "correction_data shape mismatch"};
         }
-        if (icd.shape != std::array<std::size_t, 3>{257, 257, 2}) {
+        if (icdShape != std::vector<std::uint64_t>{257, 257, 2}) {
             return {false, "inverse_correction_data shape mismatch"};
         }
-        if (!std::any_of(cd.data.begin(), cd.data.end(), [](double v) { return std::isfinite(v); })) {
+        if (!std::any_of(cd.begin(), cd.end(), [](double v) { return std::isfinite(v); })) {
             return {false, "correction_data: no finite values"};
         }
-        if (!std::any_of(icd.data.begin(), icd.data.end(), [](double v) { return std::isfinite(v); })) {
+        if (!std::any_of(icd.begin(), icd.end(), [](double v) { return std::isfinite(v); })) {
             return {false, "inverse_correction_data: no finite values"};
         }
-        if (scenarios::bitwiseEqual(cd.data, icd.data)) {
+        if (scenarios::bitwiseEqual(cd, icd)) {
             return {false, "correction_data and inverse_correction_data are identical"};
         }
 
-        std::string hash = scenarios::sha256Hex(cd.data);
+        std::string hash = scenarios::sha256Hex(cd);
         return {true, "shapes OK, finite values OK, forward!=inverse, correction_data SHA-256=" + hash};
     } catch (const std::exception& e) {
         return {false, std::string("exception: ") + e.what()};
@@ -204,26 +225,26 @@ scenarios::Result run(const std::filesystem::path& fixturesDir, const std::files
         MachineConfigReader reader{path};
         MachineConfig cfg = reader.parseWithBinary();
 
-        CorrectionData cdBefore = reader.getCorrectionData(0);
-        CorrectionData icdBefore = reader.getInverseCorrectionData(0);
+        const auto& cdBefore = clearboxGrid(cfg, 0, "Correction_Data");
+        const auto& icdBefore = clearboxGrid(cfg, 0, "Inverse_Correction_Data");
 
         auto tmp = scenarios::makeTempPath(".h5");
         MachineConfigWriter{cfg}.write(tmp);
 
-        MachineConfigReader reader2{tmp};
-        CorrectionData cdAfter = reader2.getCorrectionData(0);
-        CorrectionData icdAfter = reader2.getInverseCorrectionData(0);
+        MachineConfig cfgAfter = MachineConfigReader{tmp}.parseWithBinary();
+        const auto& cdAfter = clearboxGrid(cfgAfter, 0, "Correction_Data");
+        const auto& icdAfter = clearboxGrid(cfgAfter, 0, "Inverse_Correction_Data");
 
-        if (!scenarios::bitwiseEqual(cdBefore.data, cdAfter.data)) {
+        if (!scenarios::bitwiseEqual(cdBefore, cdAfter)) {
             return {false, "correction_data mismatch after roundtrip: " +
-                scenarios::sha256Hex(cdBefore.data).substr(0, 16) + "... -> " +
-                scenarios::sha256Hex(cdAfter.data).substr(0, 16) + "..."};
+                scenarios::sha256Hex(cdBefore).substr(0, 16) + "... -> " +
+                scenarios::sha256Hex(cdAfter).substr(0, 16) + "..."};
         }
-        if (!scenarios::bitwiseEqual(icdBefore.data, icdAfter.data)) {
+        if (!scenarios::bitwiseEqual(icdBefore, icdAfter)) {
             return {false, "inverse_correction_data mismatch after roundtrip"};
         }
 
-        return {true, "correction_data preserved: SHA-256=" + scenarios::sha256Hex(cdBefore.data)};
+        return {true, "correction_data preserved: SHA-256=" + scenarios::sha256Hex(cdBefore)};
     } catch (const std::exception& e) {
         return {false, std::string("exception: ") + e.what()};
     }
@@ -252,12 +273,9 @@ scenarios::Result run(const std::filesystem::path&, const std::filesystem::path&
         if (!r1 || std::abs(*r1 - 180.0) > 0.001) return {false, "train[1].scan_head_rotation mismatch"};
         if (cfg.meta.machine_name.empty()) return {false, "machine_name is empty"};
 
-        const auto& clearbox = cfg.optical_trains[0].optional_components.clearbox;
-        if (!clearbox) return {false, "clearbox is absent"};
-        if (!clearbox->correction_data) return {false, "correction_data is absent"};
-
-        GridCell center = (*clearbox->correction_data)[128][128][0];
-        if (!center || !std::isfinite(*center) || std::abs(*center - 2.0) > 0.01) {
+        // Row-major [257, 257, 2]: centre cell, first component.
+        double center = clearboxGrid(cfg, 0, "Correction_Data")[(128 * 257 + 128) * 2];
+        if (!std::isfinite(center) || std::abs(center - 2.0) > 0.01) {
             return {false, "correction_data center: expected ~2.0"};
         }
 
@@ -365,7 +383,6 @@ scenarios::Result run(const std::filesystem::path&, const std::filesystem::path&
         OpticalTrain newTrain = cfg.optical_trains[1];
         newTrain.train_id = "Optical_Train_03";
         newTrain.scanner.scan_head_rotation = 90.0;
-        newTrain.optional_components.clearbox = std::nullopt;
         modified.optical_trains.push_back(newTrain);
 
         auto tmp = scenarios::makeTempPath(".h5");
@@ -382,8 +399,14 @@ scenarios::Result run(const std::filesystem::path&, const std::filesystem::path&
         if (!r2 || std::abs(*r2 - 90.0) > 0.001) {
             return {false, "train[2].scan_head_rotation mismatch"};
         }
-        if (rb.optical_trains[2].optional_components.clearbox.has_value()) {
-            return {false, "train[2].clearbox should be absent"};
+        const auto cbIt = rb.extensions.find("ClearBox");
+        if (cbIt == rb.extensions.end()) {
+            return {false, "ClearBox extension missing after roundtrip"};
+        }
+        const auto& cbChildren = cbIt->second.children;
+        if (cbChildren.count("Optical_Train_03") != 0 || cbChildren.count("Optical_Train_01") == 0 ||
+            cbChildren.count("Optical_Train_02") == 0) {
+            return {false, "unexpected ClearBox train groups after roundtrip"};
         }
         if (rb.meta.machine_name != "MODIFIED_ACONITY_VALIDATION") {
             return {false, "machine_name: got '" + rb.meta.machine_name + "'"};
@@ -392,7 +415,7 @@ scenarios::Result run(const std::filesystem::path&, const std::filesystem::path&
             return {false, "file_version changed: '" + rb.meta.file_version + "'"};
         }
 
-        return {true, "3 trains, build_plate_x=350.0, rotation=90.0, clearbox cleared, machine_name OK"};
+        return {true, "3 trains, build_plate_x=350.0, rotation=90.0, new train has no ClearBox, machine_name OK"};
     } catch (const std::exception& e) {
         return {false, std::string("exception: ") + e.what()};
     }
@@ -432,12 +455,10 @@ scenarios::Result run(const std::filesystem::path&, const std::filesystem::path&
     const LightSource& lightSource = train.light_source;
     const Collimator& collimator = train.collimator;
     const ScannerCard& scannerCard = train.scanner_card;
-    const OptionalComponents& optionalComponents = train.optional_components;
 
-    if (!optionalComponents.clearbox.has_value()) {
-        return {false, "expected builder to include a clearbox by default"};
+    if (config.extensions.count("ClearBox") == 0) {
+        return {false, "expected builder to include a ClearBox extension by default"};
     }
-    const ClearBox& clearbox = *optionalComponents.clearbox;
 
     if (!train.scan_field_correction_file.has_value()) {
         return {false, "expected builder to include an SFCF by default"};
@@ -452,7 +473,7 @@ scenarios::Result run(const std::filesystem::path&, const std::filesystem::path&
     if (meta.machine_name.empty() || machine.manufacturer.empty() ||
         scanner.manufacturer.empty() || lightSource.manufacturer.empty() ||
         collimator.manufacturer.empty() || scannerCard.manufacturer.empty() ||
-        clearbox.ip_address.empty() || sfcf.document_name.empty()) {
+        sfcf.document_name.empty()) {
         return {false, "one or more constructed fields were unexpectedly empty"};
     }
 

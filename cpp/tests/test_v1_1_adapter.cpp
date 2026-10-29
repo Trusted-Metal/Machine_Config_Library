@@ -19,6 +19,7 @@
 #include <string>
 
 #include "machine_config/machine_config.hpp"
+#include "clearbox_helpers.hpp"
 
 #ifndef FIXTURES_DIR
 #  error "FIXTURES_DIR must be defined by tests/CMakeLists.txt"
@@ -26,6 +27,7 @@
 
 using namespace machine_config;
 using namespace machine_config::capabilities::v1_1;
+namespace extension = machine_config::extension;
 
 static const std::string REFERENCE_V1_0 =
     std::string(FIXTURES_DIR) + "/reference_config_opcua_synchronous_sensors.h5";
@@ -73,27 +75,40 @@ static std::vector<double> pointValues(const PowerCharacterization& pc) {
 // test_v1_1_read
 // ---------------------------------------------------------------------------
 
+static std::vector<std::string> cbNames(const extension::Tree& pc) {
+    std::vector<std::string> out;
+    for (const auto& c : cbtest::constants(pc)) out.push_back(c.first);
+    return out;
+}
+
+static std::vector<double> cbValues(const extension::Tree& pc) {
+    std::vector<double> out;
+    for (const auto& c : cbtest::constants(pc)) out.push_back(c.second);
+    return out;
+}
+
 TEST_CASE("v1_1 read: natively-authored fixture, all 5 changes asserted") {
     MachineConfig cfg = MachineConfigReader{REFERENCE_V1_1}.parse();
     REQUIRE(cfg.meta.file_version == "1.1");
 
-    for (const auto& t : cfg.optical_trains) {
-        REQUIRE(t.optional_components.clearbox.has_value());
-        const ClearBox& cb = *t.optional_components.clearbox;
-        // Change 1: Consolidate — same shared value on every train.
-        REQUIRE(cb.output_path == std::optional<std::string>{"/recordings/"});
-        REQUIRE(cb.software_trigger_delay == std::optional<int64_t>{3000});
+    // Change 1: Consolidate — one shared value, on the extension root.
+    const auto& root = cbtest::clearboxRoot(cfg);
+    std::int64_t v = 0;
+    REQUIRE(cbtest::text(root, "Output_Path") == "/recordings/");
+    REQUIRE(cbtest::integer(root, "Software_Trigger_Delay", v));
+    REQUIRE(v == 3000);
+
+    for (std::size_t i = 0; i < cfg.optical_trains.size(); ++i) {
+        const auto& cb = cbtest::clearbox(cfg, i);
         // Change 1: Addition.
-        REQUIRE(cb.firmware_version == std::optional<std::string>{"2.4.1"});
+        REQUIRE(cbtest::text(cb, "Firmware_Version") == "2.4.1");
         // Change 1: Removal.
-        REQUIRE_FALSE(cb.selected_camera.has_value());
-        REQUIRE_FALSE(cb.custom_video_format.has_value());
-        REQUIRE_FALSE(cb.video_output.has_value());
-        REQUIRE_FALSE(cb.show_console.has_value());
-        REQUIRE_FALSE(cb.correction_grid_domain_shape.has_value());
-        REQUIRE_FALSE(cb.inverse_grid_domain_shape.has_value());
+        for (const char* removed : {"Selected_Camera", "Custom_Video_Format", "Video_Output", "Show_Console",
+                                    "Output_Path", "Software_Trigger_Delay"})
+            REQUIRE_FALSE(cbtest::hasAttr(cb, removed));
 
         // Change 5: no on-disk source in this File_Version, always nullopt.
+        const auto& t = cfg.optical_trains[i];
         REQUIRE_FALSE(t.scanner.x_axis.tuning_parameters.has_value());
         REQUIRE_FALSE(t.scanner.x_axis.tuning_type.has_value());
         REQUIRE_FALSE(t.scanner.y_axis.tuning_parameters.has_value());
@@ -105,26 +120,18 @@ TEST_CASE("v1_1 read: natively-authored fixture, all 5 changes asserted") {
     REQUIRE(cfg.extensions.at("TM_OPCUA").children.at("Client").attrs.count("Machine_Profile") == 1);
 
     // Change 3: ClearBox Power_Characterization — train 1 LINEAR, train 2 POLYNOMIAL.
-    const ClearBox& cb0 = *cfg.optical_trains[0].optional_components.clearbox;
-    REQUIRE(cb0.power_characterization.has_value());
-    const PowerCharacterization& pc0 = *cb0.power_characterization;
-    REQUIRE(pc0.algorithm_type == std::optional<std::string>{"LINEAR"});
-    REQUIRE(pc0.algorithm_equation == std::optional<std::string>{"W = a*V + b"});
-    REQUIRE(pc0.input_type == std::optional<std::string>{"0-10 V"});
-    REQUIRE(pc0.units_derived_quantity == std::optional<std::string>{"Watts"});
-    REQUIRE(pc0.derivation_equation_constants.size() == 2);
-    REQUIRE(pc0.derivation_equation_constants[0].name == "b");
-    REQUIRE(pc0.derivation_equation_constants[1].name == "a");
-    REQUIRE(pc0.characterization_points.size() == 3);
+    const auto& pc0 = cbtest::powerCharacterization(cfg, 0);
+    REQUIRE(cbtest::text(pc0, "Algorithm_Type") == "LINEAR");
+    REQUIRE(cbtest::text(pc0, "Algorithm_Equation") == "W = a*V + b");
+    REQUIRE(cbtest::text(pc0, "Input_Type") == "0-10 V");
+    REQUIRE(cbtest::text(pc0, "Units_Derived_Quantity") == "Watts");
+    REQUIRE(cbNames(pc0) == std::vector<std::string>{"b", "a"});
+    REQUIRE(cbtest::pointCount(pc0) == 3);
 
-    const ClearBox& cb1 = *cfg.optical_trains[1].optional_components.clearbox;
-    const PowerCharacterization& pc1 = *cb1.power_characterization;
-    REQUIRE(pc1.algorithm_type == std::optional<std::string>{"POLYNOMIAL"});
-    REQUIRE(pc1.algorithm_equation == std::optional<std::string>{"W = c0 + c1*V + c2*V^2"});
-    REQUIRE(pc1.derivation_equation_constants.size() == 3);
-    REQUIRE(pc1.derivation_equation_constants[0].name == "c0");
-    REQUIRE(pc1.derivation_equation_constants[1].name == "c1");
-    REQUIRE(pc1.derivation_equation_constants[2].name == "c2");
+    const auto& pc1 = cbtest::powerCharacterization(cfg, 1);
+    REQUIRE(cbtest::text(pc1, "Algorithm_Type") == "POLYNOMIAL");
+    REQUIRE(cbtest::text(pc1, "Algorithm_Equation") == "W = c0 + c1*V + c2*V^2");
+    REQUIRE(cbNames(pc1) == std::vector<std::string>{"c0", "c1", "c2"});
 
     // Change 4: LightSource Power_Characterization — inverse data availability.
     const PowerCharacterization& lspc0 = *cfg.optical_trains[0].light_source.power_characterization;
@@ -140,21 +147,14 @@ TEST_CASE("v1_1 read: natively-authored fixture, all 5 changes asserted") {
 
 TEST_CASE("v1_1 roundtrip: write -> read -> write -> read, cross-wiring guard") {
     MachineConfig cfg = mockV1_1Config(1);
-    OpticalTrain train = cfg.optical_trains[0];
+    cbtest::clearbox(cfg, 0).children["Power_Characterization"] =
+        cbtest::makePowerCharacterization("LINEAR", {{"b", 1.0}, {"a", 2.0}});
 
-    ClearBox cb = *train.optional_components.clearbox;
-    cb.power_characterization = PowerCharacterization{
-        "LINEAR", std::nullopt, std::nullopt, std::nullopt,
-        {EquationConstant{"b", 1.0}, EquationConstant{"a", 2.0}}, {}};
-    train.optional_components.clearbox = cb;
-
-    LightSource ls = train.light_source;
+    LightSource ls = cfg.optical_trains[0].light_source;
     ls.power_characterization = PowerCharacterization{
         "POLYNOMIAL", std::nullopt, std::nullopt, std::nullopt,
         {}, {CalibrationPoint{9.0, 99.0}}};
-    train.light_source = ls;
-
-    cfg.optical_trains = {train};
+    cfg.optical_trains[0].light_source = ls;
 
     auto p1 = tmpPath("roundtrip_a");
     MachineConfigWriter{cfg}.write(p1);
@@ -164,19 +164,20 @@ TEST_CASE("v1_1 roundtrip: write -> read -> write -> read, cross-wiring guard") 
     MachineConfigWriter{mid}.write(p2);
     MachineConfig result = MachineConfigReader{p2}.parse();
 
-    const ClearBox& cbR = *result.optical_trains[0].optional_components.clearbox;
+    const auto& cbPc = cbtest::powerCharacterization(result, 0);
     const LightSource& lsR = result.optical_trains[0].light_source;
-    REQUIRE(cbR.power_characterization->algorithm_type == std::optional<std::string>{"LINEAR"});
-    REQUIRE(cbR.power_characterization->derivation_equation_constants.size() == 2);
-    REQUIRE(cbR.power_characterization->derivation_equation_constants[0].name == "b");
-    REQUIRE(cbR.power_characterization->derivation_equation_constants[1].name == "a");
-    REQUIRE(cbR.power_characterization->characterization_points.empty());
+    REQUIRE(cbtest::text(cbPc, "Algorithm_Type") == "LINEAR");
+    REQUIRE(cbNames(cbPc) == std::vector<std::string>{"b", "a"});
+    REQUIRE(cbtest::pointCount(cbPc) == 0);
     REQUIRE(lsR.power_characterization->algorithm_type == std::optional<std::string>{"POLYNOMIAL"});
     REQUIRE(lsR.power_characterization->derivation_equation_constants.empty());
     REQUIRE(lsR.power_characterization->characterization_points.size() == 1);
     REQUIRE(lsR.power_characterization->characterization_points[0].input_value == 9.0);
     // Cross-wiring guard: the two instances must not have swapped.
-    REQUIRE(cbR.power_characterization->algorithm_type != lsR.power_characterization->algorithm_type);
+    REQUIRE(cbtest::text(cbPc, "Algorithm_Type") != *lsR.power_characterization->algorithm_type);
+    // The whole ClearBox tree, grids included, is bit-stable across the double round trip.
+    REQUIRE(extension::canonicalDigest(result.extensions.at("ClearBox")) ==
+            extension::canonicalDigest(cfg.extensions.at("ClearBox")));
 }
 
 // ---------------------------------------------------------------------------
@@ -190,21 +191,25 @@ TEST_CASE("v1_1 forward: v1.0 fixture written as v1.1, manifest rules") {
     MachineConfig migrated = MachineConfigReader{out}.parse();
     REQUIRE(migrated.meta.file_version == "1.1");
 
+    // The shimmed tree is already in the v1.1 layout, so it survives unchanged.
+    REQUIRE(extension::canonicalDigest(migrated.extensions.at("ClearBox")) ==
+            extension::canonicalDigest(source.extensions.at("ClearBox")));
+    const auto& root = cbtest::clearboxRoot(migrated);
+    REQUIRE(cbtest::hasAttr(root, "Output_Path"));
+    REQUIRE(cbtest::hasAttr(root, "Software_Trigger_Delay"));
+
     for (std::size_t i = 0; i < migrated.optical_trains.size(); ++i) {
-        const ClearBox& srcCb = *source.optical_trains[i].optional_components.clearbox;
-        const ClearBox& cb = *migrated.optical_trains[i].optional_components.clearbox;
-        // Consolidate: same per-train value carried straight through.
-        REQUIRE(cb.output_path == srcCb.output_path);
-        REQUIRE(cb.software_trigger_delay == srcCb.software_trigger_delay);
+        const auto& cb = cbtest::clearbox(migrated, i);
         // Addition: no v1.0 source.
-        REQUIRE_FALSE(cb.firmware_version.has_value());
-        // Removal.
-        REQUIRE_FALSE(cb.selected_camera.has_value());
-        REQUIRE_FALSE(cb.custom_video_format.has_value());
+        REQUIRE_FALSE(cbtest::hasAttr(cb, "Firmware_Version"));
+        // v1.0-only attributes ride along as extra per-train attributes.
+        REQUIRE(cbtest::hasAttr(cb, "Selected_Camera"));
         // Change 3: derived ClearBox data has real constants, zero points.
-        REQUIRE(cb.power_characterization->characterization_points.empty());
-        REQUIRE_FALSE(cb.power_characterization->derivation_equation_constants.empty());
-        REQUIRE(cb.power_characterization->algorithm_type == srcCb.power_characterization->algorithm_type);
+        const auto& pc = cbtest::powerCharacterization(migrated, i);
+        REQUIRE(cbtest::pointCount(pc) == 0);
+        REQUIRE_FALSE(cbtest::constants(pc).empty());
+        REQUIRE(cbtest::text(pc, "Algorithm_Type") ==
+                cbtest::text(cbtest::powerCharacterization(source, i), "Algorithm_Type"));
 
         const LightSource& ls = migrated.optical_trains[i].light_source;
         // Change 4: derived Light_Source data is the inverse — zero
@@ -214,49 +219,44 @@ TEST_CASE("v1_1 forward: v1.0 fixture written as v1.1, manifest rules") {
     }
 }
 
-TEST_CASE("v1_1 forward: Output_Path disagreement raises") {
+TEST_CASE("v1_0: the first train wins for the shared Output_Path / Software_Trigger_Delay") {
+    // File_Version 1.0 stores them per train; the extension tree holds one value each.
     MachineConfig cfg = mockV1Config(2);
-    cfg.optical_trains[1].optional_components.clearbox->output_path = "/other/";
-    REQUIRE_THROWS_WITH(
-        MachineConfigWriter(cfg, "1.1").write(tmpPath("output_path_conflict")),
-        Catch::Matchers::ContainsSubstring("Consolidate conflict on 'Output_Path'"));
-}
+    auto& second = cbtest::clearbox(cfg, 1);
+    second.attrs["Output_Path"] = {"utf8", std::string("/other/")};
+    second.attrs["Software_Trigger_Delay"] = {"i64", std::int64_t{9999}};
 
-TEST_CASE("v1_1 forward: Software_Trigger_Delay disagreement raises") {
-    MachineConfig cfg = mockV1Config(2);
-    cfg.optical_trains[1].optional_components.clearbox->software_trigger_delay = 9999;
-    REQUIRE_THROWS_WITH(
-        MachineConfigWriter(cfg, "1.1").write(tmpPath("software_trigger_delay_conflict")),
-        Catch::Matchers::ContainsSubstring("Consolidate conflict on 'Software_Trigger_Delay'"));
+    auto out = tmpPath("first_train_wins");
+    MachineConfigWriter(cfg, "1.0").write(out);
+    MachineConfig back = MachineConfigReader{out}.parse();
+    const auto& root = cbtest::clearboxRoot(back);
+    std::int64_t v = 0;
+    REQUIRE(cbtest::text(root, "Output_Path") == "/recordings/");
+    REQUIRE(cbtest::integer(root, "Software_Trigger_Delay", v));
+    REQUIRE(v == 3000);
+    REQUIRE_FALSE(cbtest::hasAttr(cbtest::clearbox(back, 1), "Output_Path"));
 }
 
 TEST_CASE("v1_1 forward: unrecognized ClearBox Algorithm_Type is best-effort, never raises") {
-    MachineConfig cfg = mockV1Config(1);
-    cfg.optical_trains[0].optional_components.clearbox->power_characterization =
-        forwardPowerCharacterizationCoefficients("EXPONENTIAL", "1.5,2.5,3.5");
-    auto out = tmpPath("unrecognized_clearbox");
-    MachineConfigWriter(cfg, "1.1").write(out);
-    MachineConfig result = MachineConfigReader{out}.parse();
-    const PowerCharacterization& pc = *result.optical_trains[0].optional_components.clearbox->power_characterization;
-    REQUIRE(pc.algorithm_type == std::optional<std::string>{"EXPONENTIAL"});
-    REQUIRE_FALSE(pc.algorithm_equation.has_value());
-    REQUIRE(pc.derivation_equation_constants.size() == 3);
-    REQUIRE(pc.derivation_equation_constants[0].name == "0");
-    REQUIRE(pc.derivation_equation_constants[1].name == "1");
-    REQUIRE(pc.derivation_equation_constants[2].name == "2");
-    REQUIRE(pc.derivation_equation_constants[0].value == 1.5);
-    REQUIRE(pc.derivation_equation_constants[1].value == 2.5);
-    REQUIRE(pc.derivation_equation_constants[2].value == 3.5);
+    MachineConfig cfg = mockV1_1Config(1);
+    cbtest::clearbox(cfg, 0).children["Power_Characterization"] =
+        cbtest::makePowerCharacterization("EXPONENTIAL", {{"0", 1.5}, {"1", 2.5}, {"2", 3.5}});
 
-    // Round trip: writing back to v1.0 reproduces the original CSV exactly
-    // (checked via the structured shape, since the flat field no longer
-    // exists to compare against directly).
-    auto v1_0Out = tmpPath("unrecognized_clearbox_roundtrip");
-    MachineConfigWriter(result, "1.0").write(v1_0Out);
-    MachineConfig back = MachineConfigReader{v1_0Out}.parse();
-    const PowerCharacterization& backPc = *back.optical_trains[0].optional_components.clearbox->power_characterization;
-    REQUIRE(backPc.algorithm_type == std::optional<std::string>{"EXPONENTIAL"});
-    REQUIRE(constantValues(backPc) == std::vector<double>{1.5, 2.5, 3.5});
+    auto v1_0Out = tmpPath("unrecognized_clearbox_v1_0");
+    MachineConfigWriter(cfg, "1.0").write(v1_0Out);
+    MachineConfig v1_0 = MachineConfigReader{v1_0Out}.parse();
+    const auto& pc = cbtest::powerCharacterization(v1_0, 0);
+    REQUIRE(cbtest::text(pc, "Algorithm_Type") == "EXPONENTIAL");
+    REQUIRE(cbtest::text(pc, "Algorithm_Equation").empty());
+    REQUIRE(cbNames(pc) == std::vector<std::string>{"0", "1", "2"});
+    REQUIRE(cbValues(pc) == std::vector<double>{1.5, 2.5, 3.5});
+
+    auto v1_1Out = tmpPath("unrecognized_clearbox_v1_1");
+    MachineConfigWriter(v1_0, "1.1").write(v1_1Out);
+    MachineConfig back = MachineConfigReader{v1_1Out}.parse();
+    const auto& backPc = cbtest::powerCharacterization(back, 0);
+    REQUIRE(cbtest::text(backPc, "Algorithm_Type") == "EXPONENTIAL");
+    REQUIRE(cbValues(backPc) == std::vector<double>{1.5, 2.5, 3.5});
 }
 
 TEST_CASE("v1_1 forward: unrecognized LightSource Algorithm_Type is best-effort, never raises") {
@@ -272,6 +272,13 @@ TEST_CASE("v1_1 forward: unrecognized LightSource Algorithm_Type is best-effort,
     REQUIRE(pc.characterization_points.size() == 2);
 }
 
+TEST_CASE("a ClearBox train with no matching optical train is rejected for v1.0") {
+    MachineConfig cfg = mockV1_1Config(1);
+    cfg.extensions.at("ClearBox").children["Optical_Train_07"] = cbtest::clearbox(cfg, 0);
+    REQUIRE_THROWS_WITH(MachineConfigWriter(cfg, "1.0").write(tmpPath("no_matching_train")),
+                        Catch::Matchers::ContainsSubstring("Optical_Train_07"));
+}
+
 // ---------------------------------------------------------------------------
 // test_v1_1_to_v1 (v1.1 fixture written as v1.0)
 // ---------------------------------------------------------------------------
@@ -283,68 +290,62 @@ TEST_CASE("v1_1 backward: v1.1 fixture written as v1.0, surviving fields preserv
     MachineConfig back = MachineConfigReader{out}.parse();
     REQUIRE(back.meta.file_version == "1.0");
 
-    const ClearBox& srcCb0 = *source.optical_trains[0].optional_components.clearbox;
-    const ClearBox& cb0 = *back.optical_trains[0].optional_components.clearbox;
-    const PowerCharacterization& srcPc0 = *srcCb0.power_characterization;
-    const PowerCharacterization& pc0 = *cb0.power_characterization;
-    REQUIRE(pc0.algorithm_type == srcPc0.algorithm_type);
-    auto expected = constantValues(srcPc0);
+    const auto& srcPc0 = cbtest::powerCharacterization(source, 0);
+    const auto& pc0 = cbtest::powerCharacterization(back, 0);
+    REQUIRE(cbtest::text(pc0, "Algorithm_Type") == cbtest::text(srcPc0, "Algorithm_Type"));
+    auto expected = cbValues(srcPc0);
     std::sort(expected.begin(), expected.end());
-    auto actual = constantValues(pc0);
+    auto actual = cbValues(pc0);
     std::sort(actual.begin(), actual.end());
     REQUIRE(actual == expected);
-    REQUIRE(cb0.output_path == srcCb0.output_path);
-    REQUIRE(cb0.software_trigger_delay == srcCb0.software_trigger_delay);
 
-    const LightSource& srcLs0 = source.optical_trains[0].light_source;
-    const LightSource& ls0 = back.optical_trains[0].light_source;
-    const PowerCharacterization& srcLsPc0 = *srcLs0.power_characterization;
-    const PowerCharacterization& lsPc0 = *ls0.power_characterization;
+    const auto& srcRoot = cbtest::clearboxRoot(source);
+    const auto& root = cbtest::clearboxRoot(back);
+    REQUIRE(cbtest::text(root, "Output_Path") == cbtest::text(srcRoot, "Output_Path"));
+    std::int64_t a = 0, b = 0;
+    REQUIRE(cbtest::integer(root, "Software_Trigger_Delay", a));
+    REQUIRE(cbtest::integer(srcRoot, "Software_Trigger_Delay", b));
+    REQUIRE(a == b);
+
+    const PowerCharacterization& srcLsPc0 = *source.optical_trains[0].light_source.power_characterization;
+    const PowerCharacterization& lsPc0 = *back.optical_trains[0].light_source.power_characterization;
     REQUIRE(lsPc0.algorithm_type == srcLsPc0.algorithm_type);
     REQUIRE(pointValues(lsPc0) == pointValues(srcLsPc0));
 
-    // Change 1 Removal fields: lost forever, not restored.
-    REQUIRE_FALSE(cb0.selected_camera.has_value());
+    // v1.1-only fields: lost on the way down, not restored.
+    REQUIRE_FALSE(cbtest::hasAttr(cbtest::clearbox(back, 0), "Firmware_Version"));
+    REQUIRE_FALSE(cbtest::hasAttr(cbtest::clearbox(back, 0), "Selected_Camera"));
 }
 
 TEST_CASE("v1_1 backward reorders Derivation_Equation_Constants by name") {
     MachineConfig cfg = mockV1_1Config(1);
-    ClearBox cb0 = *cfg.optical_trains[0].optional_components.clearbox;
-    cb0.power_characterization->algorithm_type = "LINEAR";
-    cb0.power_characterization->derivation_equation_constants = {
-        EquationConstant{"a", 2.0}, EquationConstant{"b", 1.0}};
-    cfg.optical_trains[0].optional_components.clearbox = cb0;
+    cbtest::clearbox(cfg, 0).children["Power_Characterization"] =
+        cbtest::makePowerCharacterization("LINEAR", {{"a", 2.0}, {"b", 1.0}});
 
     auto out = tmpPath("backward_reorders");
     MachineConfigWriter(cfg, "1.0").write(out);
     MachineConfig back = MachineConfigReader{out}.parse();
     // Written CSV is "1.0,2.0" (b before a); the v1.0 reader forward-derives
     // that back into named constants positionally (b, then a) for LINEAR.
-    const auto& backConstants =
-        back.optical_trains[0].optional_components.clearbox->power_characterization->derivation_equation_constants;
-    REQUIRE(backConstants.size() == 2);
-    REQUIRE(backConstants[0].name == "b");
-    REQUIRE(backConstants[0].value == 1.0);
-    REQUIRE(backConstants[1].name == "a");
-    REQUIRE(backConstants[1].value == 2.0);
+    const auto got = cbtest::constants(cbtest::powerCharacterization(back, 0));
+    REQUIRE(got.size() == 2);
+    REQUIRE(got[0].first == "b");
+    REQUIRE(got[0].second == 1.0);
+    REQUIRE(got[1].first == "a");
+    REQUIRE(got[1].second == 2.0);
 }
 
 TEST_CASE("v1_1 backward: missing Derivation_Equation_Constants writes blank") {
     MachineConfig cfg = mockV1_1Config(1);
-    ClearBox cb0 = *cfg.optical_trains[0].optional_components.clearbox;
-    cb0.power_characterization->derivation_equation_constants = {};
-    cfg.optical_trains[0].optional_components.clearbox = cb0;
+    cbtest::clearbox(cfg, 0).children["Power_Characterization"] =
+        cbtest::makePowerCharacterization("LINEAR", {});
 
     auto out = tmpPath("backward_blank_constants");
     MachineConfigWriter(cfg, "1.0").write(out);
     MachineConfig back = MachineConfigReader{out}.parse();
-    // Backward derivation produces "" for Volts_To_Watts_Params (blank, not
-    // an error) — a real disk round-trip normalizes an empty string
-    // attribute back to nullopt on read, this codebase's standard
-    // convention for absent optional strings (confirmed against Python's/
-    // Rust's identical finding), so forward re-derivation on read produces
-    // zero constants.
-    REQUIRE(back.optical_trains[0].optional_components.clearbox->power_characterization->derivation_equation_constants.empty());
+    // Backward derivation produces "" for Volts_To_Watts_Params (blank, not an error); forward
+    // re-derivation on read then produces zero constants.
+    REQUIRE(cbtest::constants(cbtest::powerCharacterization(back, 0)).empty());
 }
 
 TEST_CASE("v1_1 backward: missing Characterization_Points writes blank") {
@@ -363,13 +364,12 @@ TEST_CASE("v1_1 backward: missing Characterization_Points writes blank") {
 // test_v1_unaffected
 // ---------------------------------------------------------------------------
 
-TEST_CASE("v1.0 read path forward-derives power_characterization from the flat fields") {
+TEST_CASE("v1.0 read path surfaces the flat Volts_To_Watts fields as Power_Characterization") {
     MachineConfig config = MachineConfigReader{REFERENCE_V1_0}.parse();
     REQUIRE(config.meta.file_version == "1.0");
     REQUIRE_FALSE(config.optical_trains.empty());
-    REQUIRE(config.optical_trains[0].optional_components.clearbox->power_characterization.has_value());
-    REQUIRE(config.optical_trains[0].optional_components.clearbox->power_characterization->algorithm_type ==
-            std::optional<std::string>{"LINEAR"});
+    REQUIRE(cbtest::text(cbtest::powerCharacterization(config, 0), "Algorithm_Type") == "LINEAR");
+    REQUIRE_FALSE(cbtest::hasAttr(cbtest::clearbox(config, 0), "Volts_To_Watts_Algorithm"));
 }
 
 // ---------------------------------------------------------------------------
@@ -386,14 +386,9 @@ TEST_CASE("roundtrip v1.0 -> v1.1 -> v1.0 reproduces the original exactly") {
     MachineConfig back = MachineConfigReader{v1_0Path}.parse();
 
     REQUIRE(back.meta.file_version == "1.0");
+    REQUIRE(extension::canonicalDigest(back.extensions.at("ClearBox")) ==
+            extension::canonicalDigest(source.extensions.at("ClearBox")));
     for (std::size_t i = 0; i < back.optical_trains.size(); ++i) {
-        const ClearBox& srcCb = *source.optical_trains[i].optional_components.clearbox;
-        const ClearBox& cb = *back.optical_trains[i].optional_components.clearbox;
-        REQUIRE(cb.output_path == srcCb.output_path);
-        REQUIRE(cb.software_trigger_delay == srcCb.software_trigger_delay);
-        REQUIRE(cb.power_characterization->algorithm_type == srcCb.power_characterization->algorithm_type);
-        REQUIRE(constantValues(*cb.power_characterization) == constantValues(*srcCb.power_characterization));
-
         const LightSource& srcLs = source.optical_trains[i].light_source;
         const LightSource& ls = back.optical_trains[i].light_source;
         REQUIRE(ls.power_characterization->algorithm_type == srcLs.power_characterization->algorithm_type);
@@ -412,23 +407,16 @@ TEST_CASE("roundtrip v1.1 -> v1.0 -> v1.1: fields v1.0 can hold survive, the res
 
     REQUIRE(back.meta.file_version == "1.1");
     for (std::size_t i = 0; i < back.optical_trains.size(); ++i) {
-        const ClearBox& srcCb = *source.optical_trains[i].optional_components.clearbox;
-        const ClearBox& cb = *back.optical_trains[i].optional_components.clearbox;
-        const PowerCharacterization& srcPc = *srcCb.power_characterization;
-        const PowerCharacterization& pc = *cb.power_characterization;
-        REQUIRE(pc.algorithm_type == srcPc.algorithm_type);
-        auto sorted = [](std::vector<EquationConstant> v) {
-            std::vector<double> out;
-            for (const auto& c : v) out.push_back(c.value);
-            std::sort(out.begin(), out.end());
-            return out;
-        };
-        REQUIRE(sorted(pc.derivation_equation_constants) == sorted(srcPc.derivation_equation_constants));
+        const auto& srcPc = cbtest::powerCharacterization(source, i);
+        const auto& pc = cbtest::powerCharacterization(back, i);
+        REQUIRE(cbtest::text(pc, "Algorithm_Type") == cbtest::text(srcPc, "Algorithm_Type"));
+        auto sorted = [](std::vector<double> v) { std::sort(v.begin(), v.end()); return v; };
+        REQUIRE(sorted(cbValues(pc)) == sorted(cbValues(srcPc)));
         // Expected loss: v1.1-only fields have no v1.0 round-trip path.
-        REQUIRE_FALSE(cb.firmware_version.has_value());
-        REQUIRE_FALSE(pc.input_type.has_value());
-        REQUIRE_FALSE(pc.units_derived_quantity.has_value());
-        REQUIRE(pc.characterization_points.empty());
+        REQUIRE_FALSE(cbtest::hasAttr(cbtest::clearbox(back, i), "Firmware_Version"));
+        REQUIRE(cbtest::text(pc, "Input_Type").empty());
+        REQUIRE(cbtest::text(pc, "Units_Derived_Quantity").empty());
+        REQUIRE(cbtest::pointCount(pc) == 0);
     }
 }
 
@@ -472,9 +460,8 @@ TEST_CASE("v1_1 dispatcher: v1.0 fixture written as v1.1 through the public API"
     MachineConfigWriter{source, "1.1"}.write(out);
     MachineConfig result = MachineConfigReader{out}.parse();
     REQUIRE(result.meta.file_version == "1.1");
-    REQUIRE(result.optical_trains[0].optional_components.clearbox->output_path ==
-            std::optional<std::string>{"/recordings/"});
-    REQUIRE(result.optical_trains[0].optional_components.clearbox->power_characterization.has_value());
+    REQUIRE(cbtest::text(cbtest::clearboxRoot(result), "Output_Path") == "/recordings/");
+    REQUIRE(cbtest::powerCharacterization(result, 0).tables.count("Derivation_Equation_Constants") == 1);
 }
 
 TEST_CASE("v1_1 dispatcher: v1.1 fixture written as v1.0 through the public API") {
@@ -483,8 +470,7 @@ TEST_CASE("v1_1 dispatcher: v1.1 fixture written as v1.0 through the public API"
     MachineConfigWriter{v1_1Cfg, "1.0"}.write(out);
     MachineConfig result = MachineConfigReader{out}.parse();
     REQUIRE(result.meta.file_version == "1.0");
-    REQUIRE(result.optical_trains[0].optional_components.clearbox->power_characterization->algorithm_type ==
-            std::optional<std::string>{"LINEAR"});
+    REQUIRE(cbtest::text(cbtest::powerCharacterization(result, 0), "Algorithm_Type") == "LINEAR");
 }
 
 // ---------------------------------------------------------------------------

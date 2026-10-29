@@ -7,7 +7,6 @@
 import { peekFileVersion, UnsupportedFileVersion } from "./capabilities/file_version.js";
 import {
   Hdf5AdapterV1_0,
-  type CorrectionData,
   type ReadOptions,
   type ToJsonOptions,
 } from "./capabilities/v1_0/hdf5.js";
@@ -15,13 +14,11 @@ import { Hdf5AdapterV1_1 } from "./capabilities/v1_1/hdf5.js";
 import { computeConfigurationHash } from "./hash.js";
 import type { MachineConfig } from "./models.js";
 
-export type { CorrectionData, ReadOptions, ToJsonOptions };
+export type { ReadOptions, ToJsonOptions };
 
 type ReaderBackend = {
   parse(options?: ReadOptions): Promise<import("./models.js").MachineConfig>;
   toJson(options?: ToJsonOptions): Promise<string>;
-  getCorrectionData(trainIndex: number): Promise<CorrectionData>;
-  getInverseCorrectionData(trainIndex: number): Promise<CorrectionData>;
   getRawGroup(hdfPath: string): Promise<Record<string, unknown>>;
 };
 
@@ -73,14 +70,6 @@ export class MachineConfigReader {
 
   async toJson(options: ToJsonOptions = {}) {
     return (await this.adapter()).toJson(options);
-  }
-
-  async getCorrectionData(trainIndex: number) {
-    return (await this.adapter()).getCorrectionData(trainIndex);
-  }
-
-  async getInverseCorrectionData(trainIndex: number) {
-    return (await this.adapter()).getInverseCorrectionData(trainIndex);
   }
 
   async getRawGroup(hdfPath: string) {

@@ -21,8 +21,6 @@ GROUP_COLLIMATOR = "Collimator"
 GROUP_SCANNER_CARD = "Scanner_Card"
 GROUP_OPTIONAL_COMPONENTS = "Optional_Components"
 GROUP_CLEARBOX = "ClearBox"
-DS_CORRECTION_DATA = "Correction_Data"
-DS_INVERSE_CORRECTION_DATA = "Inverse_Correction_Data"
 DS_SCAN_FIELD_CORRECTION_FILE = "scan_field_correction_file"
 
 
@@ -66,14 +64,6 @@ def clearbox_path_by_id(tid: str) -> str:
     return (
         f"{train_path_by_id(tid)}/{GROUP_OPTIONAL_COMPONENTS}/{GROUP_CLEARBOX}"
     )
-
-
-def correction_data_path(index: int) -> str:
-    return f"{clearbox_path(index)}/{DS_CORRECTION_DATA}"
-
-
-def inverse_correction_data_path(index: int) -> str:
-    return f"{clearbox_path(index)}/{DS_INVERSE_CORRECTION_DATA}"
 
 
 def scan_field_correction_file_path(index: int) -> str:

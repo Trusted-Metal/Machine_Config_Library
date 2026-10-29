@@ -7,6 +7,7 @@
 package extio
 
 import (
+	"errors"
 	"fmt"
 
 	"machine-config-go/extension"
@@ -145,6 +146,14 @@ func ReadTree(g *h5c.Group, path string) (*extension.Tree, error) {
 			}
 			tree.Children[m.Name] = child
 		case m.IsDataset:
+			if g.IsCompoundDataset(m.Name) {
+				table, err := readTable(g, m.Name, childPath)
+				if err != nil {
+					return nil, err
+				}
+				tree.Tables[m.Name] = table
+				continue
+			}
 			ds, err := readDataset(g, m.Name, childPath)
 			if err != nil {
 				return nil, err
@@ -183,6 +192,69 @@ func readDataset(g *h5c.Group, name, path string) (*extension.Dataset, error) {
 	return ds, nil
 }
 
+func readTable(g *h5c.Group, name, path string) (*extension.Table, error) {
+	cols, rows, err := g.ReadCompoundDataset(name)
+	if err != nil {
+		var member *h5c.MemberError
+		if errors.As(err, &member) {
+			return nil, &extension.Error{Path: joinPath(path, member.Member), Message: member.Message}
+		}
+		return nil, &extension.Error{Path: path, Message: err.Error()}
+	}
+	h5ds, err := g.OpenDataset(name)
+	if err != nil {
+		return nil, &extension.Error{Path: path, Message: err.Error()}
+	}
+	defer h5ds.Close()
+	attrs, err := readAttrs(h5ds, path)
+	if err != nil {
+		return nil, err
+	}
+	table := &extension.Table{Rows: rows, Columns: map[string]any{}, Attrs: attrs}
+	for _, c := range cols {
+		table.Fields = append(table.Fields, extension.TableField{Name: c.Name, Dtype: c.Dtype, Size: c.Size})
+		switch {
+		case c.Dtype == extension.Utf8:
+			if c.Strs == nil {
+				c.Strs = []string{}
+			}
+			table.Columns[c.Name] = c.Strs
+		case isSignedDtype(c.Dtype):
+			table.Columns[c.Name] = emptyIfNil(c.Ints)
+		case isUnsignedDtype(c.Dtype):
+			table.Columns[c.Name] = emptyIfNilU(c.Uints)
+		default:
+			table.Columns[c.Name] = emptyIfNilF(c.Floats)
+		}
+	}
+	return table, nil
+}
+
+func writeTable(g *h5c.Group, name string, t *extension.Table, path string) error {
+	cols := make([]h5c.CompoundColumn, len(t.Fields))
+	for i, f := range t.Fields {
+		col := h5c.CompoundColumn{Name: f.Name, Dtype: f.Dtype, Size: f.Size}
+		switch v := t.Columns[f.Name].(type) {
+		case []string:
+			col.Strs = v
+		case []int64:
+			col.Ints = v
+		case []uint64:
+			col.Uints = v
+		case []float64:
+			col.Floats = v
+		}
+		cols[i] = col
+	}
+	h5ds, err := g.CreateCompoundDataset(name, t.Rows, cols)
+	if err != nil {
+		return &extension.Error{Path: path, Message: err.Error()}
+	}
+	err = writeAttrs(h5ds, t.Attrs, path)
+	h5ds.Close()
+	return err
+}
+
 func writeAttrs(h attrHost, attrs map[string]extension.Attr, path string) error {
 	for name, a := range attrs {
 		if err := h.WriteTypedAttr(name, typedFromAttr(a)); err != nil {
@@ -215,6 +287,11 @@ func writeGroup(g *h5c.Group, t *extension.Tree, path string) error {
 		err = writeAttrs(h5ds, ds.Attrs, dsPath)
 		h5ds.Close()
 		if err != nil {
+			return err
+		}
+	}
+	for name, table := range t.Tables {
+		if err := writeTable(g, name, table, joinPath(path, name)); err != nil {
 			return err
 		}
 	}

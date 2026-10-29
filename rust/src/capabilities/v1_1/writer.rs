@@ -131,11 +131,6 @@ impl<'a> Hdf5WriterV1_1<'a> {
     }
 
     /// Writes the config to `path`, creating or overwriting the file.
-    ///
-    /// Returns `Err(MachineConfigError::ConsolidateConflict)` if the model's
-    /// ClearBox-bearing trains disagree on `Output_Path` or
-    /// `Software_Trigger_Delay` — see `docs/migrations/v1_0_to_v1_1.md` Change 1's
-    /// "Consolidate conflict rule".
     pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         self.validate_extensions()?;
         let f = H5File::create(path)?;
@@ -146,7 +141,7 @@ impl<'a> Hdf5WriterV1_1<'a> {
         self.write_machine_attrs(&machine_grp)?;
         let trains_grp = machine_grp.create_group("Optical_Trains")?;
 
-        self.write_optical_trains(&f, &trains_grp)?;
+        self.write_optical_trains(&trains_grp)?;
 
         if !self.config.extensions.is_empty() {
             let extensions_grp = ensure_group(&f.group("/")?, layout::ROOT_EXTENSIONS)?;
@@ -159,15 +154,7 @@ impl<'a> Hdf5WriterV1_1<'a> {
 
     /// Runs before the output file is created, so a rejected config never leaves a partial file.
     fn validate_extensions(&self) -> Result<()> {
-        validate_extension_trees(&self.config.extensions)?;
-        for name in self.config.extensions.keys() {
-            if layout::MODELLED_EXTENSION_NAMES.contains(&name.as_str()) {
-                return Err(MachineConfigError::InvalidExtension(format!(
-                    "Extension \"{name}\" is modelled by core and cannot be written as an extension tree"
-                )));
-            }
-        }
-        Ok(())
+        validate_extension_trees(&self.config.extensions)
     }
 
     // ------------------------------------------------------------------
@@ -222,39 +209,8 @@ impl<'a> Hdf5WriterV1_1<'a> {
     // Optical trains
     // ------------------------------------------------------------------
 
-    fn write_optical_trains(&self, f: &H5File, trains_grp: &Group) -> Result<()> {
-        let trains = &self.config.optical_trains;
-        let trains_with_clearbox: Vec<(String, &ClearBox)> = trains
-            .iter()
-            .enumerate()
-            .filter_map(|(i, t)| {
-                t.optional_components.clearbox.as_ref().map(|cb| (layout::train_id(i), cb))
-            })
-            .collect();
-
-        let clearbox_root: Option<Group> = if !trains_with_clearbox.is_empty() {
-            let output_path = consolidate_field(
-                &trains_with_clearbox,
-                "Output_Path",
-                |cb| cb.output_path.clone(),
-                |v| v.clone().unwrap_or_default(),
-            )?;
-            let software_trigger_delay = consolidate_field(
-                &trains_with_clearbox,
-                "Software_Trigger_Delay",
-                |cb| cb.software_trigger_delay,
-                |v| v.map(|x| x.to_string()).unwrap_or_default(),
-            )?;
-            let extensions = ensure_group(&f.group("/")?, layout::ROOT_EXTENSIONS)?;
-            let cb_root = ensure_group(&extensions, "ClearBox")?;
-            ws(&cb_root, "Output_Path", &output_path.unwrap_or_default())?;
-            wi(&cb_root, "Software_Trigger_Delay", software_trigger_delay)?;
-            Some(cb_root)
-        } else {
-            None
-        };
-
-        for (i, train) in trains.iter().enumerate() {
+    fn write_optical_trains(&self, trains_grp: &Group) -> Result<()> {
+        for (i, train) in self.config.optical_trains.iter().enumerate() {
             let tid = layout::train_id(i);
             let train_grp = trains_grp.create_group(&tid)?;
             self.write_train_attrs(&train_grp, train)?;
@@ -272,13 +228,6 @@ impl<'a> Hdf5WriterV1_1<'a> {
                 &train_grp.create_group(layout::GROUP_SCANNER_CARD)?,
                 &train.scanner_card,
             )?;
-
-            if let Some(cb) = &train.optional_components.clearbox {
-                let cb_root = clearbox_root
-                    .as_ref()
-                    .expect("clearbox_root must exist whenever a train has a ClearBox");
-                self.write_clearbox(cb_root, &tid, cb)?;
-            }
 
             if let Some(sfcf) = &train.scan_field_correction_file {
                 self.write_sfcf(&train_grp, sfcf)?;
@@ -513,110 +462,6 @@ impl<'a> Hdf5WriterV1_1<'a> {
         Ok(())
     }
 
-    /// Writes only the per-train subset — `Output_Path`/`Software_Trigger_Delay`
-    /// are written once, at `Extensions/ClearBox/` itself, by
-    /// [`Self::write_optical_trains`] before this is called.
-    fn write_clearbox(&self, cb_root: &Group, tid: &str, cb: &ClearBox) -> Result<()> {
-        let grp = cb_root.create_group(tid)?;
-        ws(&grp, "Ip_Address", &cb.ip_address)?;
-        ws(&grp, "Serial_Number", cb.serial_number.as_deref().unwrap_or(""))?;
-        wi(&grp, "Data_Port", cb.data_port)?;
-        wi(&grp, "Server_Port", cb.server_port)?;
-        wi(&grp, "Actual_Timing_Offset", cb.actual_timing_offset)?;
-        wi(&grp, "Commanded_Timing_Offset", cb.commanded_timing_offset)?;
-        ws(&grp, "Manufacturer", cb.manufacturer.as_deref().unwrap_or(""))?;
-        ws(&grp, "Model", cb.model.as_deref().unwrap_or(""))?;
-        ws(&grp, "Firmware_Version", cb.firmware_version.as_deref().unwrap_or(""))?;
-
-        let cd_arr = nested_to_array3(&cb.correction_data);
-        let shape = cd_arr.shape().to_owned();
-        let cd_ds = grp.new_dataset_builder().with_data(&cd_arr).create(layout::DS_CORRECTION_DATA)?;
-        ws_ds(&cd_ds, "dimensions", "H,W,D")?;
-        ws_ds(&cd_ds, "dtype", "float64")?;
-        ws_ds(&cd_ds, "shape", &format!("{}x{}x{}", shape[0], shape[1], shape[2]))?;
-
-        let icd_arr = nested_to_array3(&cb.inverse_correction_data);
-        let icd_shape = icd_arr.shape().to_owned();
-        let icd_ds = grp
-            .new_dataset_builder()
-            .with_data(&icd_arr)
-            .create(layout::DS_INVERSE_CORRECTION_DATA)?;
-        ws_ds(&icd_ds, "dimensions", "H,W,D")?;
-        ws_ds(&icd_ds, "dtype", "float64")?;
-        ws_ds(&icd_ds, "shape", &format!("{}x{}x{}", icd_shape[0], icd_shape[1], icd_shape[2]))?;
-
-        if !cb.synchronous_sensors.is_empty() {
-            let sensors_grp = grp.create_group("Synchronous_Sensors")?;
-            for (name, sensor) in &cb.synchronous_sensors {
-                self.write_synchronous_sensor(&sensors_grp.create_group(name)?, sensor)?;
-            }
-        }
-
-        // power_characterization is the only StableModel representation of
-        // this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md), so
-        // there's nothing else to fall back to deriving from.
-        self.write_power_characterization(
-            &grp.create_group(layout::GROUP_POWER_CHARACTERIZATION)?,
-            cb.power_characterization.as_ref(),
-        )?;
-
-        Ok(())
-    }
-
-    fn write_synchronous_sensor(&self, grp: &Group, sensor: &SynchronousSensor) -> Result<()> {
-        wb(grp, "Enabled", sensor.enabled)?;
-        ws(grp, "Sensor_Name", sensor.sensor_name.as_deref().unwrap_or(""))?;
-        wf(grp, "Sensor_Output_Range_Low", sensor.sensor_output_range_low)?;
-        wf(grp, "Sensor_Output_Range_High", sensor.sensor_output_range_high)?;
-        ws(grp, "Sensor_Output_Space", sensor.sensor_output_space.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Model", sensor.sensor_model.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Manufacturer", sensor.sensor_manufacturer.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Scope", sensor.sensor_scope.as_deref().unwrap_or(""))?;
-        ws(grp, "Units_Derived_Quantity", sensor.units_derived_quantity.as_deref().unwrap_or(""))?;
-        wi(grp, "Port_ID", sensor.port_id)?;
-        ws(grp, "Sensor_Type", sensor.sensor_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Input_Type", sensor.input_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Algorithm_Type", sensor.algorithm_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Algorithm_Equation", sensor.algorithm_equation.as_deref().unwrap_or(""))?;
-        ws(grp, "Calibration_Source", sensor.calibration_source.as_deref().unwrap_or(""))?;
-        wb(grp, "Calibration_Verified", sensor.calibration_verified)?;
-        wf(grp, "Sample_Period", sensor.sample_period)?;
-        ws(grp, "Metadata", sensor.metadata.as_deref().unwrap_or(""))?;
-
-        // UTF-8, not ASCII — matches v1.0's own established convention for
-        // this group (see `RawEquationConstant`'s doc comment in
-        // `v1_1/hdf5.rs`); distinct from Power_Characterization's ASCII
-        // convention above.
-        let const_rows: Vec<RawEquationConstant> = sensor
-            .derivation_equation_constants
-            .iter()
-            .map(|c| -> Result<RawEquationConstant> {
-                Ok(RawEquationConstant {
-                    name: c.name.parse().map_err(|e| {
-                        MachineConfigError::Parse(format!(
-                            "Derivation_Equation_Constants name {:?} does not fit in a \
-                             {EQUATION_CONSTANT_NAME_MAX_BYTES}-byte FixedUnicode field: {e:?}",
-                            c.name
-                        ))
-                    })?,
-                    value: c.value,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let const_arr = Array1::from(const_rows);
-        grp.new_dataset_builder().with_data(&const_arr).create("Derivation_Equation_Constants")?;
-
-        let point_rows: Vec<RawCalibrationPoint> = sensor
-            .calibration_points
-            .iter()
-            .map(|p| RawCalibrationPoint { input_value: p.input_value, output_value: p.output_value })
-            .collect();
-        let point_arr = Array1::from(point_rows);
-        grp.new_dataset_builder().with_data(&point_arr).create("Calibration_Points")?;
-
-        Ok(())
-    }
-
     fn write_sfcf(&self, train_grp: &Group, sfcf: &ScanFieldCorrectionFile) -> Result<()> {
         let data: Vec<u8> = match &sfcf.raw_bytes {
             Some(b) => b.clone(),
@@ -637,27 +482,6 @@ impl<'a> Hdf5WriterV1_1<'a> {
         Ok(())
     }
 
-}
-
-/// Change 1 (Consolidate): collect `field` from every ClearBox-bearing train
-/// (via `getter`); hard error (formatted via `fmt`) if they disagree. See
-/// `docs/migrations/v1_0_to_v1_1.md` Change 1's "Consolidate conflict rule" for
-/// the exact message format.
-fn consolidate_field<T: Clone + PartialEq>(
-    trains_with_clearbox: &[(String, &ClearBox)],
-    field_name: &'static str,
-    getter: impl Fn(&ClearBox) -> T,
-    fmt: impl Fn(&T) -> String,
-) -> Result<T> {
-    let values: Vec<(String, T)> =
-        trains_with_clearbox.iter().map(|(tid, cb)| (tid.clone(), getter(cb))).collect();
-    let first = values[0].1.clone();
-    if values.iter().all(|(_, v)| *v == first) {
-        return Ok(first);
-    }
-    let detail =
-        values.iter().map(|(tid, v)| format!("{tid}={}", fmt(v))).collect::<Vec<_>>().join(", ");
-    Err(MachineConfigError::ConsolidateConflict { field: field_name, detail })
 }
 
 impl<'a> WriterAdapter for Hdf5WriterV1_1<'a> {

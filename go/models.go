@@ -15,7 +15,6 @@ func IntPtr(i int) *int { return &i }
 func BoolPtr(b bool) *bool { return &b }
 
 type (
-	CorrectionData          = models.CorrectionData
 	MachineConfig           = models.MachineConfig
 	MachineConfigMeta       = models.MachineConfigMeta
 	BuildPlate              = models.BuildPlate
@@ -26,9 +25,6 @@ type (
 	LightSource             = models.LightSource
 	Collimator              = models.Collimator
 	ScannerCard             = models.ScannerCard
-	OptionalComponents      = models.OptionalComponents
-	ClearBox                = models.ClearBox
-	SynchronousSensor       = models.SynchronousSensor
 	EquationConstant        = models.EquationConstant
 	CalibrationPoint        = models.CalibrationPoint
 	PowerCharacterization   = models.PowerCharacterization

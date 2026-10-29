@@ -67,8 +67,22 @@ jobs:
         run: |
           python - <<'EOF'
           import json, os, pathlib, sys
-          golden = json.loads(pathlib.Path("fixtures/reference_output.json").read_text())
-          ci_out = json.loads(pathlib.Path(os.environ["RUNNER_TEMP"]).joinpath("reference_output_ci.json").read_text())
+
+          def strip(v):
+              # The golden keeps extension datasets' metadata only (grids are ~27 MB of data).
+              if isinstance(v, dict):
+                  for ds in (v.get("datasets") or {}).values():
+                      if isinstance(ds, dict):
+                          ds.pop("data", None)
+                  for x in v.values():
+                      strip(x)
+              elif isinstance(v, list):
+                  for x in v:
+                      strip(x)
+              return v
+
+          golden = strip(json.loads(pathlib.Path("fixtures/reference_output.json").read_text()))
+          ci_out = strip(json.loads(pathlib.Path(os.environ["RUNNER_TEMP"]).joinpath("reference_output_ci.json").read_text()))
           if golden != ci_out:
               print("FAIL: CLI export does not match committed golden file.")
               sys.exit(1)

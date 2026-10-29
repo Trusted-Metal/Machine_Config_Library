@@ -27,9 +27,6 @@ type File interface {
 	SetMeta(model machineconfig.MachineConfigMeta, mode SetMode) *Error
 	GetScanner(index int) (machineconfig.Scanner, *Error)
 	SetScanner(index int, model machineconfig.Scanner, mode SetMode) *Error
-	GetClearbox(index int) (machineconfig.ClearBox, *Error)
-	GetCorrectionData(index int) (*machineconfig.CorrectionData, *Error)
-	GetInverseCorrectionData(index int) (*machineconfig.CorrectionData, *Error)
 	IsValid() bool
 	Save(path string) *Error
 	Close()

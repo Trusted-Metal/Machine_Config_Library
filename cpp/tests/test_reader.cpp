@@ -6,6 +6,7 @@
 #include <picosha2.h>
 #include <highfive/H5File.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <stdexcept>
@@ -13,6 +14,7 @@
 
 #include "machine_config/capabilities.hpp"
 #include "machine_config/reader.hpp"
+#include "clearbox_helpers.hpp"
 
 #ifndef FIXTURES_DIR
 #  error "FIXTURES_DIR must be defined by tests/CMakeLists.txt"
@@ -81,50 +83,54 @@ TEST_CASE("TrainZeroScannerOffsets") {
     REQUIRE_THAT(*s.scan_head_offset_y, Catch::Matchers::WithinRel(23.5));
 }
 
-// §4.10: ClearBoxPresentForBothTrains — reference fixture has ClearBox on both trains
+// ClearBox is exposed as the opaque "ClearBox" extension tree: shared values on the root, one
+// child per train.
 TEST_CASE("ClearBoxPresentForBothTrains") {
     MachineConfigReader reader{REF};
     auto cfg = reader.parse();
-    REQUIRE(cfg.optical_trains[0].optional_components.clearbox.has_value());
-    REQUIRE(cfg.optical_trains[1].optional_components.clearbox.has_value());
+    const auto& root = cbtest::clearboxRoot(cfg);
+    REQUIRE(root.children.size() == 2);
+    REQUIRE(root.children.count("Optical_Train_01") == 1);
+    REQUIRE(root.children.count("Optical_Train_02") == 1);
 }
 
-// §4.10: ClearBoxIpAddress — each train has a distinct IP
+// Each train has a distinct IP.
 TEST_CASE("ClearBoxIpAddress") {
     MachineConfigReader reader{REF};
     auto cfg = reader.parse();
-    REQUIRE(cfg.optical_trains[0].optional_components.clearbox->ip_address == "192.168.1.10");
-    REQUIRE(cfg.optical_trains[1].optional_components.clearbox->ip_address == "192.168.1.11");
+    REQUIRE(cbtest::text(cbtest::clearbox(cfg, 0), "Ip_Address") == "192.168.1.10");
+    REQUIRE(cbtest::text(cbtest::clearbox(cfg, 1), "Ip_Address") == "192.168.1.11");
 }
 
-// §4.10: ClearBoxScalars — scalar fields parse correctly; correction grids remain null (§4.11)
 TEST_CASE("ClearBoxScalars") {
     MachineConfigReader reader{REF};
     auto cfg = reader.parse();
-    const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
-    REQUIRE(cb.serial_number     == std::optional<std::string>{"001"});
-    REQUIRE(cb.data_port         == std::optional<int64_t>{5001});
-    REQUIRE(cb.server_port       == std::optional<int64_t>{20101});
-    REQUIRE(cb.actual_timing_offset    == std::optional<int64_t>{-8});
-    REQUIRE(cb.commanded_timing_offset == std::optional<int64_t>{50});
-    REQUIRE(cb.show_console      == std::optional<bool>{false});
-    REQUIRE(cb.software_trigger_delay == std::optional<int64_t>{3000});
-    REQUIRE(cb.power_characterization.has_value());
-    REQUIRE(cb.power_characterization->algorithm_type == std::optional<std::string>{"LINEAR"});
-    // correction_data and inverse_correction_data deferred to §4.11
-    REQUIRE_FALSE(cb.correction_data.has_value());
-    REQUIRE_FALSE(cb.inverse_correction_data.has_value());
+    const auto& cb = cbtest::clearbox(cfg, 0);
+    std::int64_t v = 0;
+    REQUIRE(cbtest::text(cb, "Serial_Number") == "001");
+    REQUIRE(cbtest::integer(cb, "Data_Port", v)); REQUIRE(v == 5001);
+    REQUIRE(cbtest::integer(cb, "Server_Port", v)); REQUIRE(v == 20101);
+    REQUIRE(cbtest::integer(cb, "Actual_Timing_Offset", v)); REQUIRE(v == -8);
+    REQUIRE(cbtest::integer(cb, "Commanded_Timing_Offset", v)); REQUIRE(v == 50);
+    // v1.0-only attributes ride along; the flat Volts_To_Watts fields became Power_Characterization.
+    REQUIRE(cbtest::integer(cb, "Show_Console", v)); REQUIRE(v == 0);
+    REQUIRE_FALSE(cbtest::hasAttr(cb, "Volts_To_Watts_Algorithm"));
+    REQUIRE(cbtest::text(cbtest::powerCharacterization(cfg, 0), "Algorithm_Type") == "LINEAR");
+    // The two shared values live on the extension root, once.
+    const auto& root = cbtest::clearboxRoot(cfg);
+    REQUIRE(cbtest::text(root, "Output_Path") == "/recordings/");
+    REQUIRE(cbtest::integer(root, "Software_Trigger_Delay", v)); REQUIRE(v == 3000);
+    REQUIRE_FALSE(cbtest::hasAttr(cb, "Output_Path"));
 }
 
 // ---------------------------------------------------------------------------
-// SynchronousSensor
+// Synchronous sensors
 // ---------------------------------------------------------------------------
 
-TEST_CASE("SynchronousSensorsEmptyWhenFixtureHasNone") {
+TEST_CASE("SynchronousSensorsAbsentWhenFixtureHasNone") {
     MachineConfigReader reader{REF};
     auto cfg = reader.parse();
-    const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
-    REQUIRE(cb.synchronous_sensors.empty());
+    REQUIRE(cbtest::clearbox(cfg, 0).children.count("Synchronous_Sensors") == 0);
 }
 
 // reference_config_synchronous_sensors.h5, not reference_config.h5, which
@@ -132,64 +138,61 @@ TEST_CASE("SynchronousSensorsEmptyWhenFixtureHasNone") {
 TEST_CASE("SynchronousSensorFixtureHasRealValues") {
     MachineConfigReader reader{SENSORS_REF};
     auto cfg = reader.parse();
-    const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
-    REQUIRE(cb.synchronous_sensors.size() == 1);
-    REQUIRE(cb.synchronous_sensors.count("Oxygen Sensor") == 1);
-    const auto& s = cb.synchronous_sensors.at("Oxygen Sensor");
+    const auto& sensors = cbtest::clearbox(cfg, 0).children.at("Synchronous_Sensors").children;
+    REQUIRE(sensors.size() == 1);
+    REQUIRE(sensors.count("Oxygen Sensor") == 1);
+    const auto& s = sensors.at("Oxygen Sensor");
 
-    REQUIRE(s.enabled == std::optional<bool>{true});
-    REQUIRE(s.sensor_name == std::optional<std::string>{"ZR800 Oxygen Analyzer"});
-    REQUIRE(s.sensor_output_range_low == std::optional<double>{-1.0});
-    REQUIRE(s.sensor_output_range_high == std::optional<double>{6.0});
-    REQUIRE(s.sensor_output_space == std::optional<std::string>{"log10(ppm)"});
-    REQUIRE(s.sensor_model == std::optional<std::string>{"ZR810"});
-    REQUIRE(s.sensor_manufacturer == std::optional<std::string>{"Industrial Physics"});
-    REQUIRE(s.sensor_scope == std::optional<std::string>{"Global"});
-    REQUIRE(s.units_derived_quantity == std::optional<std::string>{"ppm"});
-    REQUIRE(s.port_id == std::optional<int64_t>{5});
-    REQUIRE(s.sensor_type == std::optional<std::string>{"Oxygen Sensor"});
-    REQUIRE(s.input_type == std::optional<std::string>{"4-20 mA"});
-    REQUIRE(s.algorithm_type == std::optional<std::string>{"Log-Linear"});
-    REQUIRE(s.algorithm_equation == std::optional<std::string>{"log(ppm) = a*mA + b"});
-    REQUIRE(s.calibration_source == std::optional<std::string>{"Datasheet"});
-    REQUIRE(s.calibration_verified == std::optional<bool>{false});
-    REQUIRE(s.sample_period == std::optional<double>{5.0});
-    REQUIRE(s.metadata.has_value());
-    REQUIRE(s.metadata->find("Synchronous Sensor because Clearbox is responsible") !=
+    REQUIRE(cbtest::text(s, "Sensor_Name") == "ZR800 Oxygen Analyzer");
+    double d = 0;
+    REQUIRE(cbtest::real(s, "Sensor_Output_Range_Low", d)); REQUIRE(d == -1.0);
+    REQUIRE(cbtest::real(s, "Sensor_Output_Range_High", d)); REQUIRE(d == 6.0);
+    REQUIRE(cbtest::text(s, "Sensor_Output_Space") == "log10(ppm)");
+    REQUIRE(cbtest::text(s, "Sensor_Model") == "ZR810");
+    REQUIRE(cbtest::text(s, "Sensor_Manufacturer") == "Industrial Physics");
+    REQUIRE(cbtest::text(s, "Sensor_Scope") == "Global");
+    REQUIRE(cbtest::text(s, "Units_Derived_Quantity") == "ppm");
+    std::int64_t i = 0;
+    REQUIRE(cbtest::integer(s, "Port_ID", i)); REQUIRE(i == 5);
+    REQUIRE(cbtest::text(s, "Sensor_Type") == "Oxygen Sensor");
+    REQUIRE(cbtest::text(s, "Input_Type") == "4-20 mA");
+    REQUIRE(cbtest::text(s, "Algorithm_Type") == "Log-Linear");
+    REQUIRE(cbtest::text(s, "Algorithm_Equation") == "log(ppm) = a*mA + b");
+    REQUIRE(cbtest::text(s, "Calibration_Source") == "Datasheet");
+    REQUIRE(cbtest::real(s, "Sample_Period", d)); REQUIRE(d == 5.0);
+    REQUIRE(cbtest::text(s, "Metadata").find("Synchronous Sensor because Clearbox is responsible") !=
             std::string::npos);
 
-    REQUIRE(s.derivation_equation_constants.size() == 2);
-    REQUIRE(s.derivation_equation_constants[0].name == "a");
-    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
-    REQUIRE(s.derivation_equation_constants[1].name == "b");
-    REQUIRE(s.derivation_equation_constants[1].value == -2.75);
+    const auto constants = cbtest::constants(s);
+    REQUIRE(constants.size() == 2);
+    REQUIRE(constants[0].first == "a");
+    REQUIRE(constants[0].second == 0.4375);
+    REQUIRE(constants[1].first == "b");
+    REQUIRE(constants[1].second == -2.75);
 
-    REQUIRE(s.calibration_points.size() == 2);
-    REQUIRE(s.calibration_points[0].input_value == 4.0);
-    REQUIRE(s.calibration_points[0].output_value == -1.0);
-    REQUIRE(s.calibration_points[1].input_value == 20.0);
-    REQUIRE(s.calibration_points[1].output_value == 6.0);
+    const auto& points = s.tables.at("Calibration_Points");
+    const auto& in = std::get<std::vector<double>>(points.columns.at("input_value"));
+    const auto& out = std::get<std::vector<double>>(points.columns.at("output_value"));
+    REQUIRE(in == std::vector<double>{4.0, 20.0});
+    REQUIRE(out == std::vector<double>{-1.0, 6.0});
 
     // log(ppm) = a*mA + b, per algorithm_equation — proves the points are
     // recorded in Sensor_Output_Space (log10(ppm)) units, not the linear
     // Units_Derived_Quantity (ppm) units of the same underlying quantity.
-    double a = s.derivation_equation_constants[0].value;
-    double b = s.derivation_equation_constants[1].value;
-    for (const auto& p : s.calibration_points) {
-        REQUIRE(std::abs(a * p.input_value + b - p.output_value) < 1e-10);
-    }
+    for (std::size_t k = 0; k < in.size(); ++k)
+        REQUIRE(std::abs(constants[0].second * in[k] + constants[1].second - out[k]) < 1e-10);
 }
 
 TEST_CASE("CombinedOpcuaAndSynchronousSensorsFixtureHasBoth") {
     MachineConfigReader reader{OPCUA_SENSORS_REF};
     auto cfg = reader.parse();
     REQUIRE(cfg.extensions.count("TM_OPCUA") == 1);
-    const auto& cb = *cfg.optical_trains[0].optional_components.clearbox;
-    REQUIRE(cb.synchronous_sensors.count("Oxygen Sensor") == 1);
-    const auto& s = cb.synchronous_sensors.at("Oxygen Sensor");
-    REQUIRE(s.derivation_equation_constants.size() == 2);
-    REQUIRE(s.derivation_equation_constants[0].name == "a");
-    REQUIRE(s.derivation_equation_constants[0].value == 0.4375);
+    const auto& sensors = cbtest::clearbox(cfg, 0).children.at("Synchronous_Sensors").children;
+    REQUIRE(sensors.count("Oxygen Sensor") == 1);
+    const auto constants = cbtest::constants(sensors.at("Oxygen Sensor"));
+    REQUIRE(constants.size() == 2);
+    REQUIRE(constants[0].first == "a");
+    REQUIRE(constants[0].second == 0.4375);
 }
 
 // §4.9: AxisConfig3DNoFocus — reference fixture is Axis_Configuration='3D':
@@ -227,30 +230,30 @@ TEST_CASE("ScannerInvertFlagsOmittedFromJSONWhenFalse") {
     REQUIRE_FALSE(j.contains("invert_commanded_y"));
 }
 
-// §4.11: CorrectionDataShape — 3-D grid for train 0 has the canonical dimensions.
+// ClearBox's correction grids are ordinary extension datasets: 3-D, canonical dimensions.
 TEST_CASE("CorrectionDataShape") {
     MachineConfigReader reader{REF};
-    auto cd = reader.getCorrectionData(0);
-    REQUIRE(cd.shape[0] == 257);
-    REQUIRE(cd.shape[1] == 257);
-    REQUIRE(cd.shape[2] == 2);
+    auto cfg = reader.parse();
+    std::vector<std::uint64_t> shape;
+    cbtest::grid(cfg, 0, "Correction_Data", &shape);
+    REQUIRE((shape == std::vector<std::uint64_t>{257, 257, 2}));
 }
 
-// §4.11: CorrectionDataSize — flat buffer has exactly d0*d1*d2 elements.
 TEST_CASE("CorrectionDataSize") {
     MachineConfigReader reader{REF};
-    auto cd = reader.getCorrectionData(0);
-    REQUIRE(cd.data.size() == 257 * 257 * 2);
+    auto cfg = reader.parse();
+    REQUIRE(cbtest::grid(cfg, 0, "Correction_Data").size() == 257 * 257 * 2);
 }
 
-// §4.11: CorrectionHashMatchesReference — SHA-256 of flat LE float64 bytes.
+// SHA-256 of flat LE float64 bytes.
 TEST_CASE("CorrectionHashMatchesReference") {
     static const std::string EXPECTED =
         "b3b95bf5d5e73119ad8c632e6f5b44ba3beada6f054e04797afd6f193f2cebc6";
     MachineConfigReader reader{REF};
-    auto cd = reader.getCorrectionData(0);
-    const auto* begin = reinterpret_cast<const uint8_t*>(cd.data.data());
-    const auto* end   = begin + cd.data.size() * sizeof(double);
+    auto cfg = reader.parse();
+    const auto& data = cbtest::grid(cfg, 0, "Correction_Data");
+    const auto* begin = reinterpret_cast<const uint8_t*>(data.data());
+    const auto* end   = begin + data.size() * sizeof(double);
     REQUIRE(picosha2::hash256_hex_string(begin, end) == EXPECTED);
 }
 
@@ -367,14 +370,14 @@ TEST_CASE("ScanFieldCorrectionFileScalars") {
 // Binary API completeness
 // ---------------------------------------------------------------------------
 
-// Verify the inverse grid is also readable and has the same dimensions.
+// Verify the inverse grid is also present and has the same dimensions.
 TEST_CASE("InverseCorrectionDataShape") {
     MachineConfigReader reader{REF};
-    auto inv = reader.getInverseCorrectionData(0);
-    REQUIRE(inv.shape[0] == 257);
-    REQUIRE(inv.shape[1] == 257);
-    REQUIRE(inv.shape[2] == 2);
-    REQUIRE(inv.data.size() == 257 * 257 * 2);
+    auto cfg = reader.parse();
+    std::vector<std::uint64_t> shape;
+    const auto& inv = cbtest::grid(cfg, 0, "Inverse_Correction_Data", &shape);
+    REQUIRE((shape == std::vector<std::uint64_t>{257, 257, 2}));
+    REQUIRE(inv.size() == 257 * 257 * 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -390,8 +393,10 @@ TEST_CASE("ToJsonTopLevelStructure") {
     REQUIRE(j.contains("optical_trains"));
     REQUIRE(j["optical_trains"].is_array());
     REQUIRE(j["optical_trains"].size() == 2);
-    // opcua key must be absent (not null) when no OPCUA group exists.
-    REQUIRE_FALSE(j.contains("extensions"));
+    // Only the ClearBox extension exists on the reference fixture (no OPCUA group).
+    REQUIRE(j.contains("extensions"));
+    REQUIRE(j["extensions"].size() == 1);
+    REQUIRE(j["extensions"].contains("ClearBox"));
 }
 
 // ---------------------------------------------------------------------------
@@ -454,38 +459,37 @@ TEST_CASE("ScannerSerialNumberNonEmpty") {
 // preserve them, not silently convert to 0 or throw.
 TEST_CASE("CorrectionDataHasNaN") {
     MachineConfigReader reader{REF};
-    auto cd = reader.getCorrectionData(0);
-    auto it = std::find_if(cd.data.begin(), cd.data.end(),
-                           [](double v) { return std::isnan(v); });
-    REQUIRE(it != cd.data.end());
+    auto cfg = reader.parse();
+    const auto& data = cbtest::grid(cfg, 0, "Correction_Data");
+    auto it = std::find_if(data.begin(), data.end(), [](double v) { return std::isnan(v); });
+    REQUIRE(it != data.end());
 }
 
 // Forward and inverse grids are distinct datasets; reading one must not alias
 // the other.
 TEST_CASE("ForwardAndInverseCorrectionDataDiffer") {
     MachineConfigReader reader{REF};
-    auto fwd = reader.getCorrectionData(0);
-    auto inv = reader.getInverseCorrectionData(0);
-    REQUIRE(fwd.shape == inv.shape);
+    auto cfg = reader.parse();
+    const auto& fwd = cbtest::grid(cfg, 0, "Correction_Data");
+    const auto& inv = cbtest::grid(cfg, 0, "Inverse_Correction_Data");
+    REQUIRE(fwd.size() == inv.size());
     bool any_differs = false;
-    for (size_t i = 0; i < fwd.data.size() && !any_differs; ++i) {
-        if (!std::isnan(fwd.data[i]) && !std::isnan(inv.data[i]))
-            any_differs = (fwd.data[i] != inv.data[i]);
+    for (size_t i = 0; i < fwd.size() && !any_differs; ++i) {
+        if (!std::isnan(fwd[i]) && !std::isnan(inv[i])) any_differs = (fwd[i] != inv[i]);
     }
     REQUIRE(any_differs);
 }
 
-// Per-train correction data must be distinct; getCorrectionData(0) and (1)
-// must read different HDF5 datasets.
+// Per-train correction data must be distinct.
 TEST_CASE("Train0AndTrain1CorrectionDataDiffer") {
     MachineConfigReader reader{REF};
-    auto cd0 = reader.getCorrectionData(0);
-    auto cd1 = reader.getCorrectionData(1);
-    REQUIRE(cd0.shape == cd1.shape);
+    auto cfg = reader.parse();
+    const auto& cd0 = cbtest::grid(cfg, 0, "Correction_Data");
+    const auto& cd1 = cbtest::grid(cfg, 1, "Correction_Data");
+    REQUIRE(cd0.size() == cd1.size());
     bool any_differs = false;
-    for (size_t i = 0; i < cd0.data.size() && !any_differs; ++i) {
-        if (!std::isnan(cd0.data[i]) && !std::isnan(cd1.data[i]))
-            any_differs = (cd0.data[i] != cd1.data[i]);
+    for (size_t i = 0; i < cd0.size() && !any_differs; ++i) {
+        if (!std::isnan(cd0[i]) && !std::isnan(cd1[i])) any_differs = (cd0[i] != cd1[i]);
     }
     REQUIRE(any_differs);
 }
@@ -512,8 +516,9 @@ TEST_CASE("SyntheticFixtureParsesCorrectly") {
     REQUIRE(cfg.optical_trains.size() == 2);
     REQUIRE(cfg.optical_trains[0].train_id == "Optical_Train_01");
     REQUIRE(cfg.optical_trains[1].train_id == "Optical_Train_02");
-    // Synthetic fixture has no OPCUA group.
-    REQUIRE(cfg.extensions.empty());
+    // Synthetic fixture has no OPCUA group; only the shimmed ClearBox extension.
+    REQUIRE(cfg.extensions.size() == 1);
+    REQUIRE(cfg.extensions.count("ClearBox") == 1);
     // Basic scanner sanity check.
     REQUIRE_THAT(*cfg.optical_trains[0].scanner.working_distance,
                  Catch::Matchers::WithinRel(670.0));

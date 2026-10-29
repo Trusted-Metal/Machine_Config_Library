@@ -213,14 +213,15 @@ describe('core read/write of extension trees', () => {
   });
 
   it('reads the TM_OPCUA group of a v1.1 file like any other extension', () => {
-    expect(Object.keys(base.extensions ?? {})).toEqual(['TM_OPCUA']);
+    expect(Object.keys(base.extensions ?? {}).sort()).toEqual(['ClearBox', 'TM_OPCUA']);
     expect(base).not.toHaveProperty('opcua');
   });
 
-  it('does not list ClearBox, which core still models, and rejects writing it as a tree', async () => {
-    await expect(
-      new MachineConfigWriter(withExtensions({ ClearBox: emptyExtensionTree() }), '1.1').write(tmpH5()),
-    ).rejects.toThrow(/modelled by core/);
+  it('writes ClearBox as an ordinary extension tree', async () => {
+    const out = tmpH5();
+    await new MachineConfigWriter(withExtensions({ ClearBox: emptyExtensionTree() }), '1.1').write(out);
+    const again = await new MachineConfigReader(out).parse();
+    expect(again.extensions).toHaveProperty('ClearBox');
   });
 
   it('rejects an invalid tree before creating the output file', async () => {

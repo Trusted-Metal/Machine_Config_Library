@@ -19,12 +19,9 @@
 //! touched it," not "does this match some other system's proprietary
 //! algorithm."
 //!
-//! Binary correction-grid data (`correction_data`/`inverse_correction_data`/
-//! `raw_bytes`) is always excluded regardless of whether the `MachineConfig`
-//! passed in happens to carry it (e.g. a config obtained via
-//! `parse_with_binary()`) — a separate, dedicated mechanism
-//! (`correction-hash`) already exists for binary-grid integrity, and
-//! duplicating that here would be slow and redundant.
+//! The `.fc3` bytes (`raw_bytes`) are always excluded regardless of whether the `MachineConfig`
+//! passed in happens to carry them (e.g. a config obtained via `parse_with_binary()`). Extension
+//! trees are hashed in full through their canonical digest, ClearBox's correction grids included.
 
 use sha2::{Digest, Sha256};
 
@@ -35,10 +32,6 @@ use crate::models::MachineConfig;
 pub fn compute_configuration_hash(config: &MachineConfig) -> String {
     let mut config = config.clone();
     for train in &mut config.optical_trains {
-        if let Some(cb) = train.optional_components.clearbox.as_mut() {
-            cb.correction_data = None;
-            cb.inverse_correction_data = None;
-        }
         if let Some(sfcf) = train.scan_field_correction_file.as_mut() {
             sfcf.raw_bytes = None;
         }

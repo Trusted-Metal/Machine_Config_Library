@@ -3,11 +3,14 @@ import {
   assertValidExtensionTree,
   emptyExtensionTree,
   ExtensionContractError,
+  isExtensionDtype,
   typedArrayConstructorFor,
   type ExtensionAttr,
   type ExtensionDtype,
   type ExtensionNumericArray,
   type ExtensionScalar,
+  type ExtensionTable,
+  type ExtensionTableField,
   type ExtensionTree,
 } from "./contract.js";
 
@@ -52,6 +55,49 @@ function readAttrs(attrs: Record<string, h5wasm.Attribute>, path: string): Recor
   return out;
 }
 
+/** H5T_class_t values h5wasm reports in `Metadata.type`. */
+const H5T_INTEGER = 0;
+const H5T_FLOAT = 1;
+const H5T_STRING = 3;
+
+function memberField(m: h5wasm.CompoundMember, path: string): ExtensionTableField {
+  if (m.type === H5T_STRING) {
+    if (m.vlen) throw new ExtensionContractError(path, "variable-length strings are not supported in a compound type");
+    return { name: m.name, dtype: "utf8", size: m.size };
+  }
+  if (m.littleEndian === false) throw new ExtensionContractError(path, "big-endian compound members are not supported");
+  if (m.type === H5T_INTEGER) {
+    const bits = m.size * 8;
+    const dtype = `${m.signed ? "i" : "u"}${bits}`;
+    if (isExtensionDtype(dtype)) return { name: m.name, dtype };
+  } else if (m.type === H5T_FLOAT && (m.size === 4 || m.size === 8)) {
+    return { name: m.name, dtype: m.size === 4 ? "f32" : "f64" };
+  }
+  throw new ExtensionContractError(path, `unsupported compound member type (class ${m.type}, ${m.size} bytes)`);
+}
+
+function readTable(ds: h5wasm.Dataset, members: h5wasm.CompoundMember[], path: string): ExtensionTable {
+  const shape = ds.shape ?? [];
+  if (shape.length !== 1) throw new ExtensionContractError(path, `compound datasets must be 1-D, got rank ${shape.length}`);
+  const rows = shape[0];
+  const fields = members.map((m) => memberField(m, join(path, m.name)));
+  const raw = Array.isArray(ds.value) ? (ds.value as unknown[][]) : [];
+  const columns: Record<string, ExtensionNumericArray | string[]> = {};
+  fields.forEach((f, j) => {
+    if (f.dtype === "utf8") {
+      columns[f.name] = raw.map((row) => String(row[j]).replace(/\0+$/, ""));
+      return;
+    }
+    const col = new (typedArrayConstructorFor(f.dtype))(rows) as unknown as Record<number, unknown>;
+    const wide = f.dtype === "i64" || f.dtype === "u64";
+    raw.forEach((row, i) => {
+      col[i] = wide ? BigInt(row[j] as number | bigint) : row[j];
+    });
+    columns[f.name] = col as unknown as ExtensionNumericArray;
+  });
+  return { fields, rows, columns, attrs: readAttrs(ds.attrs as Record<string, h5wasm.Attribute>, path) };
+}
+
 /** Reads a group and everything below it verbatim. Unsupported HDF5 types fail loudly with their path. */
 export function readExtensionTree(group: h5wasm.Group, path = ""): ExtensionTree {
   const tree = emptyExtensionTree();
@@ -62,6 +108,11 @@ export function readExtensionTree(group: h5wasm.Group, path = ""): ExtensionTree
     if (entity instanceof h5wasm.Group) {
       tree.children[name] = readExtensionTree(entity, childPath);
     } else if (entity instanceof h5wasm.Dataset) {
+      const compound = entity.metadata.compound_type;
+      if (compound !== undefined) {
+        (tree.tables ??= {})[name] = readTable(entity, compound.members, childPath);
+        continue;
+      }
       const dtype = dtypeFromH5(entity.dtype, childPath);
       if (dtype === "utf8") throw new ExtensionContractError(childPath, "string datasets are not supported");
       const raw = entity.value;
@@ -110,6 +161,15 @@ function writeGroup(group: h5wasm.Group, tree: ExtensionTree): void {
   for (const [name, ds] of Object.entries(tree.datasets)) {
     group.create_dataset({ name, data: ds.data, shape: ds.shape, dtype: H5_DTYPE[ds.dtype] });
     writeAttrs(group.get(name) as h5wasm.Dataset, ds.attrs);
+  }
+  for (const [name, table] of Object.entries(tree.tables ?? {})) {
+    group.create_dataset({
+      name,
+      data: new Map<string, unknown>(table.fields.map((f) => [f.name, table.columns[f.name]])),
+      dtype: table.fields.map((f) => [f.name, f.dtype === "utf8" ? `S${f.size}` : H5_DTYPE[f.dtype]]),
+      shape: [table.rows],
+    });
+    writeAttrs(group.get(name) as h5wasm.Dataset, table.attrs);
   }
   for (const [name, child] of Object.entries(tree.children)) {
     writeGroup(group.create_group(name), child);

@@ -7,8 +7,8 @@
 // Key layout decisions:
 //   - Machine is FLAT (build_plate fields inlined, not nested); canonical field
 //     name is "build_plate_radius" (not "build_plate_corner_radius").
-//   - correction_data / inverse_correction_data / raw_bytes / opcua are OMITTED
-//     (not serialised as null) when absent.  All other optional fields → JSON null.
+//   - raw_bytes / opcua are OMITTED
+//     (not serialised as null) when absent.  All other optional fields -> JSON null.
 //   - Grid cells use std::optional<double>: nullopt = HDF5 NaN / out-of-field.
 //   - CorrectionData (flat buffer) is for binary ops only; not serialised to JSON.
 
@@ -55,75 +55,6 @@ inline std::optional<T> j_to_opt(const nlohmann::json& j, const char* key) {
 
 // Arbitrary non-schema HDF5 attributes preserved verbatim.
 using ExtraAttrs = nlohmann::json;
-
-// JSON representation of a correction grid cell.
-// nullopt = out-of-field position (HDF5 NaN); double = correction value.
-using GridCell = std::optional<double>;
-using Grid3D   = std::vector<std::vector<std::vector<GridCell>>>;
-
-// ---------------------------------------------------------------------------
-// CorrectionData — flat buffer for binary operations (correction-hash, copy-hdf5).
-// Not serialised to JSON directly; produced by MachineConfigReader::getCorrectionData().
-// ---------------------------------------------------------------------------
-
-struct CorrectionData {
-    // Flat row-major buffer.  Element at (i,j,k): data[i*shape[1]*shape[2] + j*shape[2] + k].
-    // NaN values represent out-of-field cells.
-    std::vector<double> data;
-    std::array<std::size_t, 3> shape; // {d0, d1, d2}, e.g. {257, 257, 2}
-};
-
-// ---------------------------------------------------------------------------
-// CorrectionData <-> Grid3D conversion helpers
-//
-// Live at the model layer rather than in a version-specific adapter: the
-// NaN<->nullopt convention is part of Grid3D's own shape, not an on-disk
-// detail of any particular File_Version, so every adapter can share it.
-// ---------------------------------------------------------------------------
-
-namespace detail {
-
-// Flat CorrectionData buffer -> nested Grid3D; NaN -> nullopt.
-inline Grid3D correctionDataToGrid3D(const CorrectionData& cd) {
-    auto d0 = cd.shape[0], d1 = cd.shape[1], d2 = cd.shape[2];
-    Grid3D grid(d0, std::vector<std::vector<GridCell>>(d1, std::vector<GridCell>(d2)));
-    for (std::size_t i = 0; i < d0; ++i)
-        for (std::size_t j = 0; j < d1; ++j)
-            for (std::size_t k = 0; k < d2; ++k) {
-                double v = cd.data[i * d1 * d2 + j * d2 + k];
-                grid[i][j][k] = std::isnan(v) ? GridCell{} : GridCell{v};
-            }
-    return grid;
-}
-
-// Grid3D -> flat row-major double buffer. nullopt cells become NaN.
-// Absent/empty Grid3D becomes a zero-filled default (257,257,2) array.
-inline std::vector<double> gridToFlat(const std::optional<Grid3D>& grid,
-                                       std::array<std::size_t, 3>& shape_out) {
-    constexpr std::size_t D0 = 257, D1 = 257, D2 = 2;
-    if (!grid || grid->empty()) {
-        shape_out = {D0, D1, D2};
-        return std::vector<double>(D0 * D1 * D2, 0.0);
-    }
-    const auto& g = *grid;
-    std::size_t d0 = g.size();
-    std::size_t d1 = d0 > 0 ? g[0].size() : 0;
-    std::size_t d2 = d1 > 0 ? g[0][0].size() : 0;
-    if (d0 == 0 || d1 == 0 || d2 == 0) {
-        shape_out = {D0, D1, D2};
-        return std::vector<double>(D0 * D1 * D2, 0.0);
-    }
-    shape_out = {d0, d1, d2};
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    std::vector<double> flat(d0 * d1 * d2, nan);
-    for (std::size_t i = 0; i < d0; ++i)
-        for (std::size_t j = 0; j < d1; ++j)
-            for (std::size_t k = 0; k < d2; ++k)
-                flat[i * d1 * d2 + j * d2 + k] = g[i][j][k].value_or(nan);
-    return flat;
-}
-
-} // namespace detail
 
 // ---------------------------------------------------------------------------
 // Structs — defined bottom-up (inner before outer)
@@ -181,80 +112,6 @@ struct PowerCharacterization {
     std::optional<std::string> units_derived_quantity;
     std::vector<EquationConstant> derivation_equation_constants;
     std::vector<CalibrationPoint> characterization_points;
-};
-
-// One Synchronous Sensor record. The map key (on ClearBox::synchronous_sensors)
-// is a free-form label chosen by the file's author — not required to equal
-// any attribute value inside the sensor's own group (same convention as
-// OpcuaConfig::triggers's keys).
-struct SynchronousSensor {
-    std::optional<bool>        enabled;
-    std::optional<std::string> sensor_name;
-    std::optional<double>      sensor_output_range_low;
-    std::optional<double>      sensor_output_range_high;
-    std::optional<std::string> sensor_output_space;
-    std::optional<std::string> sensor_model;
-    std::optional<std::string> sensor_manufacturer;
-    std::optional<std::string> sensor_scope;
-    std::optional<std::string> units_derived_quantity;
-    std::optional<std::int64_t> port_id;
-    std::optional<std::string> sensor_type;
-    std::optional<std::string> input_type;
-    std::optional<std::string> algorithm_type;
-    std::optional<std::string> algorithm_equation;
-    std::optional<std::string> calibration_source;
-    std::optional<bool>        calibration_verified;
-    std::optional<double>      sample_period;
-    std::optional<std::string> metadata;
-    std::vector<EquationConstant> derivation_equation_constants;
-    std::vector<CalibrationPoint> calibration_points;
-};
-
-// Optional ClearBox add-on.  HDF5: .../Optional_Components/ClearBox/.
-struct ClearBox {
-    std::string ip_address;
-    std::optional<std::string>  serial_number;
-    std::optional<std::int64_t> data_port;
-    std::optional<std::int64_t> server_port;
-    std::optional<std::int64_t> actual_timing_offset;
-    std::optional<std::int64_t> commanded_timing_offset;
-    // correction_data / inverse_correction_data: omitted from JSON when absent
-    // (include_binary=false).  Populated by the reader when include_binary=true.
-    std::optional<Grid3D> correction_data;
-    std::optional<Grid3D> inverse_correction_data;
-    std::optional<std::string>  manufacturer;
-    std::optional<std::string>  model;
-    std::optional<std::string>  output_path;
-    std::optional<std::string>  selected_camera;
-    std::optional<std::string>  custom_video_format;
-    std::optional<std::string>  video_output;
-    std::optional<bool>         show_console; // HDF5 int 0/1
-    std::optional<std::int64_t> software_trigger_delay;
-    std::optional<std::string>  correction_grid_domain_shape;
-    std::optional<std::string>  inverse_grid_domain_shape;
-    // Omitted entirely (not "{}") when there are no sensors — matches
-    // Rust's skip_serializing_if and Python's _clearbox_to_dict choice to
-    // omit the key when empty, so every fixture that doesn't use this
-    // feature stays byte-for-byte identical in JSON shape to before it
-    // existed. Same optional-whole-feature shape as MachineConfig::opcua,
-    // not OpcuaConfig::triggers (which is always present, even as "{}") —
-    // deliberately different from that precedent (see the Node.js bug this
-    // exact mismatch caused, corrected before this language's Phase 1).
-    std::map<std::string, SynchronousSensor> synchronous_sensors;
-    // v1.1 addition (Change 1); nullopt for v1.0 files, no on-disk source
-    // there. Omitted from JSON when nullopt, same reasoning as
-    // synchronous_sensors above.
-    std::optional<std::string> firmware_version;
-    // The only representation of the volts<->watts conversion concept, for
-    // files of either version. v1.0's reader forward-derives this from the
-    // on-disk flat Algorithm/Params attrs; v1.0's writer backward-derives
-    // the flat attrs from this. v1.1 reads/writes it natively.
-    std::optional<PowerCharacterization> power_characterization;
-};
-
-// Optional add-on hardware present on an optical train.
-struct OptionalComponents {
-    std::optional<ClearBox> clearbox;
 };
 
 struct Collimator {
@@ -387,7 +244,6 @@ struct OpticalTrain {
     LightSource        light_source;
     Collimator         collimator;
     ScannerCard        scanner_card;
-    OptionalComponents optional_components;
     std::optional<ScanFieldCorrectionFile> scan_field_correction_file;
 };
 
@@ -443,7 +299,8 @@ struct MachineConfig {
     Machine                   machine;
     std::vector<OpticalTrain> optical_trains;
     // Opaque extension trees keyed by group name under Extensions/. Core reads and writes them
-    // verbatim (see docs/EXTENSION_CONTRACT.md); ClearBox is modelled by core and never listed
+    // verbatim (see docs/EXTENSION_CONTRACT.md). ClearBox is one of them, always in the
+    // File_Version 1.1 layout (see clearbox_legacy.hpp).
     // here. Omitted from JSON entirely when empty.
     std::map<std::string, extension::Tree> extensions;
 };
@@ -454,42 +311,6 @@ struct MachineConfig {
 // Field ordering in JSON output is alphabetical (nlohmann default) which may
 // differ from Python insertion order; cross_check uses value comparison.
 // ---------------------------------------------------------------------------
-
-// --- Grid3D helpers ---
-
-namespace detail {
-
-inline nlohmann::json grid3d_to_json(const Grid3D& grid) {
-    nlohmann::json arr = nlohmann::json::array();
-    for (const auto& plane : grid) {
-        nlohmann::json parr = nlohmann::json::array();
-        for (const auto& row : plane) {
-            nlohmann::json rarr = nlohmann::json::array();
-            for (const auto& cell : row)
-                rarr.push_back(cell ? nlohmann::json(*cell) : nlohmann::json(nullptr));
-            parr.push_back(std::move(rarr));
-        }
-        arr.push_back(std::move(parr));
-    }
-    return arr;
-}
-
-inline Grid3D grid3d_from_json(const nlohmann::json& j) {
-    Grid3D grid;
-    for (const auto& pj : j) {
-        std::vector<std::vector<GridCell>> plane;
-        for (const auto& rj : pj) {
-            std::vector<GridCell> row;
-            for (const auto& cj : rj)
-                row.push_back(cj.is_null() ? GridCell{} : GridCell{cj.get<double>()});
-            plane.push_back(std::move(row));
-        }
-        grid.push_back(std::move(plane));
-    }
-    return grid;
-}
-
-} // namespace detail
 
 // --- ScanFieldCorrectionFile ---
 
@@ -520,7 +341,7 @@ inline void from_json(const nlohmann::json& j, ScanFieldCorrectionFile& s) {
     // raw_bytes base64 decode implemented in the writer (§4.14).
 }
 
-// --- EquationConstant / CalibrationPoint / SynchronousSensor ---
+// --- EquationConstant / CalibrationPoint / PowerCharacterization ---
 
 inline void to_json(nlohmann::json& j, const EquationConstant& c) {
     j = {{"name", c.name}, {"value", c.value}};
@@ -562,136 +383,6 @@ inline void from_json(const nlohmann::json& j, PowerCharacterization& p) {
     p.characterization_points.clear();
     if (j.contains("characterization_points"))
         j.at("characterization_points").get_to(p.characterization_points);
-}
-
-inline void to_json(nlohmann::json& j, const SynchronousSensor& s) {
-    j = {
-        {"enabled",                       detail::opt_to_j(s.enabled)},
-        {"sensor_name",                   detail::opt_to_j(s.sensor_name)},
-        {"sensor_output_range_low",       detail::opt_to_j(s.sensor_output_range_low)},
-        {"sensor_output_range_high",      detail::opt_to_j(s.sensor_output_range_high)},
-        {"sensor_output_space",           detail::opt_to_j(s.sensor_output_space)},
-        {"sensor_model",                  detail::opt_to_j(s.sensor_model)},
-        {"sensor_manufacturer",           detail::opt_to_j(s.sensor_manufacturer)},
-        {"sensor_scope",                  detail::opt_to_j(s.sensor_scope)},
-        {"units_derived_quantity",        detail::opt_to_j(s.units_derived_quantity)},
-        {"port_id",                       detail::opt_to_j(s.port_id)},
-        {"sensor_type",                   detail::opt_to_j(s.sensor_type)},
-        {"input_type",                    detail::opt_to_j(s.input_type)},
-        {"algorithm_type",                detail::opt_to_j(s.algorithm_type)},
-        {"algorithm_equation",            detail::opt_to_j(s.algorithm_equation)},
-        {"calibration_source",            detail::opt_to_j(s.calibration_source)},
-        {"calibration_verified",          detail::opt_to_j(s.calibration_verified)},
-        {"sample_period",                 detail::opt_to_j(s.sample_period)},
-        {"metadata",                      detail::opt_to_j(s.metadata)},
-        {"derivation_equation_constants", s.derivation_equation_constants},
-        {"calibration_points",            s.calibration_points},
-    };
-}
-
-inline void from_json(const nlohmann::json& j, SynchronousSensor& s) {
-    s.enabled                  = detail::j_to_opt<bool>(j, "enabled");
-    s.sensor_name               = detail::j_to_opt<std::string>(j, "sensor_name");
-    s.sensor_output_range_low   = detail::j_to_opt<double>(j, "sensor_output_range_low");
-    s.sensor_output_range_high  = detail::j_to_opt<double>(j, "sensor_output_range_high");
-    s.sensor_output_space       = detail::j_to_opt<std::string>(j, "sensor_output_space");
-    s.sensor_model              = detail::j_to_opt<std::string>(j, "sensor_model");
-    s.sensor_manufacturer       = detail::j_to_opt<std::string>(j, "sensor_manufacturer");
-    s.sensor_scope              = detail::j_to_opt<std::string>(j, "sensor_scope");
-    s.units_derived_quantity    = detail::j_to_opt<std::string>(j, "units_derived_quantity");
-    s.port_id                   = detail::j_to_opt<std::int64_t>(j, "port_id");
-    s.sensor_type               = detail::j_to_opt<std::string>(j, "sensor_type");
-    s.input_type                = detail::j_to_opt<std::string>(j, "input_type");
-    s.algorithm_type            = detail::j_to_opt<std::string>(j, "algorithm_type");
-    s.algorithm_equation        = detail::j_to_opt<std::string>(j, "algorithm_equation");
-    s.calibration_source        = detail::j_to_opt<std::string>(j, "calibration_source");
-    s.calibration_verified      = detail::j_to_opt<bool>(j, "calibration_verified");
-    s.sample_period             = detail::j_to_opt<double>(j, "sample_period");
-    s.metadata                  = detail::j_to_opt<std::string>(j, "metadata");
-    j.at("derivation_equation_constants").get_to(s.derivation_equation_constants);
-    j.at("calibration_points").get_to(s.calibration_points);
-}
-
-// --- ClearBox ---
-
-inline void to_json(nlohmann::json& j, const ClearBox& c) {
-    j = {
-        {"actual_timing_offset",         detail::opt_to_j(c.actual_timing_offset)},
-        {"commanded_timing_offset",      detail::opt_to_j(c.commanded_timing_offset)},
-        {"correction_grid_domain_shape", detail::opt_to_j(c.correction_grid_domain_shape)},
-        {"custom_video_format",          detail::opt_to_j(c.custom_video_format)},
-        {"data_port",                    detail::opt_to_j(c.data_port)},
-        {"inverse_grid_domain_shape",    detail::opt_to_j(c.inverse_grid_domain_shape)},
-        {"ip_address",                   c.ip_address},
-        {"manufacturer",                 detail::opt_to_j(c.manufacturer)},
-        {"model",                        detail::opt_to_j(c.model)},
-        {"output_path",                  detail::opt_to_j(c.output_path)},
-        {"selected_camera",              detail::opt_to_j(c.selected_camera)},
-        {"serial_number",                detail::opt_to_j(c.serial_number)},
-        {"server_port",                  detail::opt_to_j(c.server_port)},
-        {"show_console",                 detail::opt_to_j(c.show_console)},
-        {"software_trigger_delay",       detail::opt_to_j(c.software_trigger_delay)},
-        {"video_output",                 detail::opt_to_j(c.video_output)},
-    };
-    // Correction grids: omitted when absent (include_binary=false).
-    if (c.correction_data.has_value())
-        j["correction_data"] = detail::grid3d_to_json(*c.correction_data);
-    if (c.inverse_correction_data.has_value())
-        j["inverse_correction_data"] = detail::grid3d_to_json(*c.inverse_correction_data);
-    // synchronous_sensors: omitted entirely when empty, not serialised as
-    // "{}" — see the field's doc comment on ClearBox above.
-    if (!c.synchronous_sensors.empty())
-        j["synchronous_sensors"] = c.synchronous_sensors;
-    // v1.1 additions — omitted entirely when absent, same byte-identical-
-    // v1.0-output reasoning as synchronous_sensors above.
-    if (c.firmware_version.has_value())
-        j["firmware_version"] = *c.firmware_version;
-    if (c.power_characterization.has_value())
-        j["power_characterization"] = *c.power_characterization;
-}
-
-inline void from_json(const nlohmann::json& j, ClearBox& c) {
-    j.at("ip_address").get_to(c.ip_address);
-    c.serial_number           = detail::j_to_opt<std::string>(j, "serial_number");
-    c.data_port               = detail::j_to_opt<std::int64_t>(j, "data_port");
-    c.server_port             = detail::j_to_opt<std::int64_t>(j, "server_port");
-    c.actual_timing_offset    = detail::j_to_opt<std::int64_t>(j, "actual_timing_offset");
-    c.commanded_timing_offset = detail::j_to_opt<std::int64_t>(j, "commanded_timing_offset");
-    c.manufacturer            = detail::j_to_opt<std::string>(j, "manufacturer");
-    c.model                   = detail::j_to_opt<std::string>(j, "model");
-    c.output_path             = detail::j_to_opt<std::string>(j, "output_path");
-    c.selected_camera         = detail::j_to_opt<std::string>(j, "selected_camera");
-    c.custom_video_format     = detail::j_to_opt<std::string>(j, "custom_video_format");
-    c.video_output            = detail::j_to_opt<std::string>(j, "video_output");
-    c.show_console            = detail::j_to_opt<bool>(j, "show_console");
-    c.software_trigger_delay  = detail::j_to_opt<std::int64_t>(j, "software_trigger_delay");
-    c.correction_grid_domain_shape = detail::j_to_opt<std::string>(j, "correction_grid_domain_shape");
-    c.inverse_grid_domain_shape    = detail::j_to_opt<std::string>(j, "inverse_grid_domain_shape");
-    if (j.contains("correction_data") && !j.at("correction_data").is_null())
-        c.correction_data = detail::grid3d_from_json(j.at("correction_data"));
-    if (j.contains("inverse_correction_data") && !j.at("inverse_correction_data").is_null())
-        c.inverse_correction_data = detail::grid3d_from_json(j.at("inverse_correction_data"));
-    c.synchronous_sensors.clear();
-    if (j.contains("synchronous_sensors"))
-        j.at("synchronous_sensors").get_to(c.synchronous_sensors);
-    c.firmware_version = detail::j_to_opt<std::string>(j, "firmware_version");
-    if (j.contains("power_characterization") && !j.at("power_characterization").is_null())
-        c.power_characterization = j.at("power_characterization").get<PowerCharacterization>();
-    else
-        c.power_characterization = std::nullopt;
-}
-
-// --- OptionalComponents ---
-
-inline void to_json(nlohmann::json& j, const OptionalComponents& o) {
-    j = {{"clearbox", detail::opt_to_j(o.clearbox)}};
-}
-
-inline void from_json(const nlohmann::json& j, OptionalComponents& o) {
-    if (j.contains("clearbox") && !j.at("clearbox").is_null())
-        o.clearbox = j.at("clearbox").get<ClearBox>();
-    else
-        o.clearbox = std::nullopt;
 }
 
 // --- Collimator ---
@@ -912,7 +603,6 @@ inline void to_json(nlohmann::json& j, const OpticalTrain& t) {
         {"m2_minor",                             detail::opt_to_j(t.m2_minor)},
         {"major_axis_angle",                     detail::opt_to_j(t.major_axis_angle)},
         {"major_axis_angle_unit",                detail::opt_to_j(t.major_axis_angle_unit)},
-        {"optional_components",                  t.optional_components},
         {"rayleigh_length_major",                detail::opt_to_j(t.rayleigh_length_major)},
         {"rayleigh_length_major_unit",           detail::opt_to_j(t.rayleigh_length_major_unit)},
         {"rayleigh_length_minor",                detail::opt_to_j(t.rayleigh_length_minor)},
@@ -965,7 +655,6 @@ inline void from_json(const nlohmann::json& j, OpticalTrain& t) {
     j.at("light_source").get_to(t.light_source);
     j.at("collimator").get_to(t.collimator);
     j.at("scanner_card").get_to(t.scanner_card);
-    j.at("optional_components").get_to(t.optional_components);
     if (j.contains("scan_field_correction_file") && !j.at("scan_field_correction_file").is_null())
         t.scan_field_correction_file = j.at("scan_field_correction_file").get<ScanFieldCorrectionFile>();
 }

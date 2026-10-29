@@ -12,7 +12,22 @@ use machine_config::capabilities::errors::CapabilityError;
 use machine_config::error::MachineConfigError;
 use machine_config::reader::MachineConfigReader;
 use machine_config::writer::MachineConfigWriter;
+use machine_config::{extension_contract::DatasetData, MachineConfig};
 use tempfile::NamedTempFile;
+
+/// A float64 ClearBox grid (`Correction_Data` / `Inverse_Correction_Data`) of train `index`.
+fn clearbox_grid(config: &MachineConfig, index: usize, name: &str) -> (Vec<usize>, Vec<f64>) {
+    let ds = &config.extensions["ClearBox"].children[&format!("Optical_Train_{:02}", index + 1)]
+        .datasets[name];
+    match &ds.data {
+        DatasetData::F64(v) => (ds.shape.clone(), v.clone()),
+        _ => panic!("{name} is not float64"),
+    }
+}
+
+fn bits(values: &[f64]) -> Vec<u64> {
+    values.iter().map(|v| v.to_bits()).collect()
+}
 
 static FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -85,32 +100,25 @@ fn test_meta_extra_preserved() {
 
 #[test]
 fn test_correction_data_shape() {
-    let reader = MachineConfigReader::open(FIXTURE).unwrap();
-    let cd = reader.get_correction_data(0).unwrap();
-    assert_eq!(cd.shape, [257, 257, 2]);
+    let config = MachineConfigReader::open(FIXTURE).unwrap().parse().unwrap();
+    let (shape, _) = clearbox_grid(&config, 0, "Correction_Data");
+    assert_eq!(shape, [257, 257, 2]);
 }
 
 #[test]
 fn test_correction_data_is_nonzero() {
-    let reader = MachineConfigReader::open(FIXTURE).unwrap();
-    let cd = reader.get_correction_data(0).unwrap();
-    assert!(cd.data.iter().any(|&v| v != 0.0_f64));
+    let config = MachineConfigReader::open(FIXTURE).unwrap().parse().unwrap();
+    let (_, data) = clearbox_grid(&config, 0, "Correction_Data");
+    assert!(data.iter().any(|&v| v != 0.0_f64));
 }
 
 #[test]
-fn test_nan_to_null_in_correction_data() {
-    // Real AconityMIDI fixture has NaN border cells outside the scan field.
-    // parse_with_binary() must map those to None in the nested Vec.
-    let config = MachineConfigReader::open(REFERENCE)
-        .unwrap()
-        .parse_with_binary()
-        .unwrap();
-    let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-    let data = cb.correction_data.as_ref().unwrap();
-    assert!(
-        data.iter().flatten().flatten().any(|v| v.is_none()),
-        "expected at least one NaN-derived null in correction_data"
-    );
+fn test_nan_cells_survive_in_correction_data() {
+    // Real AconityMIDI fixture has NaN border cells outside the scan field; the extension tree
+    // carries them as real NaNs, not nulls.
+    let config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+    let (_, data) = clearbox_grid(&config, 0, "Correction_Data");
+    assert!(data.iter().any(|v| v.is_nan()), "expected NaN border cells in correction_data");
 }
 
 // ---------------------------------------------------------------------------
@@ -170,32 +178,14 @@ fn test_writer_roundtrip_scalars() {
 
 #[test]
 fn test_writer_roundtrip_correction_data_checksum() {
-    use machine_config::models::CorrectionData;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    fn cd_hash(cd: &CorrectionData) -> u64 {
-        let mut h = DefaultHasher::new();
-        for v in &cd.data {
-            v.to_bits().hash(&mut h);
-        }
-        h.finish()
-    }
-
-    // parse_with_binary() so correction_data is populated before writing
-    let reader = MachineConfigReader::open(FIXTURE).unwrap();
-    let original = reader.get_correction_data(0).unwrap();
-    let config = reader.parse_with_binary().unwrap();
+    let original = MachineConfigReader::open(FIXTURE).unwrap().parse().unwrap();
     let tmp = NamedTempFile::with_suffix(".h5").unwrap();
-    MachineConfigWriter::new(&config).write(tmp.path()).unwrap();
-    let roundtripped = MachineConfigReader::open(tmp.path())
-        .unwrap()
-        .get_correction_data(0)
-        .unwrap();
+    MachineConfigWriter::new(&original).write(tmp.path()).unwrap();
+    let roundtripped = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
     assert_eq!(
-        cd_hash(&original),
-        cd_hash(&roundtripped),
-        "Correction data hash changed across write roundtrip"
+        bits(&clearbox_grid(&original, 0, "Correction_Data").1),
+        bits(&clearbox_grid(&roundtripped, 0, "Correction_Data").1),
+        "Correction data changed across write roundtrip"
     );
 }
 
@@ -329,11 +319,11 @@ fn test_sfcf_file_size() {
 
 #[test]
 fn test_inverse_correction_differs_from_forward() {
-    let reader = MachineConfigReader::open(REFERENCE).unwrap();
-    let fwd = reader.get_correction_data(0).unwrap();
-    let inv = reader.get_inverse_correction_data(0).unwrap();
-    let first_fwd = fwd.data.iter().find(|v| v.is_finite()).copied().unwrap();
-    let first_inv = inv.data.iter().find(|v| v.is_finite()).copied().unwrap();
+    let config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+    let (_, fwd) = clearbox_grid(&config, 0, "Correction_Data");
+    let (_, inv) = clearbox_grid(&config, 0, "Inverse_Correction_Data");
+    let first_fwd = fwd.iter().find(|v| v.is_finite()).copied().unwrap();
+    let first_inv = inv.iter().find(|v| v.is_finite()).copied().unwrap();
     assert!(
         (first_fwd - first_inv).abs() > 1e-10,
         "forward and inverse correction grids must differ: fwd={first_fwd} inv={first_inv}"
@@ -342,31 +332,14 @@ fn test_inverse_correction_differs_from_forward() {
 
 #[test]
 fn test_writer_roundtrip_inverse_correction_data_checksum() {
-    use machine_config::models::CorrectionData;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    fn cd_hash(cd: &CorrectionData) -> u64 {
-        let mut h = DefaultHasher::new();
-        for v in &cd.data {
-            v.to_bits().hash(&mut h);
-        }
-        h.finish()
-    }
-
-    let reader = MachineConfigReader::open(FIXTURE).unwrap();
-    let original_inv = reader.get_inverse_correction_data(0).unwrap();
-    let config = reader.parse_with_binary().unwrap();
+    let original = MachineConfigReader::open(FIXTURE).unwrap().parse().unwrap();
     let tmp = NamedTempFile::with_suffix(".h5").unwrap();
-    MachineConfigWriter::new(&config).write(tmp.path()).unwrap();
-    let roundtripped_inv = MachineConfigReader::open(tmp.path())
-        .unwrap()
-        .get_inverse_correction_data(0)
-        .unwrap();
+    MachineConfigWriter::new(&original).write(tmp.path()).unwrap();
+    let roundtripped = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
     assert_eq!(
-        cd_hash(&original_inv),
-        cd_hash(&roundtripped_inv),
-        "Inverse correction data hash changed across write roundtrip"
+        bits(&clearbox_grid(&original, 0, "Inverse_Correction_Data").1),
+        bits(&clearbox_grid(&roundtripped, 0, "Inverse_Correction_Data").1),
+        "Inverse correction data changed across write roundtrip"
     );
 }
 

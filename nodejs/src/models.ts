@@ -83,8 +83,7 @@ export interface LightSource {
   power_bit_resolution: number | null;
   power_bit_resolution_unit: string | null;
   /** The only representation of the watts<->volts conversion concept, for
-   * files of either version. Omitted entirely (not `null`) when absent —
-   * same reasoning as `ClearBox.synchronous_sensors`: keeps v1.0 output
+   * files of either version. Omitted entirely (not `null`) when absent, which keeps v1.0 output
    * byte-identical to before this field existed. */
   power_characterization?: PowerCharacterization | null;
 }
@@ -131,15 +130,9 @@ export interface CalibrationPoint {
 }
 
 /**
- * v1.1 addition (Changes 3/4): a structured algorithm + equation + constants
- * + characterization points describing a power conversion. Shared, identical
- * interface for both `ClearBox.power_characterization` (ClearBox's
- * Volts->Watts fit; migrated data has real `derivation_equation_constants`
- * but zero `characterization_points`) and `LightSource.power_characterization`
- * (Light_Source's Volts->Watts fit; migrated data is the inverse — zero
- * `derivation_equation_constants`, real `characterization_points`) — same
- * *kind* of thing at two different HDF5 paths, not the same instance. See
- * `docs/migrations/v1_0_to_v1_1.md` Changes 3/4 for the full derivation rules.
+ * A structured algorithm + equation + constants + characterization points describing a power
+ * conversion. `LightSource.power_characterization` uses it; ClearBox's own Power_Characterization
+ * is an opaque extension tree and is not typed here.
  */
 export interface PowerCharacterization {
   algorithm_type: string | null;
@@ -148,157 +141,6 @@ export interface PowerCharacterization {
   units_derived_quantity: string | null;
   derivation_equation_constants: EquationConstant[];
   characterization_points: CalibrationPoint[];
-}
-
-/**
- * A single Synchronous Sensor record. Map key (on `ClearBox.synchronous_sensors`)
- * is a free-form label chosen by the file's author — not required to equal
- * any attribute value inside the sensor's own group.
- */
-export interface SynchronousSensor {
-  enabled: boolean | null;
-  sensor_name: string | null;
-  sensor_output_range_low: number | null;
-  sensor_output_range_high: number | null;
-  sensor_output_space: string | null;
-  sensor_model: string | null;
-  sensor_manufacturer: string | null;
-  sensor_scope: string | null;
-  units_derived_quantity: string | null;
-  port_id: number | null;
-  sensor_type: string | null;
-  input_type: string | null;
-  algorithm_type: string | null;
-  algorithm_equation: string | null;
-  calibration_source: string | null;
-  calibration_verified: boolean | null;
-  sample_period: number | null;
-  metadata: string | null;
-  derivation_equation_constants: EquationConstant[];
-  calibration_points: CalibrationPoint[];
-}
-
-/**
- * A raw ClearBox correction grid — flat, row-major, NaN preserved (not
- * JSON-safe). Lives at the model layer (not a version-specific adapter)
- * since the shape is part of the stable model, not an on-disk detail — the
- * same reasoning already applied to the null<->NaN conversion helpers below.
- */
-export interface CorrectionData {
-  data: Float64Array;
-  shape: [number, number, number];
-}
-
-export interface ClearBox {
-  ip_address: string;
-  serial_number: string | null;
-  data_port: number | null;
-  server_port: number | null;
-  actual_timing_offset: number | null;
-  commanded_timing_offset: number | null;
-  /** Only present when include_binary=true. */
-  correction_data?: Array<Array<Array<number | null>>> | null;
-  /** Only present when include_binary=true. */
-  inverse_correction_data?: Array<Array<Array<number | null>>> | null;
-  manufacturer: string | null;
-  model: string | null;
-  output_path: string | null;
-  selected_camera: string | null;
-  custom_video_format: string | null;
-  video_output: string | null;
-  show_console: boolean | null;
-  software_trigger_delay: number | null;
-  correction_grid_domain_shape: string | null;
-  inverse_grid_domain_shape: string | null;
-  /**
-   * Omitted entirely (not `{}`) when there are no sensors — matches Rust's
-   * `#[serde(skip_serializing_if = "IndexMap::is_empty")]` and Python's
-   * `_clearbox_to_dict` choice to omit the key when empty, so every fixture
-   * that doesn't use this feature stays byte-for-byte identical in JSON
-   * shape to before it existed.
-   */
-  synchronous_sensors?: Record<string, SynchronousSensor>;
-  /** v1.1 addition (Change 1); omitted entirely (not `null`) when absent —
-   * always true for v1.0 files, no on-disk source there. Same reasoning as
-   * `synchronous_sensors` above: keeps v1.0 output byte-identical. */
-  firmware_version?: string | null;
-  /** The only representation of the volts<->watts conversion concept, for
-   * files of either version. Omitted when absent, same reasoning as
-   * `firmware_version` above. */
-  power_characterization?: PowerCharacterization | null;
-}
-
-export interface OptionalComponents {
-  clearbox: ClearBox | null;
-}
-
-// ---------------------------------------------------------------------------
-// Correction grid conversion helpers
-//
-// Live at the model layer rather than in a version-specific adapter: the
-// NaN<->null convention is part of ClearBox's own field shape
-// (`Array<Array<Array<number | null>>>`), not an on-disk detail of any
-// particular File_Version, so every adapter can share it.
-// ---------------------------------------------------------------------------
-
-const DEFAULT_CORRECTION_SHAPE: [number, number, number] = [257, 257, 2];
-
-/**
- * Convert a flat Float64Array (from an HDF5 dataset) into a nested 3-D
- * JavaScript array, mapping IEEE-754 NaN -> null to produce valid JSON.
- */
-export function float64ToNested3D(
-  data: Float64Array,
-  shape: number[],
-): Array<Array<Array<number | null>>> {
-  const [d0, d1, d2] = shape;
-  const out: Array<Array<Array<number | null>>> = [];
-  let offset = 0;
-  for (let i = 0; i < d0; i++) {
-    const row: Array<Array<number | null>> = [];
-    for (let j = 0; j < d1; j++) {
-      const cell: Array<number | null> = [];
-      for (let k = 0; k < d2; k++) {
-        const v = data[offset++];
-        cell.push(isNaN(v) ? null : v);
-      }
-      row.push(cell);
-    }
-    out.push(row);
-  }
-  return out;
-}
-
-/**
- * Convert a nested 3-D array (null cells -> NaN) to a flat Float64Array.
- * Returns a zero-filled array of default shape when data is absent —
- * identical behaviour to the Python and Rust writers.
- */
-export function nestedToFlat(
-  data: Array<Array<Array<number | null>>> | null | undefined,
-): { flat: Float64Array; shape: [number, number, number] } {
-  if (!data || data.length === 0) {
-    const size = DEFAULT_CORRECTION_SHAPE[0] * DEFAULT_CORRECTION_SHAPE[1] * DEFAULT_CORRECTION_SHAPE[2];
-    return { flat: new Float64Array(size), shape: DEFAULT_CORRECTION_SHAPE };
-  }
-  const d0 = data.length;
-  const d1 = data[0]?.length ?? 0;
-  const d2 = data[0]?.[0]?.length ?? 0;
-  if (d1 === 0 || d2 === 0) {
-    const size = DEFAULT_CORRECTION_SHAPE[0] * DEFAULT_CORRECTION_SHAPE[1] * DEFAULT_CORRECTION_SHAPE[2];
-    return { flat: new Float64Array(size), shape: DEFAULT_CORRECTION_SHAPE };
-  }
-  const flat = new Float64Array(d0 * d1 * d2);
-  let offset = 0;
-  for (let i = 0; i < d0; i++) {
-    for (let j = 0; j < d1; j++) {
-      for (let k = 0; k < d2; k++) {
-        const v = data[i][j][k];
-        flat[offset++] = v == null ? NaN : v;
-      }
-    }
-  }
-  return { flat, shape: [d0, d1, d2] };
 }
 
 export interface ScanFieldCorrectionFile {
@@ -402,8 +244,6 @@ export interface OpticalTrain {
   light_source: LightSource;
   collimator: Collimator;
   scanner_card: ScannerCard;
-  /** Always present; clearbox is null when no ClearBox is installed. */
-  optional_components: OptionalComponents;
   scan_field_correction_file: ScanFieldCorrectionFile | null;
 }
 
@@ -419,8 +259,8 @@ export interface MachineConfig {
    * Opaque extension trees keyed by their group name under `Extensions/`.
    * Read and written verbatim by core, so extensions core has no model for
    * (including private ones) survive a read-modify-write. Interpreted only by
-   * the matching extension library. ClearBox is still modelled in core and is
-   * never listed here.
+   * the matching extension library. ClearBox is one of them (always in its File_Version 1.1
+   * layout, for either file version).
    */
   extensions?: Record<string, ExtensionTree>;
 }

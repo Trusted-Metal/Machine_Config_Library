@@ -14,27 +14,17 @@ import type {
   LightSource,
   Collimator,
   ScannerCard,
-  ClearBox,
-  OptionalComponents,
   ScanFieldCorrectionFile,
-  SynchronousSensor,
-  EquationConstant,
-  CalibrationPoint,
-  CorrectionData,
 } from "../../models.js";
-import { float64ToNested3D } from "../../models.js";
-import {
-  forwardPowerCharacterizationCoefficients,
-  forwardPowerCharacterizationPoints,
-} from "../../powerCharacterization.js";
-
-export type { CorrectionData } from "../../models.js";
+import { forwardPowerCharacterizationPoints } from "../../powerCharacterization.js";
 import * as layout from "./layout.js";
 import { readExtensionTree } from "../../extensions/hdf5.js";
+import type { ExtensionTree } from "../../extensions/contract.js";
 import { withExtensionsAsJson } from "../../extensions/json.js";
+import { CLEARBOX_EXTENSION_NAME, clearboxFromV1_0Trains } from "../../clearboxLegacy.js";
 
 export interface ReadOptions {
-  /** Include correction_data / inverse_correction_data arrays in the output. */
+  /** Include the `.fc3` bytes (`raw_bytes`) in the output. Extension datasets are always complete. */
   includeBinary?: boolean;
 }
 
@@ -358,124 +348,6 @@ function parseScannerCard(grp: h5wasm.Group): ScannerCard {
   };
 }
 
-/**
- * Read `Derivation_Equation_Constants`, defaulting to `[]` if the dataset
- * itself is absent (same permissive-reader discipline as every scalar
- * attribute). h5wasm returns a compound dataset's `.value` as Array-of-
- * Structures rows (`[[name, value], ...]`) in declaration order — NOT the
- * Map/SoA shape used to write it — so each row is mapped back to a named
- * object positionally, not by column name.
- */
-function readEquationConstants(grp: h5wasm.Group): EquationConstant[] {
-  const ent = grp.get("Derivation_Equation_Constants");
-  if (!(ent instanceof h5wasm.Dataset)) return [];
-  const rows = ent.value;
-  if (!Array.isArray(rows)) return [];
-  return rows.map((row) => {
-    const [name, value] = row as unknown as [string, number];
-    return { name: String(name), value: Number(value) };
-  });
-}
-
-/** Read `Calibration_Points`, defaulting to `[]` if the dataset is absent. */
-function readCalibrationPoints(grp: h5wasm.Group): CalibrationPoint[] {
-  const ent = grp.get("Calibration_Points");
-  if (!(ent instanceof h5wasm.Dataset)) return [];
-  const rows = ent.value;
-  if (!Array.isArray(rows)) return [];
-  return rows.map((row) => {
-    const [input_value, output_value] = row as unknown as [number, number];
-    return { input_value: Number(input_value), output_value: Number(output_value) };
-  });
-}
-
-function parseSynchronousSensor(grp: h5wasm.Group): SynchronousSensor {
-  const a = grp.attrs;
-  return {
-    enabled: attrBool(a, "Enabled"),
-    sensor_name: attrStr(a, "Sensor_Name"),
-    sensor_output_range_low: attrFloat(a, "Sensor_Output_Range_Low"),
-    sensor_output_range_high: attrFloat(a, "Sensor_Output_Range_High"),
-    sensor_output_space: attrStr(a, "Sensor_Output_Space"),
-    sensor_model: attrStr(a, "Sensor_Model"),
-    sensor_manufacturer: attrStr(a, "Sensor_Manufacturer"),
-    sensor_scope: attrStr(a, "Sensor_Scope"),
-    units_derived_quantity: attrStr(a, "Units_Derived_Quantity"),
-    port_id: attrInt(a, "Port_ID"),
-    sensor_type: attrStr(a, "Sensor_Type"),
-    input_type: attrStr(a, "Input_Type"),
-    algorithm_type: attrStr(a, "Algorithm_Type"),
-    algorithm_equation: attrStr(a, "Algorithm_Equation"),
-    calibration_source: attrStr(a, "Calibration_Source"),
-    calibration_verified: attrBool(a, "Calibration_Verified"),
-    sample_period: attrFloat(a, "Sample_Period"),
-    metadata: attrStr(a, "Metadata"),
-    derivation_equation_constants: readEquationConstants(grp),
-    calibration_points: readCalibrationPoints(grp),
-  };
-}
-
-/**
- * Enumerate `Synchronous_Sensors/<name>` sub-groups. Returns
- * `undefined` (not `{}`) when there are no sensors — whether the group is
- * absent entirely or present with zero children — matching Rust's/Python's
- * decision to omit `synchronous_sensors` from JSON entirely in that case
- * (see `ClearBox.synchronous_sensors`'s doc comment in models.ts).
- */
-function parseSynchronousSensors(grp: h5wasm.Group): Record<string, SynchronousSensor> | undefined {
-  const sensorsEnt = grp.get("Synchronous_Sensors");
-  const sensors: Record<string, SynchronousSensor> = {};
-  if (sensorsEnt instanceof h5wasm.Group) {
-    for (const name of sensorsEnt.keys()) {
-      const sGrp = asGroup(sensorsEnt.get(name), `ClearBox/Synchronous_Sensors/${name}`);
-      sensors[name] = parseSynchronousSensor(sGrp);
-    }
-  }
-  return Object.keys(sensors).length > 0 ? sensors : undefined;
-}
-
-function parseClearBox(grp: h5wasm.Group, includeBinary: boolean): ClearBox {
-  const a = grp.attrs;
-  const cb: ClearBox = {
-    ip_address: attrStrReq(a, "Ip_Address"),
-    serial_number: attrStr(a, "Serial_Number"),
-    data_port: attrInt(a, "Data_Port"),
-    server_port: attrInt(a, "Server_Port"),
-    actual_timing_offset: attrInt(a, "Actual_Timing_Offset"),
-    commanded_timing_offset: attrInt(a, "Commanded_Timing_Offset"),
-    manufacturer: attrStr(a, "Manufacturer"),
-    model: attrStr(a, "Model"),
-    output_path: attrStr(a, "Output_Path"),
-    selected_camera: attrStr(a, "Selected_Camera"),
-    custom_video_format: attrStr(a, "Custom_Video_Format"),
-    video_output: attrStr(a, "Video_Output"),
-    show_console: attrBool(a, "Show_Console"),
-    software_trigger_delay: attrInt(a, "Software_Trigger_Delay"),
-    power_characterization:
-      forwardPowerCharacterizationCoefficients(
-        attrStr(a, "Volts_To_Watts_Algorithm"),
-        attrStr(a, "Volts_To_Watts_Params"),
-      ) ?? undefined,
-    correction_grid_domain_shape: attrStr(a, "Correction_Grid_Domain_Shape"),
-    inverse_grid_domain_shape: attrStr(a, "Inverse_Grid_Domain_Shape"),
-    synchronous_sensors: parseSynchronousSensors(grp),
-    // firmware_version intentionally omitted — no v1.0 on-disk source.
-  };
-
-  if (includeBinary) {
-    const corrDs = asDataset(grp.get("Correction_Data"), "ClearBox/Correction_Data");
-    const invDs = asDataset(grp.get("Inverse_Correction_Data"), "ClearBox/Inverse_Correction_Data");
-    const corrVal = corrDs.value;
-    const invVal = invDs.value;
-    if (!(corrVal instanceof Float64Array)) throw new Error("Correction_Data: expected Float64Array");
-    if (!(invVal instanceof Float64Array)) throw new Error("Inverse_Correction_Data: expected Float64Array");
-    cb.correction_data = float64ToNested3D(corrVal, corrDs.shape ?? [257, 257, 2]);
-    cb.inverse_correction_data = float64ToNested3D(invVal, invDs.shape ?? [257, 257, 2]);
-  }
-
-  return cb;
-}
-
 function parseSfcf(ds: h5wasm.Dataset, includeBinary: boolean): ScanFieldCorrectionFile {
   const a = ds.attrs;
   const sfcf: ScanFieldCorrectionFile = {
@@ -508,18 +380,11 @@ function parseOpticalTrain(
   const trainGrp = asGroup(f.get(base), base);
   const a = trainGrp.attrs;
 
-  const cbEnt = trainGrp.get("Optional_Components/ClearBox");
   const sfcfEnt = trainGrp.get("scan_field_correction_file");
-
-  const clearbox: ClearBox | null = cbEnt instanceof h5wasm.Group
-    ? parseClearBox(cbEnt, includeBinary)
-    : null;
 
   const sfcf: ScanFieldCorrectionFile | null = sfcfEnt instanceof h5wasm.Dataset
     ? parseSfcf(sfcfEnt, includeBinary)
     : null;
-
-  const optional_components: OptionalComponents = { clearbox };
 
   return {
     train_id: trainId,
@@ -556,7 +421,6 @@ function parseOpticalTrain(
     light_source: parseLightSource(asGroup(trainGrp.get("Light_Source"), `${base}/Light_Source`)),
     collimator: parseCollimator(asGroup(trainGrp.get("Collimator"), `${base}/Collimator`)),
     scanner_card: parseScannerCard(asGroup(trainGrp.get("Scanner_Card"), `${base}/Scanner_Card`)),
-    optional_components,
     scan_field_correction_file: sfcf,
   };
 }
@@ -574,30 +438,24 @@ function parseFile(f: h5wasm.File, opts: ReadOptions): MachineConfig {
     parseOpticalTrain(f, tid, includeBinary),
   );
 
-  const config: MachineConfig = { meta, machine, optical_trains };
+  // Each train's ClearBox group is read verbatim, then shimmed into the v1.1-layout extension tree.
+  const clearboxTrains: Array<[string, ExtensionTree]> = [];
+  for (const tid of trainIds) {
+    const grp = f.get(layout.clearboxPathById(tid));
+    if (grp instanceof h5wasm.Group) clearboxTrains.push([tid, readExtensionTree(grp, tid)]);
+  }
+  const extensions: Record<string, ExtensionTree> = {};
+  const clearbox = clearboxFromV1_0Trains(clearboxTrains);
+  if (clearbox !== null) extensions[CLEARBOX_EXTENSION_NAME] = clearbox;
   // v1.0 stores the TM_OPCUA extension at the root as `OPCUA/`.
   const opcuaGrp = f.get(layout.ROOT_OPCUA);
   if (opcuaGrp instanceof h5wasm.Group) {
-    config.extensions = {
-      [layout.LEGACY_OPCUA_EXTENSION_NAME]: readExtensionTree(opcuaGrp, layout.LEGACY_OPCUA_EXTENSION_NAME),
-    };
+    extensions[layout.LEGACY_OPCUA_EXTENSION_NAME] = readExtensionTree(opcuaGrp, layout.LEGACY_OPCUA_EXTENSION_NAME);
   }
+
+  const config: MachineConfig = { meta, machine, optical_trains };
+  if (Object.keys(extensions).length > 0) config.extensions = extensions;
   return config;
-}
-
-/** 0-indexed train number → v1.0 ClearBox group path. */
-function clearboxPath(trainIndex: number): string {
-  return layout.clearboxPath(trainIndex);
-}
-
-/** Read a named ClearBox correction dataset as a flat, NaN-preserving Float64Array + shape. */
-function readCorrectionDataset(f: h5wasm.File, trainIndex: number, name: string): CorrectionData {
-  const path = `${clearboxPath(trainIndex)}/${name}`;
-  const ds = asDataset(f.get(path), path);
-  const val = ds.value;
-  if (!(val instanceof Float64Array)) throw new Error(`${path}: expected Float64Array`);
-  const shape = (ds.shape ?? [257, 257, 2]) as [number, number, number];
-  return { data: val, shape };
 }
 
 // ---------------------------------------------------------------------------
@@ -626,33 +484,6 @@ export class Hdf5AdapterV1_0 {
     const config = await this.parse(options);
     const indent = options.indent ?? 2;
     return JSON.stringify(withExtensionsAsJson(config), omitFalseInvertFlags, indent || undefined);
-  }
-
-  /**
-   * Return the raw `(257, 257, 2)` float64 galvo correction grid for a
-   * 0-indexed optical train, bypassing the null-converted JSON representation.
-   * NaN is preserved — matches Python's `get_correction_data` / Rust's
-   * `get_correction_data`.
-   */
-  async getCorrectionData(trainIndex: number): Promise<CorrectionData> {
-    await ensureReady();
-    const f = new h5wasm.File(this._path, "r");
-    try {
-      return readCorrectionDataset(f, trainIndex, "Correction_Data");
-    } finally {
-      f.close();
-    }
-  }
-
-  /** Same as {@link getCorrectionData}, but for the inverse correction grid. */
-  async getInverseCorrectionData(trainIndex: number): Promise<CorrectionData> {
-    await ensureReady();
-    const f = new h5wasm.File(this._path, "r");
-    try {
-      return readCorrectionDataset(f, trainIndex, "Inverse_Correction_Data");
-    } finally {
-      f.close();
-    }
   }
 
   /**

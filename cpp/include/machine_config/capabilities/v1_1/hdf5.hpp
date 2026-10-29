@@ -226,12 +226,6 @@ public:
         for (size_t i = 0; i < cfg.optical_trains.size(); ++i) {
             auto& ot  = cfg.optical_trains[i];
             auto  tid = trainIdAt(f, i);
-            if (ot.optional_components.clearbox && f.exist(clearboxPathById(tid))) {
-                auto cd  = readCorrectionGrid(f, correctionDataPathById(tid));
-                auto icd = readCorrectionGrid(f, inverseCorrectionDataPathById(tid));
-                ot.optional_components.clearbox->correction_data         = detail::correctionDataToGrid3D(cd);
-                ot.optional_components.clearbox->inverse_correction_data = detail::correctionDataToGrid3D(icd);
-            }
             if (ot.scan_field_correction_file) {
                 auto ds   = f.getDataSet(scanFieldCorrectionFilePathById(tid));
                 auto dims = ds.getSpace().getDimensions();
@@ -257,18 +251,6 @@ public:
         }
     }
 
-    CorrectionData getCorrectionData(size_t train_index) const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
-        auto tid = trainIdAt(f, train_index);
-        return readCorrectionGrid(f, correctionDataPathById(tid));
-    }
-
-    CorrectionData getInverseCorrectionData(size_t train_index) const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
-        auto tid = trainIdAt(f, train_index);
-        return readCorrectionGrid(f, inverseCorrectionDataPathById(tid));
-    }
-
     std::vector<uint8_t> getScanFieldCorrectionBytes(size_t train_index) const override {
         HighFive::File f(path_.string(), HighFive::File::ReadOnly);
         auto tid = trainIdAt(f, train_index);
@@ -287,17 +269,6 @@ private:
         cfg.meta    = parseMeta(f);
         cfg.machine = parseMachine(f.getGroup(ROOT_MACHINE));
 
-        // Change 1 (Consolidate): one shared Output_Path/Software_Trigger_Delay
-        // value, read once from Extensions/ClearBox/ itself.
-        bool hasClearboxRoot = f.exist(GROUP_CLEARBOX);
-        std::optional<std::string> sharedOutputPath;
-        std::optional<int64_t> sharedSoftwareTriggerDelay;
-        if (hasClearboxRoot) {
-            auto cbRoot = f.getGroup(GROUP_CLEARBOX);
-            sharedOutputPath           = readStr(cbRoot, "Output_Path");
-            sharedSoftwareTriggerDelay = readInt(cbRoot, "Software_Trigger_Delay");
-        }
-
         auto trainsGrp = f.getGroup(ROOT_OPTICAL_TRAINS);
         std::vector<std::string> ids;
         const std::string prefix = TRAIN_ID_PREFIX;
@@ -309,20 +280,19 @@ private:
         std::vector<OpticalTrain> trains;
         trains.reserve(ids.size());
         for (const auto& tid : ids)
-            trains.push_back(parseTrain(f, tid, hasClearboxRoot, sharedOutputPath, sharedSoftwareTriggerDelay));
+            trains.push_back(parseTrain(f, tid));
         cfg.optical_trains = std::move(trains);
 
         cfg.extensions = parseExtensions(f);
         return cfg;
     }
 
-    // Every Extensions/ group core does not model, verbatim, as an opaque tree.
+    // Every Extensions/ group, verbatim, as an opaque tree — ClearBox included.
     std::map<std::string, extension::Tree> parseExtensions(const HighFive::File& f) const {
         std::map<std::string, extension::Tree> out;
         if (!f.exist(ROOT_EXTENSIONS)) return out;
         auto eg = f.getGroup(ROOT_EXTENSIONS);
         for (const auto& name : eg.listObjectNames()) {
-            if (isModelledExtensionName(name)) continue;
             if (eg.getObjectType(name) != HighFive::ObjectType::Group)
                 throw std::runtime_error(std::string("HDF5: expected Group at \"") + ROOT_EXTENSIONS + "/" + name + "\"");
             auto g = eg.getGroup(name);
@@ -371,10 +341,7 @@ private:
 
     OpticalTrain parseTrain(
         const HighFive::File& f,
-        const std::string& train_id,
-        bool hasClearboxRoot,
-        const std::optional<std::string>& sharedOutputPath,
-        const std::optional<int64_t>& sharedSoftwareTriggerDelay) const
+        const std::string& train_id) const
     {
         auto grp = f.getGroup(trainPathById(train_id));
         OpticalTrain ot;
@@ -412,12 +379,6 @@ private:
         ot.light_source = parseLightSource(f.getGroup(lightSourcePathById(train_id)));
         ot.collimator   = parseCollimator(f.getGroup(collimatorPathById(train_id)));
         ot.scanner_card = parseScannerCard(f.getGroup(scannerCardPathById(train_id)));
-
-        if (hasClearboxRoot) {
-            std::string cbPath = clearboxPathById(train_id);
-            if (f.exist(cbPath))
-                ot.optional_components.clearbox = parseClearBox(f, train_id, sharedOutputPath, sharedSoftwareTriggerDelay);
-        }
 
         std::string sfcfPath = scanFieldCorrectionFilePathById(train_id);
         if (f.exist(sfcfPath))
@@ -568,76 +529,6 @@ private:
         return sc;
     }
 
-    // Change 1: relocated to Extensions/ClearBox/<train_id>/, several attrs
-    // dropped (Selected_Camera, Custom_Video_Format, Video_Output,
-    // Show_Console, Correction_Grid_Domain_Shape, Inverse_Grid_Domain_Shape —
-    // always nullopt here), Firmware_Version added, Output_Path/
-    // Software_Trigger_Delay Consolidated (passed in already resolved).
-    ClearBox parseClearBox(
-        const HighFive::File& f,
-        const std::string& train_id,
-        const std::optional<std::string>& sharedOutputPath,
-        const std::optional<int64_t>& sharedSoftwareTriggerDelay) const
-    {
-        auto grp = f.getGroup(clearboxPathById(train_id));
-        ClearBox cb;
-        cb.ip_address              = readRequiredStr(grp, "Ip_Address");
-        cb.serial_number           = readStr(grp, "Serial_Number");
-        cb.data_port               = readInt(grp, "Data_Port");
-        cb.server_port             = readInt(grp, "Server_Port");
-        cb.actual_timing_offset    = readInt(grp, "Actual_Timing_Offset");
-        cb.commanded_timing_offset = readInt(grp, "Commanded_Timing_Offset");
-        cb.manufacturer            = readStr(grp, "Manufacturer");
-        cb.model                   = readStr(grp, "Model");
-        cb.output_path             = sharedOutputPath;
-        cb.selected_camera         = std::nullopt;
-        cb.custom_video_format     = std::nullopt;
-        cb.video_output            = std::nullopt;
-        cb.show_console            = std::nullopt;
-        cb.software_trigger_delay  = sharedSoftwareTriggerDelay;
-        cb.correction_grid_domain_shape = std::nullopt;
-        cb.inverse_grid_domain_shape    = std::nullopt;
-        cb.synchronous_sensors          = parseSynchronousSensors(grp);
-        cb.firmware_version             = readStr(grp, "Firmware_Version");
-        if (grp.exist(GROUP_POWER_CHARACTERIZATION))
-            cb.power_characterization = parsePowerCharacterization(grp.getGroup(GROUP_POWER_CHARACTERIZATION));
-        return cb;
-    }
-
-    SynchronousSensor parseSynchronousSensor(const HighFive::Group& grp) const {
-        SynchronousSensor s;
-        s.enabled                    = readBoolFromInt(grp, "Enabled");
-        s.sensor_name                = readStr(grp, "Sensor_Name");
-        s.sensor_output_range_low    = readFloat(grp, "Sensor_Output_Range_Low");
-        s.sensor_output_range_high   = readFloat(grp, "Sensor_Output_Range_High");
-        s.sensor_output_space        = readStr(grp, "Sensor_Output_Space");
-        s.sensor_model               = readStr(grp, "Sensor_Model");
-        s.sensor_manufacturer        = readStr(grp, "Sensor_Manufacturer");
-        s.sensor_scope               = readStr(grp, "Sensor_Scope");
-        s.units_derived_quantity     = readStr(grp, "Units_Derived_Quantity");
-        s.port_id                    = readInt(grp, "Port_ID");
-        s.sensor_type                = readStr(grp, "Sensor_Type");
-        s.input_type                 = readStr(grp, "Input_Type");
-        s.algorithm_type             = readStr(grp, "Algorithm_Type");
-        s.algorithm_equation         = readStr(grp, "Algorithm_Equation");
-        s.calibration_source         = readStr(grp, "Calibration_Source");
-        s.calibration_verified       = readBoolFromInt(grp, "Calibration_Verified");
-        s.sample_period              = readFloat(grp, "Sample_Period");
-        s.metadata                   = readStr(grp, "Metadata");
-        s.derivation_equation_constants = readEquationConstants(grp, "Derivation_Equation_Constants");
-        s.calibration_points            = readCalibrationPoints(grp, "Calibration_Points");
-        return s;
-    }
-
-    std::map<std::string, SynchronousSensor> parseSynchronousSensors(const HighFive::Group& grp) const {
-        std::map<std::string, SynchronousSensor> sensors;
-        if (!grp.exist("Synchronous_Sensors")) return sensors;
-        auto sensors_grp = grp.getGroup("Synchronous_Sensors");
-        for (const auto& name : sensors_grp.listObjectNames())
-            sensors[name] = parseSynchronousSensor(sensors_grp.getGroup(name));
-        return sensors;
-    }
-
     ScanFieldCorrectionFile parseSfcf(const HighFive::DataSet& ds) const {
         ScanFieldCorrectionFile s;
         s.document_name    = readRequiredStr(ds, "document_name");
@@ -666,15 +557,6 @@ private:
         return ids[train_index];
     }
 
-    CorrectionData readCorrectionGrid(const HighFive::File& f, const std::string& ds_path) const {
-        auto ds   = f.getDataSet(ds_path);
-        auto dims = ds.getSpace().getDimensions();
-        CorrectionData cd;
-        cd.shape = {dims[0], dims[1], dims[2]};
-        cd.data.resize(dims[0] * dims[1] * dims[2]);
-        H5Dread(ds.getId(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, cd.data.data());
-        return cd;
-    }
 };
 
 // ---------------------------------------------------------------------------

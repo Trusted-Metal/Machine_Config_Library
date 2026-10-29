@@ -13,9 +13,6 @@ FILE_VERSION = "1.1"
 ROOT_MACHINE = "Machine"
 ROOT_OPTICAL_TRAINS = "Machine/Optical_Trains"
 ROOT_EXTENSIONS = "Extensions"
-GROUP_CLEARBOX = "Extensions/ClearBox"
-# Group names under Extensions/ that core still models and therefore never exposes as extension trees.
-MODELLED_EXTENSION_NAMES = frozenset({"ClearBox"})
 
 TRAIN_ID_PREFIX = "Optical_Train_"
 GROUP_SCANNER = "Scanner"
@@ -25,8 +22,6 @@ GROUP_SCANNER_CARD = "Scanner_Card"
 GROUP_POWER_CHARACTERIZATION = "Power_Characterization"
 DS_DERIVATION_EQUATION_CONSTANTS = "Derivation_Equation_Constants"
 DS_CHARACTERIZATION_POINTS = "Characterization_Points"
-DS_CORRECTION_DATA = "Correction_Data"
-DS_INVERSE_CORRECTION_DATA = "Inverse_Correction_Data"
 DS_SCAN_FIELD_CORRECTION_FILE = "scan_field_correction_file"
 
 
@@ -61,21 +56,6 @@ def collimator_path_by_id(tid: str) -> str:
 def scanner_card_path_by_id(tid: str) -> str:
     return f"{train_path_by_id(tid)}/{GROUP_SCANNER_CARD}"
 
-
-def clearbox_path_by_id(tid: str) -> str:
-    return f"{GROUP_CLEARBOX}/{tid}"
-
-
-def clearbox_power_characterization_path_by_id(tid: str) -> str:
-    return f"{clearbox_path_by_id(tid)}/{GROUP_POWER_CHARACTERIZATION}"
-
-
-def correction_data_path_by_id(tid: str) -> str:
-    return f"{clearbox_path_by_id(tid)}/{DS_CORRECTION_DATA}"
-
-
-def inverse_correction_data_path_by_id(tid: str) -> str:
-    return f"{clearbox_path_by_id(tid)}/{DS_INVERSE_CORRECTION_DATA}"
 
 
 def scan_field_correction_file_path_by_id(tid: str) -> str:

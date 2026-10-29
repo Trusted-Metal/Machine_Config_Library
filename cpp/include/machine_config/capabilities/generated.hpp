@@ -37,13 +37,6 @@ public:
   virtual Result<ScannerCard> getScannerCard(std::size_t index) const = 0;
   virtual Result<void> setScannerCard(std::size_t index, const ScannerCard& model, SetMode mode = SetMode::Merge) = 0;
 
-  virtual bool hasOptionalComponents(std::size_t index) const = 0;
-  virtual Result<ClearBox> getClearbox(std::size_t index) const = 0;
-  virtual Result<void> setClearbox(std::size_t index, const ClearBox& model, SetMode mode = SetMode::Merge) = 0;
-
-  virtual Result<CorrectionData> getCorrectionData(std::size_t index) const = 0;
-  virtual Result<CorrectionData> getInverseCorrectionData(std::size_t index) const = 0;
-
 
   virtual bool isValid() const = 0;
 

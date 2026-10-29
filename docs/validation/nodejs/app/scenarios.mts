@@ -29,7 +29,6 @@ import {
 } from 'machine-config-library';
 import type {
   CapabilityError,
-  ClearBox,
   Collimator,
   LightSource,
   MachineConfig,
@@ -41,6 +40,14 @@ import { MockV1_1Reader, MockV1_1Writer, makeMockConfig } from '../../../../node
 
 function avFixture(fixturesDir: string, name: string): string {
   return join(fixturesDir, '..', 'docs', 'validation', 'fixtures', name);
+}
+
+// ClearBox is an opaque extension tree: extensions.ClearBox.children.Optical_Train_NN.datasets[name].
+function clearboxGrid(cfg: MachineConfig, index: number, name: string): { shape: number[]; data: Float64Array } {
+  const key = `Optical_Train_${String(index + 1).padStart(2, '0')}`;
+  const ds = cfg.extensions?.ClearBox?.children[key]?.datasets[name];
+  if (ds == null) throw new Error(`ClearBox/${key}/${name} missing`);
+  return { shape: ds.shape, data: ds.data as Float64Array };
 }
 
 // S-01: Read reference fixture, all scalar fields
@@ -88,9 +95,9 @@ export async function runS01(fixturesDir: string, _realDir: string): Promise<[bo
 
 // S-02: Read reference fixture, correction data
 export async function runS02(fixturesDir: string, _realDir: string): Promise<[boolean, string]> {
-  const reader = new MachineConfigReader(join(fixturesDir, 'reference_config.h5'));
-  const cd = await reader.getCorrectionData(0);
-  const icd = await reader.getInverseCorrectionData(0);
+  const cfg = await new MachineConfigReader(join(fixturesDir, 'reference_config.h5')).parse();
+  const cd = clearboxGrid(cfg, 0, 'Correction_Data');
+  const icd = clearboxGrid(cfg, 0, 'Inverse_Correction_Data');
 
   if (cd.shape.join(',') !== '257,257,2') {
     return [false, `correction_data shape: ${cd.shape.join(',')}`];
@@ -181,15 +188,15 @@ export async function runS05(fixturesDir: string, _realDir: string): Promise<[bo
   const reader = new MachineConfigReader(path);
   const cfg = await reader.parse({ includeBinary: true });
 
-  const cdBefore = await reader.getCorrectionData(0);
-  const icdBefore = await reader.getInverseCorrectionData(0);
+  const cdBefore = clearboxGrid(cfg, 0, 'Correction_Data');
+  const icdBefore = clearboxGrid(cfg, 0, 'Inverse_Correction_Data');
 
   const tmp = join(tmpdir(), `s05_${randomUUID()}.h5`);
   await new MachineConfigWriter(cfg).write(tmp);
-  const reader2 = new MachineConfigReader(tmp);
+  const cfgAfter = await new MachineConfigReader(tmp).parse({ includeBinary: true });
 
-  const cdAfter = await reader2.getCorrectionData(0);
-  const icdAfter = await reader2.getInverseCorrectionData(0);
+  const cdAfter = clearboxGrid(cfgAfter, 0, 'Correction_Data');
+  const icdAfter = clearboxGrid(cfgAfter, 0, 'Inverse_Correction_Data');
 
   if (!arraysEqual(cdBefore.data, cdAfter.data)) {
     const hBefore = createHash('sha256').update(Buffer.from(cdBefore.data.buffer)).digest('hex').slice(0, 16);
@@ -224,12 +231,9 @@ export async function runS06(_fixturesDir: string, _realDir: string): Promise<[b
     return [false, 'machine_name is empty'];
   }
 
-  const cb = cfg.optical_trains[0].optional_components.clearbox;
-  if (cb == null || cb.correction_data == null) {
-    return [false, 'clearbox or correction_data is null'];
-  }
-  const center = cb.correction_data[128][128][0];
-  if (center == null || !Number.isFinite(center) || Math.abs(center - 2.0) > 0.01) {
+  // Row-major [257, 257, 2]: centre cell, first component.
+  const center = clearboxGrid(cfg, 0, 'Correction_Data').data[(128 * 257 + 128) * 2];
+  if (!Number.isFinite(center) || Math.abs(center - 2.0) > 0.01) {
     return [false, `correction_data center: expected ~2.0, got ${center}`];
   }
 
@@ -286,7 +290,7 @@ export async function runS07(fixturesDir: string, _realDir: string): Promise<[bo
   return [true, `extension roundtrip OK: ${origTriggers.length} trigger groups, digest=${origDigest.slice(0, 16)}...`];
 }
 
-// S-08: Drastic change to real AconityMIDI file — new train, build_plate_x, rotation, clearbox cleared
+// S-08: Drastic change to real AconityMIDI file — new train (without ClearBox), build_plate_x, rotation
 export async function runS08(_fixturesDir: string, realDir: string): Promise<[boolean, string]> {
   const matches = globSync('*.h5', { cwd: realDir })
     .filter((name) => name.includes('AconityMIDI') && name.includes('OG_178'));
@@ -300,7 +304,6 @@ export async function runS08(_fixturesDir: string, realDir: string): Promise<[bo
   const newTrain = structuredClone(cfg.optical_trains[1]);
   newTrain.train_id = 'Optical_Train_03';
   newTrain.scanner = { ...newTrain.scanner, scan_head_rotation: 90.0 };
-  newTrain.optional_components = { ...newTrain.optional_components, clearbox: null };
 
   const modified = {
     ...cfg,
@@ -323,8 +326,9 @@ export async function runS08(_fixturesDir: string, realDir: string): Promise<[bo
   if (r2 == null || Math.abs(r2 - 90.0) > 0.001) {
     return [false, `train[2].scan_head_rotation: got ${r2}`];
   }
-  if (rb.optical_trains[2].optional_components.clearbox !== null) {
-    return [false, 'train[2].clearbox should be null'];
+  const cbChildren = Object.keys(rb.extensions?.ClearBox?.children ?? {}).sort();
+  if (JSON.stringify(cbChildren) !== JSON.stringify(['Optical_Train_01', 'Optical_Train_02'])) {
+    return [false, `ClearBox train groups after roundtrip: ${cbChildren.join(',')}`];
   }
   if (rb.meta.machine_name !== 'MODIFIED_ACONITY_VALIDATION') {
     return [false, `machine_name: got '${rb.meta.machine_name}'`];
@@ -333,7 +337,7 @@ export async function runS08(_fixturesDir: string, realDir: string): Promise<[bo
     return [false, `file_version changed: '${rb.meta.file_version}'`];
   }
 
-  return [true, '3 trains, build_plate_x=350.0, rotation=90.0, clearbox cleared, machine_name OK'];
+  return [true, '3 trains, build_plate_x=350.0, rotation=90.0, new train has no ClearBox, machine_name OK'];
 }
 
 // S-09: Public type export surface — must compile with zero errors.
@@ -351,7 +355,7 @@ export async function runS09(_fixturesDir: string, _realDir: string): Promise<[b
   assertType<LightSource>(cfg.optical_trains[0]?.light_source);
   assertType<Collimator>(cfg.optical_trains[0]?.collimator);
   assertType<ScannerCard>(cfg.optical_trains[0]?.scanner_card);
-  assertType<ClearBox | null | undefined>(cfg.optical_trains[0]?.optional_components.clearbox);
+  assertType<MachineConfig['extensions']>(cfg.extensions);
   assertType<typeof MachineConfigReader>(MachineConfigReader);
   assertType<typeof MachineConfigWriter>(MachineConfigWriter);
 

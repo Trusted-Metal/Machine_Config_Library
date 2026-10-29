@@ -20,12 +20,9 @@
  * this MCF-touched file tampered with since MCF itself last touched it,"
  * not "does this match some other system's proprietary algorithm."
  *
- * Binary correction-grid data (`correction_data`/`inverse_correction_data`/
- * `raw_bytes`) is always excluded regardless of whether the `MachineConfig`
- * passed in happens to carry it (e.g. a config obtained with
- * `includeBinary: true`) — a separate, dedicated mechanism
- * (`correction-hash`) already exists for binary-grid integrity, and
- * duplicating that here would be slow and redundant.
+ * The `.fc3` bytes (`raw_bytes`) are always excluded regardless of whether the `MachineConfig`
+ * passed in happens to carry them (e.g. a config obtained with `includeBinary: true`). Extension
+ * trees are hashed in full through their canonical digest, ClearBox's correction grids included.
  *
  * ### Why key names, not paths, drive float-vs-integer rendering
  *
@@ -34,8 +31,8 @@
  * numeric leaf in this domain effectively came from an HDF5 float64 attribute
  * (and must render with a forced trailing `.0` when whole, e.g. `"250.0"`,
  * to agree with Python/Rust/C++'s own native int/float distinction) *except*
- * a small, known set of genuinely integer-typed fields (ClearBox's
- * `data_port`, etc.). This is a leaf *key name*
+ * a small, known set of genuinely integer-typed fields (`file_size`,
+ * the bit resolutions). This is a leaf *key name*
  * allowlist (not a full path allowlist), hardcoded below rather than read
  * from `schema/machine_config_v1.schema.json` at runtime — that schema is
  * itself hand-maintained (not generated from the models), so reading it
@@ -67,14 +64,8 @@ import { canonicalDigest } from "./extensions/digest.js";
  */
 export const INTEGER_FIELD_NAMES: ReadonlySet<string> = new Set([
   "actual_bit_resolution",
-  "actual_timing_offset",
   "commanded_bit_resolution",
-  "commanded_timing_offset",
-  "data_port",
   "file_size",
-  "port_id",
-  "server_port",
-  "software_trigger_delay",
 ]);
 
 /** Returns the SHA-256 hex digest of `config`'s canonical, hash-relevant content. */
@@ -111,7 +102,7 @@ const INVERT_FLAG_KEYS = [
  * `toJson()` produces with `includeBinary: false` — the shape this hash is
  * defined over:
  *
- * - Binary correction-grid fields removed from every optical train,
+ * - The `.fc3` bytes (`raw_bytes`) removed from every optical train,
  *   regardless of whether they were populated — mirrors Python's
  *   `_config_to_dict(config, include_binary=False)`, which always builds
  *   the non-binary shape irrespective of what the input dataclass happens
@@ -137,12 +128,6 @@ function sanitizeForHash(config: MachineConfig): MachineConfig {
     ...(sanitized as unknown as MachineConfig),
     optical_trains: config.optical_trains.map((train) => {
       let next = train;
-      if (next.optional_components.clearbox !== null) {
-        const clearbox = { ...next.optional_components.clearbox };
-        delete clearbox.correction_data;
-        delete clearbox.inverse_correction_data;
-        next = { ...next, optional_components: { ...next.optional_components, clearbox } };
-      }
       if (next.scan_field_correction_file !== null) {
         const sfcf = { ...next.scan_field_correction_file };
         delete sfcf.raw_bytes;

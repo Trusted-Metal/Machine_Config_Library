@@ -46,6 +46,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("Before calibration:");
     let reader = MachineConfigReader::open(&dummy)?;
+    let config = reader.parse()?;
+    // ClearBox is an opaque extension tree: extensions["ClearBox"] / Optical_Train_NN.
+    let correction_shape = |config: &machine_config::MachineConfig, i: usize| {
+        config
+            .extensions
+            .get("ClearBox")
+            .and_then(|c| c.children.get(&format!("Optical_Train_{:02}", i + 1)))
+            .and_then(|t| t.datasets.get("Correction_Data"))
+            .map(|d| d.shape.clone())
+    };
     for i in 0..n {
         let s = file.get_scanner(i).map_err(|e| e.to_string())?;
         println!(
@@ -54,8 +64,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             s.scan_head_offset_x,
             s.scan_head_offset_y,
         );
-        if let Ok(cd) = reader.get_correction_data(i) {
-            println!("           correction grid {:?}", cd.shape);
+        if let Some(shape) = correction_shape(&config, i) {
+            println!("           correction grid {:?}", shape);
         }
     }
     println!();
@@ -80,6 +90,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let again = open_machine_config(&out_path).map_err(|e| e.to_string())?;
     let reader2 = MachineConfigReader::open(&out_path)?;
+    let config2 = reader2.parse()?;
     let mut failures: Vec<String> = Vec::new();
 
     for (i, (ex, ey)) in new_offsets.iter().enumerate() {
@@ -100,13 +111,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 s.scan_head_offset_y
             ));
         }
-        match reader2.get_correction_data(i) {
-            Ok(cd) if cd.shape != [257, 257, 2] => failures.push(format!(
+        match correction_shape(&config2, i) {
+            Some(shape) if shape != [257, 257, 2] => failures.push(format!(
                 "  train{} correction shape: expected [257, 257, 2], got {:?}",
                 i + 1,
-                cd.shape
+                shape
             )),
-            Err(e) => failures.push(format!("  train{} correction read error: {e}", i + 1)),
+            None => failures.push(format!("  train{} correction data missing", i + 1)),
             _ => {}
         }
     }

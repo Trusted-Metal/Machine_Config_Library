@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
-use crate::tree::{Attr, AttrValue, DatasetData, ExtensionTree, Scalar};
+use crate::tree::{Attr, AttrValue, ColumnData, DatasetData, ExtensionTree, Scalar};
 use crate::validate::{validate_tree, ContractError};
 
 // Canonical encoding, identical in every language (all little-endian):
@@ -12,6 +12,14 @@ use crate::validate::{validate_tree, ContractError};
 //   attr    = name, u8 dtypeTag, u8 kind (0 scalar, 1 array), [u32 count], value*
 //   dataset = u8 dtypeTag, u32 rank, u64 dim*, u64 count, value*, attr map (as in tree)
 //   value   = utf8: u32 byteLength + bytes; ints: fixed width; f32/f64: IEEE bits
+//
+// Appended after the datasets only when a tree has tables (so trees without them hash as in 0.1.0):
+//
+//   tables  = u32 0xFFFFFFFF, u32 tableCount, (name table)*
+//   table   = u32 fieldCount, (name, u8 dtypeTag, u32 size)*, u64 rows, column values*, attr map
+//
+// Table fields keep their declared order (it is the compound member order); each column's values
+// follow in that order, row by row within a column.
 //
 // Entries are sorted by the UTF-8 bytes of their names (BTreeMap<String, _> order). NaN is
 // encoded as the quiet NaN and -0 as +0, so equal values always hash equal.
@@ -94,6 +102,33 @@ fn put_data(h: &mut Sha256, data: &DatasetData) {
     }
 }
 
+fn put_column(h: &mut Sha256, column: &ColumnData) {
+    macro_rules! each {
+        ($values:expr, $variant:ident) => {
+            for x in $values {
+                put_scalar(h, &Scalar::$variant(*x));
+            }
+        };
+    }
+    match column {
+        ColumnData::Utf8(v) => {
+            for s in v {
+                put_name(h, s);
+            }
+        }
+        ColumnData::I8(v) => each!(v, I8),
+        ColumnData::U8(v) => each!(v, U8),
+        ColumnData::I16(v) => each!(v, I16),
+        ColumnData::U16(v) => each!(v, U16),
+        ColumnData::I32(v) => each!(v, I32),
+        ColumnData::U32(v) => each!(v, U32),
+        ColumnData::I64(v) => each!(v, I64),
+        ColumnData::U64(v) => each!(v, U64),
+        ColumnData::F32(v) => each!(v, F32),
+        ColumnData::F64(v) => each!(v, F64),
+    }
+}
+
 fn put_tree(h: &mut Sha256, tree: &ExtensionTree) {
     put_attrs(h, &tree.attrs);
     put_u32(h, tree.children.len() as u32);
@@ -112,6 +147,24 @@ fn put_tree(h: &mut Sha256, tree: &ExtensionTree) {
         put_u64(h, ds.data.len() as u64);
         put_data(h, &ds.data);
         put_attrs(h, &ds.attrs);
+    }
+    if !tree.tables.is_empty() {
+        put_u32(h, 0xFFFF_FFFF);
+        put_u32(h, tree.tables.len() as u32);
+        for (name, table) in &tree.tables {
+            put_name(h, name);
+            put_u32(h, table.fields.len() as u32);
+            for f in &table.fields {
+                put_name(h, &f.name);
+                h.update([f.dtype.tag()]);
+                put_u32(h, f.size.unwrap_or(0) as u32);
+            }
+            put_u64(h, table.rows as u64);
+            for column in &table.columns {
+                put_column(h, column);
+            }
+            put_attrs(h, &table.attrs);
+        }
     }
 }
 

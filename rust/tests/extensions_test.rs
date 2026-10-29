@@ -100,15 +100,16 @@ fn files_without_extensions_have_none() {
 #[test]
 fn reads_the_tm_opcua_group_of_a_v1_1_file_like_any_other_extension() {
     let cfg = MachineConfigReader::open(REFERENCE_V1_1).unwrap().parse().unwrap();
-    assert_eq!(cfg.extensions.keys().collect::<Vec<_>>(), ["TM_OPCUA"]);
+    assert_eq!(cfg.extensions.keys().collect::<Vec<_>>(), ["ClearBox", "TM_OPCUA"]);
 }
 
 #[test]
-fn rejects_clearbox_as_a_tree() {
+fn accepts_clearbox_as_an_ordinary_extension_tree() {
     let cfg = with_extension("ClearBox", ExtensionTree::default());
     let tmp = NamedTempFile::new().unwrap();
-    let err = MachineConfigWriter::with_target_version(&cfg, "1.1").write(tmp.path()).unwrap_err();
-    assert!(matches!(err, MachineConfigError::InvalidExtension(ref m) if m.contains("modelled by core")));
+    MachineConfigWriter::with_target_version(&cfg, "1.1").write(tmp.path()).unwrap();
+    let back = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
+    assert!(back.extensions.contains_key("ClearBox"));
 }
 
 #[test]

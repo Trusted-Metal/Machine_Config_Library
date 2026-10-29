@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-pub const EXTENSION_CONTRACT_VERSION: &str = "0.1.0";
+pub const EXTENSION_CONTRACT_VERSION: &str = "0.1.1";
 
 /// Fixed-width storage types; each maps 1:1 to an HDF5 type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -257,11 +257,97 @@ impl Dataset {
     }
 }
 
-/// Order of attrs/children/datasets is not significant; the maps sort by UTF-8 bytes, which is
-/// also the canonical order.
+/// Order of attrs/children/datasets/tables is not significant; the maps sort by UTF-8 bytes, which
+/// is also the canonical order. `tables` is empty unless used, so a tree without compound data is
+/// encoded and hashed exactly as in contract 0.1.0.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ExtensionTree {
     pub attrs: BTreeMap<String, Attr>,
     pub children: BTreeMap<String, ExtensionTree>,
     pub datasets: BTreeMap<String, Dataset>,
+    pub tables: BTreeMap<String, Table>,
+}
+
+/// One column of a [`Table`]. `size` is the fixed byte length of a `utf8` column and `None` for
+/// numeric ones.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableField {
+    pub name: String,
+    pub dtype: Dtype,
+    pub size: Option<usize>,
+}
+
+impl TableField {
+    pub fn numeric(name: impl Into<String>, dtype: Dtype) -> Self {
+        TableField { name: name.into(), dtype, size: None }
+    }
+
+    pub fn utf8(name: impl Into<String>, size: usize) -> Self {
+        TableField { name: name.into(), dtype: Dtype::Utf8, size: Some(size) }
+    }
+}
+
+/// The values of one table column; the variant must match the field's dtype.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColumnData {
+    Utf8(Vec<String>),
+    I8(Vec<i8>),
+    U8(Vec<u8>),
+    I16(Vec<i16>),
+    U16(Vec<u16>),
+    I32(Vec<i32>),
+    U32(Vec<u32>),
+    I64(Vec<i64>),
+    U64(Vec<u64>),
+    F32(Vec<f32>),
+    F64(Vec<f64>),
+}
+
+impl ColumnData {
+    pub fn dtype(&self) -> Dtype {
+        match self {
+            ColumnData::Utf8(_) => Dtype::Utf8,
+            ColumnData::I8(_) => Dtype::I8,
+            ColumnData::U8(_) => Dtype::U8,
+            ColumnData::I16(_) => Dtype::I16,
+            ColumnData::U16(_) => Dtype::U16,
+            ColumnData::I32(_) => Dtype::I32,
+            ColumnData::U32(_) => Dtype::U32,
+            ColumnData::I64(_) => Dtype::I64,
+            ColumnData::U64(_) => Dtype::U64,
+            ColumnData::F32(_) => Dtype::F32,
+            ColumnData::F64(_) => Dtype::F64,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            ColumnData::Utf8(v) => v.len(),
+            ColumnData::I8(v) => v.len(),
+            ColumnData::U8(v) => v.len(),
+            ColumnData::I16(v) => v.len(),
+            ColumnData::U16(v) => v.len(),
+            ColumnData::I32(v) => v.len(),
+            ColumnData::U32(v) => v.len(),
+            ColumnData::I64(v) => v.len(),
+            ColumnData::U64(v) => v.len(),
+            ColumnData::F32(v) => v.len(),
+            ColumnData::F64(v) => v.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// 1-D compound dataset (HDF5 compound type): one row per record, one named column per field.
+/// `fields` order is the compound member order and is significant; `columns[i]` holds the values
+/// of `fields[i]`. A `utf8` column is a fixed-length string of at most `size` UTF-8 bytes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Table {
+    pub fields: Vec<TableField>,
+    pub rows: usize,
+    pub columns: Vec<ColumnData>,
+    pub attrs: BTreeMap<String, Attr>,
 }

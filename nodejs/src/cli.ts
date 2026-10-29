@@ -16,7 +16,7 @@ program
   .command('export-json <file>')
   .description('Export an HDF5 machine-config file to canonical JSON')
   .option('--indent <n>', 'JSON indentation (0 for compact)', '2')
-  .option('--include-binary', 'Include correction_data and raw_bytes arrays')
+  .option('--include-binary', 'Include the .fc3 raw_bytes')
   .action(async (file: string, opts: { indent: string; includeBinary?: boolean }) => {
     const { MachineConfigReader } = await import('./reader.js');
     const reader = new MachineConfigReader(file);
@@ -33,7 +33,14 @@ program
   .action(async (jsonPath: string, outputPath: string) => {
     const { readFileSync } = await import('node:fs');
     const { MachineConfigWriter } = await import('./writer.js');
+    const { extensionTreeFromJson } = await import('./extensions/json.js');
     const data = JSON.parse(readFileSync(jsonPath, 'utf8'));
+    // Extension trees travel in their JSON form (bigint-free, typed arrays as lists); rebuild them.
+    if (data.extensions !== undefined) {
+      for (const [name, tree] of Object.entries(data.extensions)) {
+        data.extensions[name] = extensionTreeFromJson(tree as Parameters<typeof extensionTreeFromJson>[0]);
+      }
+    }
     const writer = new MachineConfigWriter(data);
     await writer.write(outputPath);
   });
@@ -48,15 +55,19 @@ program
     const { MachineConfigReader } = await import('./reader.js');
     const reader = new MachineConfigReader(file);
     const train = parseInt(opts.train, 10);
-    const cd = opts.inverse
-      ? await reader.getInverseCorrectionData(train)
-      : await reader.getCorrectionData(train);
+    const config = await reader.parse();
+    const name = opts.inverse ? 'Inverse_Correction_Data' : 'Correction_Data';
+    const trainId = `Optical_Train_${String(train + 1).padStart(2, '0')}`;
+    const grid = config.extensions?.['ClearBox']?.children[trainId]?.datasets[name];
+    if (grid === undefined) throw new Error(`no ClearBox ${name} for ${trainId}`);
+    if (grid.dtype !== 'f64') throw new Error(`ClearBox ${name} for ${trainId} is not float64`);
+    const data = grid.data as Float64Array;
 
     // Explicit little-endian float64 bytes — cross-platform/cross-language
     // determinism, matching the Python and Rust correction-hash commands.
-    const bytes = Buffer.allocUnsafe(cd.data.length * 8);
-    for (let i = 0; i < cd.data.length; i++) {
-      bytes.writeDoubleLE(cd.data[i], i * 8);
+    const bytes = Buffer.allocUnsafe(data.length * 8);
+    for (let i = 0; i < data.length; i++) {
+      bytes.writeDoubleLE(data[i], i * 8);
     }
 
     const digest = createHash('sha256').update(bytes).digest('hex');

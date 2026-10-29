@@ -21,8 +21,7 @@ inline constexpr const char* ROOT_MACHINE = "Machine";
 inline constexpr const char* ROOT_OPTICAL_TRAINS = "Machine/Optical_Trains";
 inline constexpr const char* ROOT_EXTENSIONS = "Extensions";
 inline constexpr const char* GROUP_CLEARBOX = "Extensions/ClearBox";
-// Extensions/ groups core models itself and therefore never exposes as opaque extension trees.
-inline bool isModelledExtensionName(const std::string& name) { return name == "ClearBox"; }
+
 
 inline constexpr const char* TRAIN_ID_PREFIX = "Optical_Train_";
 inline constexpr const char* GROUP_SCANNER = "Scanner";

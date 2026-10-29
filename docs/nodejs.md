@@ -111,13 +111,14 @@ See `schema/capabilities/` and [USAGE.md](../USAGE.md).
 All types are fully exported from the package root:
 
 ```typescript
-import type { MachineConfig, OpticalTrain, ClearBox, ExtensionTree } from './dist/index.js';
+import type { MachineConfig, OpticalTrain, ExtensionTree } from './dist/index.js';
 ```
 
 `models.ts` defines the full interface tree — `MachineConfig`, `OpticalTrain`, `Scanner`,
-`AxisConfig`, `LightSource`, `Collimator`, `ScannerCard`, `ClearBox`,
+`AxisConfig`, `LightSource`, `Collimator`, `ScannerCard`,
 `ScanFieldCorrectionFile`, `ExtensionTree` and friends — with snake_case field names
-throughout, mirroring Python's model.
+throughout, mirroring Python's model. ClearBox has no model: it is the `ClearBox` extension tree
+(use case 9).
 
 ---
 
@@ -151,8 +152,9 @@ for (const name of Object.keys(config.extensions ?? {})) {
 
 ## Use case 2 — Export to canonical JSON
 
-By default, `toJson()` produces metadata + scalar fields only. Binary datasets (ClearBox
-correction arrays and raw `.fc3` bytes) are excluded unless `includeBinary: true` is passed.
+`toJson()` produces metadata, scalar fields and every extension tree (the ClearBox correction grids
+are extension datasets, so they are always included). Raw `.fc3` bytes are excluded unless
+`includeBinary: true` is passed.
 
 ```typescript
 import { MachineConfigReader } from './dist/index.js';
@@ -160,21 +162,20 @@ import { writeFileSync } from 'node:fs';
 
 const reader = new MachineConfigReader('fixtures/reference_config.h5');
 
-// Default: metadata + scalars only (~13 KB)
+// Default: metadata, scalars and extensions (~14 MB for a 2-laser config)
 const json = await reader.toJson({ indent: 2 });
 writeFileSync('output.json', json, 'utf-8');
 
 // Compact (no indentation)
 const compact = await reader.toJson({ indent: 0 });
 
-// Include correction grids and raw .fc3 bytes (~14 MB for a 2-laser config)
+// Also include raw .fc3 bytes
 const full = await reader.toJson({ includeBinary: true, indent: 2 });
 writeFileSync('output_full.json', full, 'utf-8');
 ```
 
-> **Accessing binary data without JSON**: use `parse({ includeBinary: true })` to get
-> `optional_components.clearbox.correction_data` as a `(number | null)[][][]` array of shape
-> 257×257×2 in the model. `null` cells are out-of-field points (NaN in HDF5).
+> **Accessing binary data without JSON**: the ClearBox grids are `Float64Array`s in
+> `config.extensions.ClearBox` (use case 9); `NaN` marks out-of-field points.
 
 ---
 
@@ -195,10 +196,9 @@ const reread = await new MachineConfigReader('copy.h5').parse();
 console.log(reread.meta.configuration_hash === config.meta.configuration_hash);
 ```
 
-> **Binary data in the writer**: if `correction_data` / `inverse_correction_data` are absent
-> (config parsed without `includeBinary: true`), the writer writes zero-filled `(257, 257, 2)`
-> float64 datasets — identical behaviour to Python and Rust. Parse with `{ includeBinary: true }`
-> first to preserve the original correction grids.
+> **Binary data in the writer**: the ClearBox grids travel inside `config.extensions`, so they are
+> written back verbatim. Only the scan-field correction bytes need `parse({ includeBinary: true })`;
+> otherwise the writer writes a zero-filled placeholder for them.
 
 ---
 
@@ -226,10 +226,10 @@ const config = new MockConfigBuilder().build();
 console.log(config.optical_trains.length);    // 2
 console.log(config.meta.machine_name);        // "MockMachine"
 
-// Verify the correction grid
+// Verify the correction grid (ClearBox is an extension tree; see use case 9)
 const reader = new MachineConfigReader('test_config.h5');
-const cd = await reader.getCorrectionData(0);   // { data: Float64Array, shape: [257, 257, 2] }
-console.log('Peak correction:', cd.data[(128 * 257 + 128) * 2].toFixed(4)); // ≈ 2.0000
+const cd = (await reader.parse()).extensions!.ClearBox.children.Optical_Train_01.datasets.Correction_Data;
+console.log('Peak correction:', (cd.data as Float64Array)[(128 * 257 + 128) * 2].toFixed(4)); // ≈ 2.0000
 ```
 
 > **Defaults**: `nLasers: 2`, `buildPlateX/Y: 250`, `buildPlateZ: 20`, `includeClearbox: true`,
@@ -268,28 +268,36 @@ const missing = await reader.getRawGroup('does/not/exist');  // {}
 
 ## Use case 9 — Access ClearBox correction arrays
 
-For numerical work — or anything that must match Python/Rust bit-for-bit such as hashing —
-read the raw grid directly via the dedicated accessors:
+ClearBox is not a typed model in core: it is the opaque `ClearBox` extension tree
+(`config.extensions.ClearBox`), in the File_Version 1.1 layout for both file versions (see
+[EXTENSION_CONTRACT.md](EXTENSION_CONTRACT.md#clearbox)). Each train is a child
+`Optical_Train_NN` with `Correction_Data` / `Inverse_Correction_Data` datasets: flat, row-major
+`Float64Array`s of shape `[257, 257, 2]` with `NaN` for out-of-field points.
 
 ```typescript
 import { MachineConfigReader } from './dist/index.js';
 
-const reader = new MachineConfigReader('fixtures/reference_config.h5');
+const config = await new MachineConfigReader('fixtures/reference_config.h5').parse();
+const root = config.extensions!.ClearBox;
+const train = root.children.Optical_Train_01;
 
-// Flat, row-major, NaN preserved (not JSON-safe) — shape [257, 257, 2]
-const cd  = await reader.getCorrectionData(0);           // train 0, forward grid
-const icd = await reader.getInverseCorrectionData(0);    // train 0, inverse grid
-
+const cd = train.datasets.Correction_Data;
 console.log(cd.data instanceof Float64Array, cd.shape);  // true [257, 257, 2]
 
 // Row-major offset = (i*257 + j)*2 + k
-const centreX = cd.data[(128 * 257 + 128) * 2 + 0];
+const centreX = (cd.data as Float64Array)[(128 * 257 + 128) * 2 + 0];
 console.log('Centre correction X:', centreX);
+
+// Per-train scalars are extension attrs (with their stored dtypes); shared values are on the root.
+console.log(train.attrs.Ip_Address.value, root.attrs.Output_Path.value);
+
+// Power characterization is a child group with two tables.
+const pc = train.children.Power_Characterization;
+console.log(pc.tables!.Derivation_Equation_Constants.rows);
 ```
 
-> `getCorrectionData`/`getInverseCorrectionData` preserve `NaN` exactly (they skip the
-> `NaN → null` conversion that `parse({ includeBinary: true })` applies). This is what the
-> `correction-hash` CLI uses internally for byte-identical cross-language hashing.
+> The `correction-hash` CLI subcommand hashes this dataset's little-endian float64 bytes, which is
+> what gives byte-identical cross-language hashes.
 
 ---
 

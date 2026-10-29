@@ -11,8 +11,6 @@ import (
 // constructed with.
 type ReaderAdapter interface {
 	Parse(opts ParseOptions) (*MachineConfig, error)
-	GetCorrectionData(trainIndex int) (*CorrectionData, error)
-	GetInverseCorrectionData(trainIndex int) (*CorrectionData, error)
 }
 
 type v1_0ReaderAdapter struct {
@@ -23,28 +21,12 @@ func (a v1_0ReaderAdapter) Parse(opts ParseOptions) (*MachineConfig, error) {
 	return v1_0hdf5.Parse(a.path, opts.IncludeBinary)
 }
 
-func (a v1_0ReaderAdapter) GetCorrectionData(trainIndex int) (*CorrectionData, error) {
-	return v1_0hdf5.GetCorrectionData(a.path, trainIndex)
-}
-
-func (a v1_0ReaderAdapter) GetInverseCorrectionData(trainIndex int) (*CorrectionData, error) {
-	return v1_0hdf5.GetInverseCorrectionData(a.path, trainIndex)
-}
-
 type v1_1ReaderAdapter struct {
 	path string
 }
 
 func (a v1_1ReaderAdapter) Parse(opts ParseOptions) (*MachineConfig, error) {
 	return v1_1hdf5.Parse(a.path, opts.IncludeBinary)
-}
-
-func (a v1_1ReaderAdapter) GetCorrectionData(trainIndex int) (*CorrectionData, error) {
-	return v1_1hdf5.GetCorrectionData(a.path, trainIndex)
-}
-
-func (a v1_1ReaderAdapter) GetInverseCorrectionData(trainIndex int) (*CorrectionData, error) {
-	return v1_1hdf5.GetInverseCorrectionData(a.path, trainIndex)
 }
 
 // ReaderRegistry maps a File_Version string to the constructor for that
@@ -119,28 +101,3 @@ func (r *MachineConfigReader) ParseWithOptions(opts ParseOptions) (*MachineConfi
 	return cfg, nil
 }
 
-// GetCorrectionData loads the ClearBox Correction_Data grid for train index.
-func (r *MachineConfigReader) GetCorrectionData(trainIndex int) (*CorrectionData, error) {
-	fv, err := PeekFileVersion(r.path)
-	if err != nil {
-		return nil, err
-	}
-	adapter, err := ResolveReader(fv, r.path, productionReaderRegistry)
-	if err != nil {
-		return nil, err
-	}
-	return adapter.GetCorrectionData(trainIndex)
-}
-
-// GetInverseCorrectionData loads the ClearBox Inverse_Correction_Data grid for train index.
-func (r *MachineConfigReader) GetInverseCorrectionData(trainIndex int) (*CorrectionData, error) {
-	fv, err := PeekFileVersion(r.path)
-	if err != nil {
-		return nil, err
-	}
-	adapter, err := ResolveReader(fv, r.path, productionReaderRegistry)
-	if err != nil {
-		return nil, err
-	}
-	return adapter.GetInverseCorrectionData(trainIndex)
-}

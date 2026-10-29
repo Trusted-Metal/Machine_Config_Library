@@ -106,9 +106,9 @@ class Hdf5WriterV1_1 : public WriterAdapter {
 public:
     explicit Hdf5WriterV1_1(const MachineConfig& cfg) : cfg_(cfg) {}
 
-    // Throws std::runtime_error if the model's ClearBox-bearing trains
-    // disagree on Output_Path or Software_Trigger_Delay — see the migration
-    // manifest's Change 1 "Consolidate conflict rule".
+    // ClearBox is an ordinary extension tree here: the shared Output_Path/Software_Trigger_Delay
+    // live on its root and one subgroup per train beneath it, so every extension is written the
+    // same way.
     void write(std::filesystem::path path) const override {
         validateExtensions();
         HighFive::File f(path.string(),
@@ -117,8 +117,6 @@ public:
         auto mgrp = f.createGroup(ROOT_MACHINE);
         writeMachineAttrs(mgrp);
         auto ogrp = mgrp.createGroup("Optical_Trains");
-
-        writeExtensionsClearBoxRoot(f);
 
         for (size_t i = 0; i < cfg_.optical_trains.size(); ++i) {
             std::string tid = trainId(i);
@@ -129,8 +127,6 @@ public:
             auto lg = tg.createGroup(GROUP_LIGHT_SOURCE);  writeLightSource(lg, train.light_source);
             auto cg = tg.createGroup(GROUP_COLLIMATOR);    writeCollimator(cg, train.collimator);
             auto kg = tg.createGroup(GROUP_SCANNER_CARD);  writeScannerCard(kg, train.scanner_card);
-            if (train.optional_components.clearbox)
-                writeClearBox(f, tid, *train.optional_components.clearbox);
             if (train.scan_field_correction_file)
                 writeSfcf(f, tid, *train.scan_field_correction_file);
         }
@@ -148,62 +144,7 @@ private:
     // Runs before the output file is created, so a rejected config never leaves a partial file
     // behind.
     void validateExtensions() const {
-        for (const auto& [name, tree] : cfg_.extensions) {
-            extension::validate(tree, name);
-            if (isModelledExtensionName(name))
-                throw std::runtime_error("extension \"" + name + "\" is modelled by core and cannot be written as an extension tree");
-        }
-    }
-
-    // Change 1 (Consolidate): collect *field* from every ClearBox-bearing
-    // train; hard error if they disagree. See the migration manifest's
-    // Change 1 "Consolidate conflict rule" for the exact message format.
-    template <typename T, typename Getter, typename Fmt>
-    T consolidateField(
-        const std::vector<std::pair<std::string, const ClearBox*>>& trainsWithClearbox,
-        const std::string& fieldName, Getter getter, Fmt fmt) const
-    {
-        std::vector<std::pair<std::string, T>> values;
-        values.reserve(trainsWithClearbox.size());
-        for (const auto& entry : trainsWithClearbox)
-            values.emplace_back(entry.first, getter(*entry.second));
-
-        const T& first = values.front().second;
-        bool allSame = std::all_of(values.begin(), values.end(),
-            [&](const std::pair<std::string, T>& p) { return p.second == first; });
-        if (!allSame) {
-            std::string detail;
-            for (size_t i = 0; i < values.size(); ++i) {
-                if (i) detail += ", ";
-                detail += values[i].first + "=" + fmt(values[i].second);
-            }
-            throw std::runtime_error(
-                "Consolidate conflict on '" + fieldName + "': trains disagree \xe2\x80\x94 " + detail);
-        }
-        return first;
-    }
-
-    void writeExtensionsClearBoxRoot(HighFive::File& f) const {
-        std::vector<std::pair<std::string, const ClearBox*>> trainsWithClearbox;
-        for (size_t i = 0; i < cfg_.optical_trains.size(); ++i) {
-            const auto& t = cfg_.optical_trains[i];
-            if (t.optional_components.clearbox)
-                trainsWithClearbox.emplace_back(trainId(i), &*t.optional_components.clearbox);
-        }
-        if (trainsWithClearbox.empty()) return;
-
-        auto outputPath = consolidateField<std::optional<std::string>>(
-            trainsWithClearbox, "Output_Path",
-            [](const ClearBox& cb) { return cb.output_path; },
-            [](const std::optional<std::string>& v) { return v.value_or(""); });
-        auto softwareTriggerDelay = consolidateField<std::optional<int64_t>>(
-            trainsWithClearbox, "Software_Trigger_Delay",
-            [](const ClearBox& cb) { return cb.software_trigger_delay; },
-            [](const std::optional<int64_t>& v) { return v ? std::to_string(*v) : std::string(); });
-
-        auto cbRoot = f.createGroup(GROUP_CLEARBOX);
-        ws(cbRoot, "Output_Path", outputPath.value_or(""));
-        wi(cbRoot, "Software_Trigger_Delay", softwareTriggerDelay);
+        for (const auto& [name, tree] : cfg_.extensions) extension::validate(tree, name);
     }
 
     void writeRootAttrs(HighFive::File& f) const {
@@ -377,42 +318,6 @@ private:
         ws(grp, "Sample_Period_unit",      sc.sample_period_unit.value_or(""));
     }
 
-    // Change 1: relocated to Extensions/ClearBox/<train_id>/; writes only
-    // the per-train subset — Output_Path/Software_Trigger_Delay are written
-    // once, at Extensions/ClearBox/ itself, by writeExtensionsClearBoxRoot()
-    // before this is ever called. Several attrs dropped (Selected_Camera,
-    // Custom_Video_Format, Video_Output, Show_Console,
-    // Correction_Grid_Domain_Shape, Inverse_Grid_Domain_Shape — never
-    // written), Firmware_Version added, Volts_To_Watts_Algorithm/Params
-    // superseded by Power_Characterization (Change 3, never written here).
-    void writeClearBox(HighFive::File& f, const std::string& tid, const ClearBox& cb) const {
-        auto grp = f.createGroup(clearboxPathById(tid));
-        ws(grp, "Ip_Address",              cb.ip_address);
-        ws(grp, "Serial_Number",           cb.serial_number.value_or(""));
-        wi(grp, "Data_Port",               cb.data_port);
-        wi(grp, "Server_Port",             cb.server_port);
-        wi(grp, "Actual_Timing_Offset",    cb.actual_timing_offset);
-        wi(grp, "Commanded_Timing_Offset", cb.commanded_timing_offset);
-        ws(grp, "Manufacturer",            cb.manufacturer.value_or(""));
-        ws(grp, "Model",                   cb.model.value_or(""));
-        ws(grp, "Firmware_Version",        cb.firmware_version.value_or(""));
-
-        writeCorrectionDataset(grp, DS_CORRECTION_DATA,         cb.correction_data);
-        writeCorrectionDataset(grp, DS_INVERSE_CORRECTION_DATA, cb.inverse_correction_data);
-
-        if (!cb.synchronous_sensors.empty()) {
-            auto sensors_grp = grp.createGroup("Synchronous_Sensors");
-            for (const auto& [name, sensor] : cb.synchronous_sensors) {
-                auto sg = sensors_grp.createGroup(name);
-                writeSynchronousSensor(sg, sensor);
-            }
-        }
-
-        auto pc = cb.power_characterization;
-        auto pcGrp = grp.createGroup(GROUP_POWER_CHARACTERIZATION);
-        writePowerCharacterization(pcGrp, pc);
-    }
-
     // Derivation_Equation_Constants.name is a 64-byte fixed-length field. A
     // name whose UTF-8 encoding exceeds 64 bytes is rejected here, not
     // silently truncated on write.
@@ -444,43 +349,6 @@ private:
         for (const auto& p : points)
             rows.push_back({p.input_value, p.output_value});
         grp.createDataSet(dsName, rows);
-    }
-
-    void writeSynchronousSensor(HighFive::Group& grp, const SynchronousSensor& s) const {
-        wb(grp, "Enabled", s.enabled);
-        ws(grp, "Sensor_Name", s.sensor_name.value_or(""));
-        wf(grp, "Sensor_Output_Range_Low", s.sensor_output_range_low);
-        wf(grp, "Sensor_Output_Range_High", s.sensor_output_range_high);
-        ws(grp, "Sensor_Output_Space", s.sensor_output_space.value_or(""));
-        ws(grp, "Sensor_Model", s.sensor_model.value_or(""));
-        ws(grp, "Sensor_Manufacturer", s.sensor_manufacturer.value_or(""));
-        ws(grp, "Sensor_Scope", s.sensor_scope.value_or(""));
-        ws(grp, "Units_Derived_Quantity", s.units_derived_quantity.value_or(""));
-        wi(grp, "Port_ID", s.port_id);
-        ws(grp, "Sensor_Type", s.sensor_type.value_or(""));
-        ws(grp, "Input_Type", s.input_type.value_or(""));
-        ws(grp, "Algorithm_Type", s.algorithm_type.value_or(""));
-        ws(grp, "Algorithm_Equation", s.algorithm_equation.value_or(""));
-        ws(grp, "Calibration_Source", s.calibration_source.value_or(""));
-        wb(grp, "Calibration_Verified", s.calibration_verified);
-        wf(grp, "Sample_Period", s.sample_period);
-        ws(grp, "Metadata", s.metadata.value_or(""));
-        writeEquationConstantsDataset(grp, "Derivation_Equation_Constants", s.derivation_equation_constants);
-        writeCalibrationPointsDataset(grp, "Calibration_Points", s.calibration_points);
-    }
-
-    void writeCorrectionDataset(HighFive::Group& grp, const std::string& name,
-                                  const std::optional<Grid3D>& grid) const {
-        std::array<size_t, 3> shape{};
-        auto flat = detail::gridToFlat(grid, shape);
-        auto ds = grp.createDataSet<double>(
-            name, HighFive::DataSpace({shape[0], shape[1], shape[2]}));
-        H5Dwrite(ds.getId(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, flat.data());
-        ws(ds, "dimensions", "H,W,D");
-        ws(ds, "dtype", "float64");
-        ws(ds, "shape", std::to_string(shape[0]) + "x" +
-                        std::to_string(shape[1]) + "x" +
-                        std::to_string(shape[2]));
     }
 
     void writeSfcf(HighFive::File& f, const std::string& tid, const ScanFieldCorrectionFile& sfcf) const {

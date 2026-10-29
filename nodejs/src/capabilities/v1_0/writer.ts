@@ -8,17 +8,13 @@ import type {
   LightSource,
   Collimator,
   ScannerCard,
-  ClearBox,
   ScanFieldCorrectionFile,
-  SynchronousSensor,
-  EquationConstant,
-  CalibrationPoint,
 } from "../../models.js";
-import { nestedToFlat } from "../../models.js";
-import { backwardFlatFieldsCoefficients, backwardFlatFieldsPoints } from "../../powerCharacterization.js";
+import { backwardFlatFieldsPoints } from "../../powerCharacterization.js";
 import * as layout from "./layout.js";
-import { assertValidExtensionTree } from "../../extensions/contract.js";
+import { assertValidExtensionTree, type ExtensionTree } from "../../extensions/contract.js";
 import { writeExtensionTree } from "../../extensions/hdf5.js";
+import { CLEARBOX_EXTENSION_NAME, clearboxToV1_0Trains } from "../../clearboxLegacy.js";
 
 // ---------------------------------------------------------------------------
 // WASM init — lazy singleton (shared module-level state with reader.ts when
@@ -131,99 +127,6 @@ function writeExtra(grp: h5wasm.Group, extra: Record<string, unknown>): void {
 }
 
 // ---------------------------------------------------------------------------
-// Correction data helpers
-// ---------------------------------------------------------------------------
-
-/** Write a named Float64 3-D dataset with standard ClearBox attributes. */
-function writeCorrectionDataset(
-  grp: h5wasm.Group,
-  name: string,
-  data: Array<Array<Array<number | null>>> | null | undefined,
-): void {
-  const { flat, shape } = nestedToFlat(data);
-  const ds = grp.create_dataset({ name, data: flat, shape, dtype: "<d" });
-  ws_ds(ds, "dimensions", "H,W,D");
-  ws_ds(ds, "dtype", "float64");
-  ws_ds(ds, "shape", `${shape[0]}x${shape[1]}x${shape[2]}`);
-}
-
-// ---------------------------------------------------------------------------
-// Synchronous Sensor compound-dataset helpers
-//
-// Derivation_Equation_Constants.name is a 64-byte fixed-length UTF-8 string
-// on disk, not h5wasm's default variable-length string — a deliberate,
-// cross-language decision (see SYNCHRONOUS_SENSOR_PLAN.md's "Compound
-// dataset string convention"): the HDF5 C library can't convert between
-// fixed- and variable-length strings inside compound-type members, and
-// h5wasm can't write a non-empty VLEN string there at all. h5wasm silently
-// truncates a too-long fixed-length string rather than erroring (confirmed
-// directly), so this writer rejects an oversized name explicitly instead —
-// matching Rust's and Python's writers.
-// ---------------------------------------------------------------------------
-
-const EQUATION_CONSTANT_NAME_MAX_BYTES = 64;
-
-function writeEquationConstants(grp: h5wasm.Group, rows: EquationConstant[]): void {
-  for (const c of rows) {
-    const nameBytes = Buffer.byteLength(c.name, "utf-8");
-    if (nameBytes > EQUATION_CONSTANT_NAME_MAX_BYTES) {
-      throw new Error(
-        `Derivation_Equation_Constants name ${JSON.stringify(c.name)} is ${nameBytes} UTF-8 ` +
-          `bytes, which does not fit in the ${EQUATION_CONSTANT_NAME_MAX_BYTES}-byte ` +
-          "fixed-length field (would otherwise be silently truncated on write).",
-      );
-    }
-  }
-  const data = new Map<string, unknown>([
-    ["name", rows.map((c) => c.name)],
-    ["value", new Float64Array(rows.map((c) => c.value))],
-  ]);
-  grp.create_dataset({
-    name: "Derivation_Equation_Constants",
-    data,
-    dtype: [["name", `S${EQUATION_CONSTANT_NAME_MAX_BYTES}`], ["value", "<d"]],
-    shape: [rows.length],
-  });
-}
-
-/** All-`f64`, no string member — unaffected by the fixed-length decision above. */
-function writeCalibrationPoints(grp: h5wasm.Group, rows: CalibrationPoint[]): void {
-  const data = new Map<string, unknown>([
-    ["input_value", new Float64Array(rows.map((p) => p.input_value))],
-    ["output_value", new Float64Array(rows.map((p) => p.output_value))],
-  ]);
-  grp.create_dataset({
-    name: "Calibration_Points",
-    data,
-    dtype: [["input_value", "<d"], ["output_value", "<d"]],
-    shape: [rows.length],
-  });
-}
-
-function writeSynchronousSensor(grp: h5wasm.Group, sensor: SynchronousSensor): void {
-  wb(grp, "Enabled", sensor.enabled);
-  ws(grp, "Sensor_Name", sensor.sensor_name);
-  wf(grp, "Sensor_Output_Range_Low", sensor.sensor_output_range_low);
-  wf(grp, "Sensor_Output_Range_High", sensor.sensor_output_range_high);
-  ws(grp, "Sensor_Output_Space", sensor.sensor_output_space);
-  ws(grp, "Sensor_Model", sensor.sensor_model);
-  ws(grp, "Sensor_Manufacturer", sensor.sensor_manufacturer);
-  ws(grp, "Sensor_Scope", sensor.sensor_scope);
-  ws(grp, "Units_Derived_Quantity", sensor.units_derived_quantity);
-  wi(grp, "Port_ID", sensor.port_id);
-  ws(grp, "Sensor_Type", sensor.sensor_type);
-  ws(grp, "Input_Type", sensor.input_type);
-  ws(grp, "Algorithm_Type", sensor.algorithm_type);
-  ws(grp, "Algorithm_Equation", sensor.algorithm_equation);
-  ws(grp, "Calibration_Source", sensor.calibration_source);
-  wb(grp, "Calibration_Verified", sensor.calibration_verified);
-  wf(grp, "Sample_Period", sensor.sample_period);
-  ws(grp, "Metadata", sensor.metadata);
-  writeEquationConstants(grp, sensor.derivation_equation_constants);
-  writeCalibrationPoints(grp, sensor.calibration_points);
-}
-
-// ---------------------------------------------------------------------------
 // Sub-tree writers — one function per HDF5 group, mirroring reader.ts
 // ---------------------------------------------------------------------------
 
@@ -326,39 +229,6 @@ function writeScannerCard(grp: h5wasm.Group, sc: ScannerCard): void {
   ws(grp, "Sample_Period_unit", sc.sample_period_unit);
 }
 
-function writeClearBox(grp: h5wasm.Group, cb: ClearBox): void {
-  ws(grp, "Ip_Address", cb.ip_address);
-  ws(grp, "Serial_Number", cb.serial_number);
-  wi(grp, "Data_Port", cb.data_port);
-  wi(grp, "Server_Port", cb.server_port);
-  wi(grp, "Actual_Timing_Offset", cb.actual_timing_offset);
-  wi(grp, "Commanded_Timing_Offset", cb.commanded_timing_offset);
-  ws(grp, "Manufacturer", cb.manufacturer);
-  ws(grp, "Model", cb.model);
-  ws(grp, "Output_Path", cb.output_path);
-  ws(grp, "Selected_Camera", cb.selected_camera);
-  ws(grp, "Custom_Video_Format", cb.custom_video_format);
-  ws(grp, "Video_Output", cb.video_output);
-  wb(grp, "Show_Console", cb.show_console);
-  wi(grp, "Software_Trigger_Delay", cb.software_trigger_delay);
-  const [voltsAlgorithm, voltsParams] = backwardFlatFieldsCoefficients(cb.power_characterization);
-  ws(grp, "Volts_To_Watts_Algorithm", voltsAlgorithm);
-  ws(grp, "Volts_To_Watts_Params", voltsParams);
-  ws(grp, "Correction_Grid_Domain_Shape", cb.correction_grid_domain_shape);
-  ws(grp, "Inverse_Grid_Domain_Shape", cb.inverse_grid_domain_shape);
-  writeCorrectionDataset(grp, "Correction_Data", cb.correction_data);
-  writeCorrectionDataset(grp, "Inverse_Correction_Data", cb.inverse_correction_data);
-
-  const sensors = cb.synchronous_sensors ?? {};
-  const sensorNames = Object.keys(sensors);
-  if (sensorNames.length > 0) {
-    const sensorsGrp = grp.create_group("Synchronous_Sensors");
-    for (const name of sensorNames) {
-      writeSynchronousSensor(sensorsGrp.create_group(name), sensors[name]);
-    }
-  }
-}
-
 function writeSfcf(trainGrp: h5wasm.Group, sfcf: ScanFieldCorrectionFile): void {
   let bytes: Uint8Array;
   if (sfcf.raw_bytes) {
@@ -387,6 +257,7 @@ function writeOpticalTrain(
   trainsGrp: h5wasm.Group,
   trainIdx: number,
   train: OpticalTrain,
+  clearbox: ExtensionTree | undefined,
 ): void {
   const tid = layout.trainId(trainIdx);
   const trainGrp = trainsGrp.create_group(tid);
@@ -427,9 +298,9 @@ function writeOpticalTrain(
   writeCollimator(trainGrp.create_group("Collimator"), train.collimator);
   writeScannerCard(trainGrp.create_group("Scanner_Card"), train.scanner_card);
 
-  if (train.optional_components.clearbox != null) {
-    const optGrp = trainGrp.create_group("Optional_Components");
-    writeClearBox(optGrp.create_group("ClearBox"), train.optional_components.clearbox);
+  if (clearbox !== undefined) {
+    const optGrp = trainGrp.create_group(layout.GROUP_OPTIONAL_COMPONENTS);
+    writeExtensionTree(optGrp, layout.GROUP_CLEARBOX, clearbox);
   }
 
   if (train.scan_field_correction_file != null) {
@@ -451,9 +322,17 @@ export class Hdf5WriterV1_0 {
     const extensions = Object.entries(this.config.extensions ?? {});
     for (const [name, tree] of extensions) {
       assertValidExtensionTree(tree, name);
-      if (name !== layout.LEGACY_OPCUA_EXTENSION_NAME) {
+      if (name !== layout.LEGACY_OPCUA_EXTENSION_NAME && name !== CLEARBOX_EXTENSION_NAME) {
         throw new Error(`File_Version 1.0 has no Extensions group; cannot write extension "${name}"`);
       }
+    }
+    // Resolved before the file is created, so a rejected config never leaves a partial file.
+    const clearboxTree = this.config.extensions?.[CLEARBOX_EXTENSION_NAME];
+    const clearboxGroups = clearboxTree === undefined ? {} : clearboxToV1_0Trains(clearboxTree);
+    const knownTrains = this.config.optical_trains.map((_, i) => layout.trainId(i));
+    const unknown = Object.keys(clearboxGroups).find((id) => !knownTrains.includes(id));
+    if (unknown !== undefined) {
+      throw new Error(`ClearBox: no optical train "${unknown}" in this configuration`);
     }
     await ensureReady();
     const path = normPath(outputPath);
@@ -493,13 +372,12 @@ export class Hdf5WriterV1_0 {
       // Optical trains
       const trainsGrp = machineGrp.create_group("Optical_Trains");
       for (let i = 0; i < this.config.optical_trains.length; i++) {
-        writeOpticalTrain(trainsGrp, i, this.config.optical_trains[i]);
+        writeOpticalTrain(trainsGrp, i, this.config.optical_trains[i], clearboxGroups[layout.trainId(i)]);
       }
 
       // v1.0 stores the TM_OPCUA extension at the root as `OPCUA/`.
-      for (const [, tree] of extensions) {
-        writeExtensionTree(f, layout.ROOT_OPCUA, tree);
-      }
+      const opcua = this.config.extensions?.[layout.LEGACY_OPCUA_EXTENSION_NAME];
+      if (opcua !== undefined) writeExtensionTree(f, layout.ROOT_OPCUA, opcua);
     } finally {
       f.close();
     }

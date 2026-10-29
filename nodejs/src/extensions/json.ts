@@ -7,7 +7,10 @@ import {
   type ExtensionAttr,
   type ExtensionDataset,
   type ExtensionDtype,
+  type ExtensionNumericArray,
   type ExtensionScalar,
+  type ExtensionTable,
+  type ExtensionTableField,
   type ExtensionTree,
 } from "./contract.js";
 import type { MachineConfig } from "../models.js";
@@ -25,10 +28,18 @@ export interface ExtensionDatasetJson {
   data: JsonScalar[];
   attrs: Record<string, ExtensionAttrJson>;
 }
+export interface ExtensionTableJson {
+  fields: ExtensionTableField[];
+  rows: number;
+  columns: Record<string, JsonScalar[]>;
+  attrs: Record<string, ExtensionAttrJson>;
+}
 export interface ExtensionTreeJson {
   attrs: Record<string, ExtensionAttrJson>;
   children: Record<string, ExtensionTreeJson>;
   datasets: Record<string, ExtensionDatasetJson>;
+  /** Omitted when the tree has no tables. */
+  tables?: Record<string, ExtensionTableJson>;
 }
 
 function scalarToJson(dtype: ExtensionDtype, v: ExtensionScalar): JsonScalar {
@@ -81,7 +92,24 @@ export function extensionTreeToJson(tree: ExtensionTree): ExtensionTreeJson {
       attrs: attrsToJson(ds.attrs),
     };
   }
-  return { attrs: attrsToJson(tree.attrs), children, datasets };
+  const json: ExtensionTreeJson = { attrs: attrsToJson(tree.attrs), children, datasets };
+  const tableEntries = Object.entries(tree.tables ?? {});
+  if (tableEntries.length > 0) {
+    json.tables = {};
+    for (const [name, table] of tableEntries) {
+      const columns: Record<string, JsonScalar[]> = {};
+      for (const f of table.fields) {
+        columns[f.name] = Array.from(table.columns[f.name] as ArrayLike<ExtensionScalar>, (v) => scalarToJson(f.dtype, v));
+      }
+      json.tables[name] = {
+        fields: table.fields.map((f) => (f.size === undefined ? { name: f.name, dtype: f.dtype } : { ...f })),
+        rows: table.rows,
+        columns,
+        attrs: attrsToJson(table.attrs),
+      };
+    }
+  }
+  return json;
 }
 
 function attrsFromJson(json: Record<string, ExtensionAttrJson> | undefined, path: string): Record<string, ExtensionAttr> {
@@ -125,8 +153,37 @@ export function extensionTreeFromJson(json: ExtensionTreeJson, path = ""): Exten
     };
     tree.datasets[name] = dataset;
   }
+  for (const [name, t] of Object.entries(json.tables ?? {})) {
+    tree.tables ??= {};
+    tree.tables[name] = tableFromJson(t, path ? `${path}/${name}` : name);
+  }
   if (path === "") assertValidExtensionTree(tree);
   return tree;
+}
+
+function tableFromJson(json: ExtensionTableJson, path: string): ExtensionTable {
+  const columns: Record<string, ExtensionNumericArray | string[]> = {};
+  for (const f of json.fields) {
+    const fieldPath = `${path}/${f.name}`;
+    if (!isExtensionDtype(f.dtype)) throw new ExtensionContractError(fieldPath, `unknown dtype "${String(f.dtype)}"`);
+    const items = json.columns[f.name];
+    if (!Array.isArray(items)) throw new ExtensionContractError(fieldPath, "missing column");
+    if (f.dtype === "utf8") {
+      columns[f.name] = items.map((v, i) => scalarFromJson("utf8", v, `${fieldPath}[${i}]`) as string);
+    } else {
+      const data = new (typedArrayConstructorFor(f.dtype))(items.length);
+      items.forEach((v, i) => {
+        (data as unknown as Record<number, unknown>)[i] = scalarFromJson(f.dtype, v, `${fieldPath}[${i}]`);
+      });
+      columns[f.name] = data;
+    }
+  }
+  return {
+    fields: json.fields.map((f) => (f.size === undefined ? { name: f.name, dtype: f.dtype } : { ...f })),
+    rows: json.rows,
+    columns,
+    attrs: attrsFromJson(json.attrs, path),
+  };
 }
 
 /** Copy of `config` safe to `JSON.stringify` (bigint-free `extensions`). */

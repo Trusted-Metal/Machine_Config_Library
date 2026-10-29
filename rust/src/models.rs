@@ -16,110 +16,8 @@
 
 use indexmap::IndexMap;
 use mcf_extension_contract::ExtensionTree;
-use ndarray::Array3;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
-/// Raw correction grid read directly from a ClearBox HDF5 dataset.
-///
-/// Values are stored in **row-major (C-order)** layout — the same memory order
-/// used by HDF5 and NumPy. Given a shape `[d0, d1, d2]`, the element at
-/// `(i, j, k)` lives at index `i * d1 * d2 + j * d2 + k`.
-///
-/// For an AconityMIDI machine the shape is `[257, 257, 2]`: 257 × 257 spatial
-/// positions with an X-correction and a Y-correction value at each position.
-/// Cells outside the scan-field boundary are encoded as IEEE 754 NaN.
-///
-/// # Why not `ndarray::Array3<f64>`?
-///
-/// Returning `Array3` in the public API would expose `ndarray` as an implicit
-/// version constraint on every downstream crate. By returning a plain-`std`
-/// type instead, this library stays version-agnostic: consumers may use any
-/// `ndarray` release they like and reconstruct the array with a single call:
-///
-/// ```rust
-/// # use machine_config::models::CorrectionData;
-/// # let cd = CorrectionData { data: vec![0.0_f64; 257 * 257 * 2], shape: [257, 257, 2] };
-/// let arr = ndarray::Array3::from_shape_vec(cd.shape, cd.data)
-///     .expect("shape is always consistent");
-/// assert_eq!(arr.shape(), &[257, 257, 2]);
-/// ```
-///
-/// # Accessing elements without ndarray
-///
-/// ```rust
-/// # use machine_config::models::CorrectionData;
-/// # let cd = CorrectionData { data: vec![1.0_f64; 257 * 257 * 2], shape: [257, 257, 2] };
-/// # let (i, j, k) = (10_usize, 20_usize, 1_usize);
-/// // value at (i, j, k)
-/// let [_, d1, d2] = cd.shape;
-/// let val = cd.data[i * d1 * d2 + j * d2 + k];
-/// # assert_eq!(val, 1.0);
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct CorrectionData {
-    /// Flat, row-major buffer of `f64` values.
-    /// `data.len() == shape[0] * shape[1] * shape[2]` is always true.
-    /// NaN values represent out-of-field cells.
-    pub data: Vec<f64>,
-    /// Array dimensions as `[d0, d1, d2]`, e.g. `[257, 257, 2]`.
-    pub shape: [usize; 3],
-}
-
-/// Converts a `(D0, D1, D2)` float64 grid to nested `Vec`s, mapping IEEE 754
-/// NaN cells to `None` (Rule: NaN in float64 dataset → JSON `null`).
-///
-/// Lives at the model layer rather than in a version-specific adapter: the
-/// NaN↔`None` convention is part of the stable model's `ClearBox` field
-/// shape (`Option<Vec<Vec<Vec<Option<f64>>>>>`), not an on-disk detail of any
-/// particular `File_Version`, so every adapter can share it.
-pub(crate) fn nan_array3_to_nested(arr: &Array3<f64>) -> Vec<Vec<Vec<Option<f64>>>> {
-    let shape = arr.shape();
-    let (d0, d1, d2) = (shape[0], shape[1], shape[2]);
-    (0..d0)
-        .map(|i| {
-            (0..d1)
-                .map(|j| {
-                    (0..d2)
-                        .map(|k| {
-                            let v = arr[[i, j, k]];
-                            if v.is_nan() { None } else { Some(v) }
-                        })
-                        .collect()
-                })
-                .collect()
-        })
-        .collect()
-}
-
-/// Converts `Option<Vec<Vec<Vec<Option<f64>>>>>` back to an `Array3<f64>`.
-/// `None` list cells become NaN; a `None` outer value produces a zero-filled
-/// `(257, 257, 2)` array — required when the model was parsed without binary
-/// data (see §3.12 writer rules). Mirrors [`nan_array3_to_nested`] above.
-pub(crate) fn nested_to_array3(data: &Option<Vec<Vec<Vec<Option<f64>>>>>) -> Array3<f64> {
-    const SHAPE: (usize, usize, usize) = (257, 257, 2);
-    let zero = || Array3::<f64>::zeros(SHAPE);
-    let outer = match data {
-        None => return zero(),
-        Some(v) if v.is_empty() => return zero(),
-        Some(v) => v,
-    };
-    let d0 = outer.len();
-    let d1 = outer[0].len();
-    let d2 = if d1 > 0 { outer[0][0].len() } else { 0 };
-    if d0 == 0 || d1 == 0 || d2 == 0 {
-        return zero();
-    }
-    let mut arr = Array3::<f64>::from_elem((d0, d1, d2), f64::NAN);
-    for (i, row) in outer.iter().enumerate() {
-        for (j, col) in row.iter().enumerate() {
-            for (k, &v) in col.iter().enumerate() {
-                arr[[i, j, k]] = v.unwrap_or(f64::NAN);
-            }
-        }
-    }
-    arr
-}
 
 /// Arbitrary, non-schema HDF5 attributes preserved verbatim.
 /// `IndexMap` (not `HashMap`) to preserve HDF5 attribute enumeration order,
@@ -143,59 +41,7 @@ pub struct ScanFieldCorrectionFile {
     pub raw_bytes: Option<Vec<u8>>,
 }
 
-/// Optional ClearBox add-on component. HDF5 source: `.../Optional_Components/ClearBox/`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ClearBox {
-    pub ip_address: String,
-    pub serial_number: Option<String>,
-    pub data_port: Option<i64>,
-    pub server_port: Option<i64>,
-    pub actual_timing_offset: Option<i64>,
-    pub commanded_timing_offset: Option<i64>,
-    /// `(257, 257, 2)` float64 grid; out-of-field NaN cells become `None`.
-    /// Only present when read via `parse_with_binary()` — omitted from JSON otherwise.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub correction_data: Option<Vec<Vec<Vec<Option<f64>>>>>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub inverse_correction_data: Option<Vec<Vec<Vec<Option<f64>>>>>,
-    pub manufacturer: Option<String>,
-    pub model: Option<String>,
-    pub output_path: Option<String>,
-    pub selected_camera: Option<String>,
-    pub custom_video_format: Option<String>,
-    pub video_output: Option<String>,
-    /// HDF5 int 0/1.
-    pub show_console: Option<bool>,
-    pub software_trigger_delay: Option<i64>,
-    pub correction_grid_domain_shape: Option<String>,
-    pub inverse_grid_domain_shape: Option<String>,
-    /// Key = free-form sensor label (HDF5 sub-group name under
-    /// `ClearBox/Synchronous_Sensors/`) — an arbitrary value chosen by the
-    /// file's author, not required to match any attribute inside that
-    /// sensor's own group (e.g. `"Oxygen Sensor"`, `"O2_Port5"`, anything).
-    /// `IndexMap` preserves HDF5 group enumeration order, matching
-    /// `OpcuaConfig.triggers`'s existing choice. No `Synchronous_Sensors`
-    /// group on disk is represented identically to an empty map here — there
-    /// is no separate "absent" state to track. Omitted from JSON entirely
-    /// when empty (unlike `triggers`, which has no such gate) — keeps "no
-    /// group on disk" and "no key in JSON" symmetric, and keeps every
-    /// existing fixture's JSON output byte-identical to before this field
-    /// existed until a file actually uses it.
-    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
-    pub synchronous_sensors: IndexMap<String, SynchronousSensor>,
-    /// v1.1 addition (Change 1); `None` for v1.0 files, no on-disk source there.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub firmware_version: Option<String>,
-    /// The only representation of this concept, for files of either version.
-    /// v1.0's `Volts_To_Watts_Algorithm`/`Params` is a lossless flat encoding
-    /// of the same data (see `power_characterization.rs`'s forward/backward
-    /// functions) — the StableModel no longer carries that flat shape as a
-    /// separate field (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub power_characterization: Option<PowerCharacterization>,
-}
-
-/// One named equation constant for a `SynchronousSensor`'s `algorithm_equation`
+/// One named equation constant for a power characterization's equation
 /// (e.g. `a`/`b` for a Log-Linear fit: `log(ppm) = a*mA + b`). HDF5 source:
 /// one row of the `Derivation_Equation_Constants` compound dataset. A named
 /// row rather than a positional array so a reader never has to infer which
@@ -207,8 +53,8 @@ pub struct EquationConstant {
     pub value: f64,
 }
 
-/// One calibration sample pair for a `SynchronousSensor`. HDF5 source: one row
-/// of the `Calibration_Points` compound dataset.
+/// One calibration sample pair. HDF5 source: one row of a `Calibration_Points` or
+/// `Characterization_Points` compound dataset.
 ///
 /// `input_value` is in the sensor's `input_type` unit; `output_value` is in
 /// the sensor's `sensor_output_space` unit (**not** `units_derived_quantity`)
@@ -223,13 +69,9 @@ pub struct CalibrationPoint {
 }
 
 /// v1.1 addition (Changes 3/4): a structured algorithm + equation + constants
-/// + characterization points describing a power conversion. Shared, identical
-/// struct for both `ClearBox.power_characterization` (ClearBox's
-/// Volts→Watts fit; migrated data has real `derivation_equation_constants`
-/// but zero `characterization_points`) and `LightSource.power_characterization`
-/// (Light_Source's Volts→Watts fit; migrated data is the inverse — zero
-/// `derivation_equation_constants`, real `characterization_points`) — same
-/// *kind* of thing at two different HDF5 paths, not the same instance. See
+/// + characterization points describing a power conversion. Used by
+/// `LightSource.power_characterization` (Light_Source's Watts→Volts fit). ClearBox's own
+/// Volts→Watts fit has the same shape but lives in the opaque `ClearBox` extension tree. See
 /// `docs/migrations/v1_0_to_v1_1.md` Changes 3/4 for the full derivation rules.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PowerCharacterization {
@@ -239,35 +81,6 @@ pub struct PowerCharacterization {
     pub units_derived_quantity: Option<String>,
     pub derivation_equation_constants: Vec<EquationConstant>,
     pub characterization_points: Vec<CalibrationPoint>,
-}
-
-/// A synchronous sensor attached to a `ClearBox`. HDF5 source: one sub-group
-/// under `.../ClearBox/Synchronous_Sensors/<key>/` — see
-/// `ClearBox::synchronous_sensors` for what `<key>` means.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SynchronousSensor {
-    /// HDF5 int 0/1.
-    pub enabled: Option<bool>,
-    pub sensor_name: Option<String>,
-    pub sensor_output_range_low: Option<f64>,
-    pub sensor_output_range_high: Option<f64>,
-    pub sensor_output_space: Option<String>,
-    pub sensor_model: Option<String>,
-    pub sensor_manufacturer: Option<String>,
-    pub sensor_scope: Option<String>,
-    pub units_derived_quantity: Option<String>,
-    pub port_id: Option<i64>,
-    pub sensor_type: Option<String>,
-    pub input_type: Option<String>,
-    pub algorithm_type: Option<String>,
-    pub algorithm_equation: Option<String>,
-    pub calibration_source: Option<String>,
-    /// HDF5 int 0/1.
-    pub calibration_verified: Option<bool>,
-    pub sample_period: Option<f64>,
-    pub metadata: Option<String>,
-    pub derivation_equation_constants: Vec<EquationConstant>,
-    pub calibration_points: Vec<CalibrationPoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -370,18 +183,9 @@ pub struct LightSource {
     /// HDF5 stores this attribute as a string; the reader parses it to `f64`.
     pub power_bit_resolution: Option<f64>,
     pub power_bit_resolution_unit: Option<String>,
-    /// The only representation of this concept, for files of either
-    /// version — see `ClearBox.power_characterization`'s comment.
+    /// The only representation of this concept, for files of either version.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub power_characterization: Option<PowerCharacterization>,
-}
-
-/// Optional add-on hardware that may or may not be installed on an optical train.
-/// Maps to the `Optional_Components` HDF5 group under each `Optical_Train_NN`.
-/// Always present on `OpticalTrain` (the group always exists); contents vary.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OptionalComponents {
-    pub clearbox: Option<ClearBox>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -425,7 +229,6 @@ pub struct OpticalTrain {
     pub collimator: Collimator,
     /// Required; see Rule 7 (§0.5) — a train missing a scanner card is invalid.
     pub scanner_card: ScannerCard,
-    pub optional_components: OptionalComponents,
     pub scan_field_correction_file: Option<ScanFieldCorrectionFile>,
 }
 
@@ -496,8 +299,9 @@ pub struct MachineConfig {
     pub optical_trains: Vec<OpticalTrain>,
     /// Opaque extension trees keyed by their group name under `Extensions/`. Read and written
     /// verbatim by core, so extensions core has no model for (including private ones) survive a
-    /// read-modify-write; only the matching extension library interprets them. ClearBox is still
-    /// modelled in core and is never listed here. Omitted from JSON when empty.
+    /// read-modify-write; only the matching extension library interprets them. ClearBox is one of
+    /// these (`extensions["ClearBox"]`), in its File_Version 1.1 layout for either file version.
+    /// Omitted from JSON when empty.
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
     pub extensions: BTreeMap<String, ExtensionTree>,
 }
@@ -617,7 +421,6 @@ mod tests {
                 sample_period: None,
                 sample_period_unit: None,
             },
-            optional_components: OptionalComponents { clearbox: None },
             scan_field_correction_file: None,
         }
     }
@@ -687,51 +490,6 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"extensions\""));
         let roundtripped: MachineConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(config, roundtripped);
-    }
-
-    #[test]
-    fn binary_fields_omitted_by_default_and_present_when_set() {
-        let mut train = sample_train();
-        train.optional_components.clearbox = Some(ClearBox {
-            ip_address: "192.168.1.50".into(),
-            serial_number: None,
-            data_port: None,
-            server_port: None,
-            actual_timing_offset: None,
-            commanded_timing_offset: None,
-            correction_data: None,
-            inverse_correction_data: None,
-            manufacturer: None,
-            model: None,
-            output_path: None,
-            selected_camera: None,
-            custom_video_format: None,
-            video_output: None,
-            show_console: None,
-            software_trigger_delay: None,
-            correction_grid_domain_shape: None,
-            inverse_grid_domain_shape: None,
-            synchronous_sensors: IndexMap::new(),
-            firmware_version: None,
-            power_characterization: None,
-        });
-        let mut config = sample_config();
-        config.optical_trains = vec![train];
-
-        let json_without_binary = serde_json::to_string(&config).unwrap();
-        assert!(!json_without_binary.contains("correction_data"));
-
-        // clearbox itself is always present (possibly null) — only the
-        // correction grids are conditionally omitted.
-        assert!(json_without_binary.contains("\"clearbox\""));
-
-        config.optical_trains[0].optional_components.clearbox.as_mut().unwrap().correction_data =
-            Some(vec![vec![vec![Some(1.0), None]]]);
-        let json_with_binary = serde_json::to_string(&config).unwrap();
-        assert!(json_with_binary.contains("\"correction_data\""));
-
-        let roundtripped: MachineConfig = serde_json::from_str(&json_with_binary).unwrap();
         assert_eq!(config, roundtripped);
     }
 

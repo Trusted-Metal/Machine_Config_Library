@@ -133,87 +133,30 @@ def test_extensions_survive_a_session_open_and_save(tmp_path):
     assert canonical_digest(after) == canonical_digest(before)
 
 
-def test_optional_components_and_clearbox():
+def test_clearbox_extension_survives_a_session_open_and_save(tmp_path):
+    out = tmp_path / "session_clearbox.h5"
+    before = MachineConfigReader(str(FIXTURE)).parse().extensions["ClearBox"]
+
     opened = open_machine_config(FIXTURE)
     assert isinstance(opened, Ok)
     train = opened.value.optical_train(0)
-    assert isinstance(train, Ok)
-    oc = train.value.optional_components()
-    assert oc is not None
-    cb = oc.clearbox()
-    assert isinstance(cb, Ok)
+    assert isinstance(train.value.set_scanner({**train.value.get_scanner(), "working_distance": 77.5}, SetMode.MERGE), Ok)
+    assert isinstance(opened.value.save(str(out)), Ok)
     opened.value.close()
 
+    after = MachineConfigReader(str(out)).parse().extensions["ClearBox"]
+    assert canonical_digest(after) == canonical_digest(before)
+
+
+def test_create_based_instance_carries_the_clearbox_extension(tmp_path):
+    out = tmp_path / "created_clearbox.h5"
     created = create_machine_config("1.0")
     assert isinstance(created, Ok)
-    t0 = created.value.optical_train(0)
-    assert isinstance(t0, Ok)
-    model = t0.value.get_model()
-    model["optional_components"] = {"clearbox": None}
-    assert isinstance(t0.value.set_model(model, SetMode.REPLACE), Ok)
-    assert t0.value.optional_components() is None
+    assert isinstance(created.value.save(str(out)), Ok)
     created.value.close()
 
-
-def test_get_correction_data_matches_reader():
-    file = open_machine_config(FIXTURE).value
-    reader_adapter = MachineConfigReader(str(FIXTURE))
-    # MachineConfigReader.parse() doesn't expose get_correction_data directly;
-    # the v1_0 adapter it dispatches to does — same method the facade should
-    # match exactly.
-    from machine_config.capabilities.v1_0.hdf5 import Hdf5AdapterV1_0
-    adapter = Hdf5AdapterV1_0(str(FIXTURE))
-
-    result = file.get_correction_data(0)
-    assert isinstance(result, Ok)
-    expected = adapter.get_correction_data(0)
-    np.testing.assert_array_equal(result.value, expected)  # NaN-aware equality
-
-    inv_result = file.get_inverse_correction_data(0)
-    assert isinstance(inv_result, Ok)
-    inv_expected = adapter.get_inverse_correction_data(0)
-    np.testing.assert_array_equal(inv_result.value, inv_expected)
-    file.close()
-
-
-def test_get_correction_data_shape_and_nan_present_through_facade():
-    file = open_machine_config(FIXTURE).value
-    grid = file.get_correction_data(0).value
-    assert grid.shape == (257, 257, 2)
-    assert np.isnan(grid).any()
-    file.close()
-
-
-def test_get_correction_data_missing_clearbox_is_not_present(tmp_path):
-    # Every stock fixture's trains have a ClearBox, so build one without: take
-    # the reference config, strip train 0's ClearBox, re-write to a temp file.
-    config = MachineConfigReader(str(FIXTURE)).parse()
-    config.optical_trains[0].optional_components.clearbox = None
-    out = tmp_path / "no_clearbox.h5"
-    MachineConfigWriter(config).write(out)
-
-    file = open_machine_config(out).value
-    result = file.get_correction_data(0)
-    assert not result.ok
-    assert result.error.code == "NotPresent"
-    inv_result = file.get_inverse_correction_data(0)
-    assert not inv_result.ok
-    assert inv_result.error.code == "NotPresent"
-    file.close()
-
-
-def test_get_correction_data_works_on_create_based_instance_without_touching_disk():
-    # The specific case that rules out delegate-to-Reader-by-reopening: a
-    # create()-d facade has no path at all, so this must convert the
-    # already-loaded in-memory model, not re-read from anywhere.
-    file = create_machine_config("1.0").value
-    grid = file.get_correction_data(0)
-    assert isinstance(grid, Ok)
-    assert grid.value.shape == (257, 257, 2)
-    inv_grid = file.get_inverse_correction_data(0)
-    assert isinstance(inv_grid, Ok)
-    assert inv_grid.value.shape == (257, 257, 2)
-    file.close()
+    again = MachineConfigReader(str(out)).parse()
+    assert "ClearBox" in again.extensions
 
 
 def test_create_set_machine_save_reopen(tmp_path):
@@ -386,16 +329,9 @@ def test_registry_driven_dict_builder_parity_across_all_versions():
         f"in _DICT_BUILDER_CLASSES above -- add one so this parity check covers it."
     )
 
-    # reference_config_v1_1.h5 is the one fixture known to exercise a
-    # field (firmware_version) that has ever differed between versions'
-    # dict-builders -- extend this fixture if a future version introduces
-    # another such field.
+    # reference_config_v1_1.h5 exercises ClearBox's v1.1-only fields (Firmware_Version).
     config = MachineConfigReader(FIXTURE_V1_1).parse()
-    assert any(
-        t.optional_components.clearbox is not None
-        and t.optional_components.clearbox.firmware_version is not None
-        for t in config.optical_trains
-    ), "fixture must exercise firmware_version for this test to be meaningful"
+    assert "ClearBox" in config.extensions, "fixture must carry ClearBox for this test to be meaningful"
 
     outputs = {
         version: _DICT_BUILDER_CLASSES[version](Path("."))._config_to_dict(

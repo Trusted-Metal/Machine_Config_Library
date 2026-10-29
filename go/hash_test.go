@@ -143,7 +143,7 @@ func TestIntegerFieldNamesSmokeTest(t *testing.T) {
 	names := machineconfig.IntegerFieldNames()
 
 	for _, want := range []string{
-		"data_port", "file_size", "port_id",
+		"file_size",
 		"actual_bit_resolution",
 	} {
 		if _, ok := names[want]; !ok {

@@ -10,8 +10,20 @@ use std::path::PathBuf;
 use std::process;
 
 use machine_config::capabilities::{open_machine_config, SetMode};
+use machine_config::extension_contract::Dataset;
 use machine_config::reader::MachineConfigReader;
+use machine_config::MachineConfig;
 
+/// The forward correction grid of optical train `index` (0-based), from the ClearBox extension.
+fn correction_grid(config: &MachineConfig, index: usize) -> Option<&Dataset> {
+    config
+        .extensions
+        .get("ClearBox")?
+        .children
+        .get(&format!("Optical_Train_{:02}", index + 1))?
+        .datasets
+        .get("Correction_Data")
+}
 fn main() {
     match run() {
         Ok(()) => {}
@@ -43,7 +55,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Trains  : {n}");
     println!();
     println!("Before calibration:");
-    let reader = MachineConfigReader::open(&dummy)?;
+    let config = MachineConfigReader::open(&dummy)?.parse()?;
     for i in 0..n {
         let s = file.get_scanner(i).map_err(|e| e.to_string())?;
         println!(
@@ -52,8 +64,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             s.scan_head_offset_x,
             s.scan_head_offset_y,
         );
-        if let Ok(cd) = reader.get_correction_data(i) {
-            println!("           correction grid {:?}", cd.shape);
+        if let Some(grid) = correction_grid(&config, i) {
+            println!("           correction grid {:?}", grid.shape);
         }
     }
     println!();
@@ -77,7 +89,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let again = open_machine_config(&out_path).map_err(|e| e.to_string())?;
-    let reader2 = MachineConfigReader::open(&out_path)?;
+    let config2 = MachineConfigReader::open(&out_path)?.parse()?;
     let mut failures: Vec<String> = Vec::new();
 
     for (i, (ex, ey)) in new_offsets.iter().enumerate() {
@@ -98,13 +110,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 s.scan_head_offset_y
             ));
         }
-        match reader2.get_correction_data(i) {
-            Ok(cd) if cd.shape != [257, 257, 2] => failures.push(format!(
+        match correction_grid(&config2, i) {
+            Some(grid) if grid.shape != [257, 257, 2] => failures.push(format!(
                 "  train{} correction shape: expected [257, 257, 2], got {:?}",
                 i + 1,
-                cd.shape
+                grid.shape
             )),
-            Err(e) => failures.push(format!("  train{} correction read error: {e}", i + 1)),
+            None => failures.push(format!("  train{} has no ClearBox correction grid", i + 1)),
             _ => {}
         }
     }

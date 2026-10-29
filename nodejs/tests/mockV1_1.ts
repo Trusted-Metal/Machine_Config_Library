@@ -26,25 +26,19 @@ import { resolve } from 'node:path';
 import { MockConfigBuilder } from '../src/builder.js';
 import type {
   AxisConfig,
-  CalibrationPoint,
-  ClearBox,
   Collimator,
-  EquationConstant,
   LightSource,
   MachineConfig,
   MachineConfigMeta,
   Machine,
   OpticalTrain,
-  OptionalComponents,
   ScanFieldCorrectionFile,
   Scanner,
   ScannerCard,
-  SynchronousSensor,
 } from '../src/models.js';
-import { float64ToNested3D, nestedToFlat } from '../src/models.js';
 
 export interface ReadOptions {
-  /** Include correction_data / inverse_correction_data arrays in the output. */
+  /** Include the `.fc3` bytes (`raw_bytes`) in the output. */
   includeBinary?: boolean;
 }
 
@@ -364,102 +358,6 @@ function parseScannerCard(grp: h5wasm.Group): ScannerCard {
   };
 }
 
-function readEquationConstants(grp: h5wasm.Group): EquationConstant[] {
-  const ent = grp.get('Derivation_Equation_Constants');
-  if (!(ent instanceof h5wasm.Dataset)) return [];
-  const rows = ent.value;
-  if (!Array.isArray(rows)) return [];
-  return rows.map((row) => {
-    const [name, value] = row as unknown as [string, number];
-    return { name: String(name), value: Number(value) };
-  });
-}
-
-function readCalibrationPoints(grp: h5wasm.Group): CalibrationPoint[] {
-  const ent = grp.get('Calibration_Points');
-  if (!(ent instanceof h5wasm.Dataset)) return [];
-  const rows = ent.value;
-  if (!Array.isArray(rows)) return [];
-  return rows.map((row) => {
-    const [input_value, output_value] = row as unknown as [number, number];
-    return { input_value: Number(input_value), output_value: Number(output_value) };
-  });
-}
-
-function parseSynchronousSensor(grp: h5wasm.Group): SynchronousSensor {
-  const a = grp.attrs;
-  return {
-    enabled: attrBool(a, 'Enabled'),
-    sensor_name: attrStr(a, 'Sensor_Name'),
-    sensor_output_range_low: attrFloat(a, 'Sensor_Output_Range_Low'),
-    sensor_output_range_high: attrFloat(a, 'Sensor_Output_Range_High'),
-    sensor_output_space: attrStr(a, 'Sensor_Output_Space'),
-    sensor_model: attrStr(a, 'Sensor_Model'),
-    sensor_manufacturer: attrStr(a, 'Sensor_Manufacturer'),
-    sensor_scope: attrStr(a, 'Sensor_Scope'),
-    units_derived_quantity: attrStr(a, 'Units_Derived_Quantity'),
-    port_id: attrInt(a, 'Port_ID'),
-    sensor_type: attrStr(a, 'Sensor_Type'),
-    input_type: attrStr(a, 'Input_Type'),
-    algorithm_type: attrStr(a, 'Algorithm_Type'),
-    algorithm_equation: attrStr(a, 'Algorithm_Equation'),
-    calibration_source: attrStr(a, 'Calibration_Source'),
-    calibration_verified: attrBool(a, 'Calibration_Verified'),
-    sample_period: attrFloat(a, 'Sample_Period'),
-    metadata: attrStr(a, 'Metadata'),
-    derivation_equation_constants: readEquationConstants(grp),
-    calibration_points: readCalibrationPoints(grp),
-  };
-}
-
-function parseSynchronousSensors(grp: h5wasm.Group): Record<string, SynchronousSensor> | undefined {
-  const sensorsEnt = grp.get('Synchronous_Sensors');
-  const sensors: Record<string, SynchronousSensor> = {};
-  if (sensorsEnt instanceof h5wasm.Group) {
-    for (const name of sensorsEnt.keys()) {
-      const sGrp = asGroup(sensorsEnt.get(name), `ClearBox/Synchronous_Sensors/${name}`);
-      sensors[name] = parseSynchronousSensor(sGrp);
-    }
-  }
-  return Object.keys(sensors).length > 0 ? sensors : undefined;
-}
-
-function parseClearBox(grp: h5wasm.Group, includeBinary: boolean): ClearBox {
-  const a = grp.attrs;
-  const cb: ClearBox = {
-    ip_address: attrStrReq(a, 'Ip_Address'),
-    serial_number: attrStr(a, 'Serial_Number'),
-    data_port: attrInt(a, 'Data_Port'),
-    server_port: attrInt(a, 'Server_Port'),
-    actual_timing_offset: attrInt(a, 'Actual_Timing_Offset'),
-    commanded_timing_offset: attrInt(a, 'Commanded_Timing_Offset'),
-    manufacturer: attrStr(a, 'Manufacturer'),
-    model: attrStr(a, 'Model'),
-    output_path: attrStr(a, 'Output_Path'),
-    selected_camera: attrStr(a, 'Selected_Camera'),
-    custom_video_format: attrStr(a, 'Custom_Video_Format'),
-    video_output: attrStr(a, 'Video_Output'),
-    show_console: attrBool(a, 'Show_Console'),
-    software_trigger_delay: attrInt(a, 'Software_Trigger_Delay'),
-    correction_grid_domain_shape: attrStr(a, 'Correction_Grid_Domain_Shape'),
-    inverse_grid_domain_shape: attrStr(a, 'Inverse_Grid_Domain_Shape'),
-    synchronous_sensors: parseSynchronousSensors(grp),
-  };
-
-  if (includeBinary) {
-    const corrDs = asDataset(grp.get('Correction_Data'), 'ClearBox/Correction_Data');
-    const invDs = asDataset(grp.get('Inverse_Correction_Data'), 'ClearBox/Inverse_Correction_Data');
-    const corrVal = corrDs.value;
-    const invVal = invDs.value;
-    if (!(corrVal instanceof Float64Array)) throw new Error('Correction_Data: expected Float64Array');
-    if (!(invVal instanceof Float64Array)) throw new Error('Inverse_Correction_Data: expected Float64Array');
-    cb.correction_data = float64ToNested3D(corrVal, corrDs.shape ?? [257, 257, 2]);
-    cb.inverse_correction_data = float64ToNested3D(invVal, invDs.shape ?? [257, 257, 2]);
-  }
-
-  return cb;
-}
-
 function parseSfcf(ds: h5wasm.Dataset, includeBinary: boolean): ScanFieldCorrectionFile {
   const a = ds.attrs;
   const sfcf: ScanFieldCorrectionFile = {
@@ -485,14 +383,10 @@ function parseOpticalTrain(f: h5wasm.File, tid: string, includeBinary: boolean):
   const trainGrp = asGroup(f.get(base), base);
   const a = trainGrp.attrs;
 
-  const cbEnt = trainGrp.get('Optional_Components/ClearBox');
   const sfcfEnt = trainGrp.get('scan_field_correction_file');
 
-  const clearbox: ClearBox | null = cbEnt instanceof h5wasm.Group ? parseClearBox(cbEnt, includeBinary) : null;
   const sfcf: ScanFieldCorrectionFile | null =
     sfcfEnt instanceof h5wasm.Dataset ? parseSfcf(sfcfEnt, includeBinary) : null;
-
-  const optional_components: OptionalComponents = { clearbox };
 
   return {
     train_id: tid,
@@ -529,7 +423,6 @@ function parseOpticalTrain(f: h5wasm.File, tid: string, includeBinary: boolean):
     light_source: parseLightSource(asGroup(trainGrp.get('Light_Source'), `${base}/Light_Source`)),
     collimator: parseCollimator(asGroup(trainGrp.get('Collimator'), `${base}/Collimator`)),
     scanner_card: parseScannerCard(asGroup(trainGrp.get('Scanner_Card'), `${base}/Scanner_Card`)),
-    optional_components,
     scan_field_correction_file: sfcf,
   };
 }
@@ -635,79 +528,6 @@ function writeExtra(grp: h5wasm.Group, extra: Record<string, unknown>): void {
   }
 }
 
-function writeCorrectionDataset(
-  grp: h5wasm.Group,
-  name: string,
-  data: Array<Array<Array<number | null>>> | null | undefined,
-): void {
-  const { flat, shape } = nestedToFlat(data);
-  const ds = grp.create_dataset({ name, data: flat, shape, dtype: '<d' });
-  ws_ds(ds, 'dimensions', 'H,W,D');
-  ws_ds(ds, 'dtype', 'float64');
-  ws_ds(ds, 'shape', `${shape[0]}x${shape[1]}x${shape[2]}`);
-}
-
-const EQUATION_CONSTANT_NAME_MAX_BYTES = 64;
-
-function writeEquationConstants(grp: h5wasm.Group, rows: EquationConstant[]): void {
-  for (const c of rows) {
-    const nameBytes = Buffer.byteLength(c.name, 'utf-8');
-    if (nameBytes > EQUATION_CONSTANT_NAME_MAX_BYTES) {
-      throw new Error(
-        `Derivation_Equation_Constants name ${JSON.stringify(c.name)} is ${nameBytes} UTF-8 ` +
-          `bytes, which does not fit in the ${EQUATION_CONSTANT_NAME_MAX_BYTES}-byte ` +
-          'fixed-length field (would otherwise be silently truncated on write).',
-      );
-    }
-  }
-  const data = new Map<string, unknown>([
-    ['name', rows.map((c) => c.name)],
-    ['value', new Float64Array(rows.map((c) => c.value))],
-  ]);
-  grp.create_dataset({
-    name: 'Derivation_Equation_Constants',
-    data,
-    dtype: [['name', `S${EQUATION_CONSTANT_NAME_MAX_BYTES}`], ['value', '<d']],
-    shape: [rows.length],
-  });
-}
-
-function writeCalibrationPoints(grp: h5wasm.Group, rows: CalibrationPoint[]): void {
-  const data = new Map<string, unknown>([
-    ['input_value', new Float64Array(rows.map((p) => p.input_value))],
-    ['output_value', new Float64Array(rows.map((p) => p.output_value))],
-  ]);
-  grp.create_dataset({
-    name: 'Calibration_Points',
-    data,
-    dtype: [['input_value', '<d'], ['output_value', '<d']],
-    shape: [rows.length],
-  });
-}
-
-function writeSynchronousSensor(grp: h5wasm.Group, sensor: SynchronousSensor): void {
-  wb(grp, 'Enabled', sensor.enabled);
-  ws(grp, 'Sensor_Name', sensor.sensor_name);
-  wf(grp, 'Sensor_Output_Range_Low', sensor.sensor_output_range_low);
-  wf(grp, 'Sensor_Output_Range_High', sensor.sensor_output_range_high);
-  ws(grp, 'Sensor_Output_Space', sensor.sensor_output_space);
-  ws(grp, 'Sensor_Model', sensor.sensor_model);
-  ws(grp, 'Sensor_Manufacturer', sensor.sensor_manufacturer);
-  ws(grp, 'Sensor_Scope', sensor.sensor_scope);
-  ws(grp, 'Units_Derived_Quantity', sensor.units_derived_quantity);
-  wi(grp, 'Port_ID', sensor.port_id);
-  ws(grp, 'Sensor_Type', sensor.sensor_type);
-  ws(grp, 'Input_Type', sensor.input_type);
-  ws(grp, 'Algorithm_Type', sensor.algorithm_type);
-  ws(grp, 'Algorithm_Equation', sensor.algorithm_equation);
-  ws(grp, 'Calibration_Source', sensor.calibration_source);
-  wb(grp, 'Calibration_Verified', sensor.calibration_verified);
-  wf(grp, 'Sample_Period', sensor.sample_period);
-  ws(grp, 'Metadata', sensor.metadata);
-  writeEquationConstants(grp, sensor.derivation_equation_constants);
-  writeCalibrationPoints(grp, sensor.calibration_points);
-}
-
 function writeAxis(grp: h5wasm.Group, ax: AxisConfig | null): void {
   const a: AxisConfig = ax ?? {
     actual_bit_resolution: null,
@@ -802,36 +622,6 @@ function writeScannerCard(grp: h5wasm.Group, sc: ScannerCard): void {
   ws(grp, 'Sample_Period_unit', sc.sample_period_unit ?? 'μs');
 }
 
-function writeClearBox(grp: h5wasm.Group, cb: ClearBox): void {
-  ws(grp, 'Ip_Address', cb.ip_address);
-  ws(grp, 'Serial_Number', cb.serial_number);
-  wi(grp, 'Data_Port', cb.data_port);
-  wi(grp, 'Server_Port', cb.server_port);
-  wi(grp, 'Actual_Timing_Offset', cb.actual_timing_offset);
-  wi(grp, 'Commanded_Timing_Offset', cb.commanded_timing_offset);
-  ws(grp, 'Manufacturer', cb.manufacturer);
-  ws(grp, 'Model', cb.model);
-  ws(grp, 'Output_Path', cb.output_path);
-  ws(grp, 'Selected_Camera', cb.selected_camera);
-  ws(grp, 'Custom_Video_Format', cb.custom_video_format);
-  ws(grp, 'Video_Output', cb.video_output);
-  wb(grp, 'Show_Console', cb.show_console);
-  wi(grp, 'Software_Trigger_Delay', cb.software_trigger_delay);
-  ws(grp, 'Correction_Grid_Domain_Shape', cb.correction_grid_domain_shape);
-  ws(grp, 'Inverse_Grid_Domain_Shape', cb.inverse_grid_domain_shape);
-  writeCorrectionDataset(grp, 'Correction_Data', cb.correction_data);
-  writeCorrectionDataset(grp, 'Inverse_Correction_Data', cb.inverse_correction_data);
-
-  const sensors = cb.synchronous_sensors ?? {};
-  const sensorNames = Object.keys(sensors);
-  if (sensorNames.length > 0) {
-    const sensorsGrp = grp.create_group('Synchronous_Sensors');
-    for (const name of sensorNames) {
-      writeSynchronousSensor(sensorsGrp.create_group(name), sensors[name]);
-    }
-  }
-}
-
 function writeSfcf(trainGrp: h5wasm.Group, sfcf: ScanFieldCorrectionFile): void {
   let bytes: Uint8Array;
   if (sfcf.raw_bytes) {
@@ -893,11 +683,6 @@ function writeOpticalTrain(trainsGrp: h5wasm.Group, trainIdx: number, train: Opt
   writeLightSource(trainGrp.create_group('Light_Source'), train.light_source);
   writeCollimator(trainGrp.create_group('Collimator'), train.collimator);
   writeScannerCard(trainGrp.create_group('Scanner_Card'), train.scanner_card);
-
-  if (train.optional_components.clearbox != null) {
-    const optGrp = trainGrp.create_group('Optional_Components');
-    writeClearBox(optGrp.create_group('ClearBox'), train.optional_components.clearbox);
-  }
 
   if (train.scan_field_correction_file != null) {
     writeSfcf(trainGrp, train.scan_field_correction_file);

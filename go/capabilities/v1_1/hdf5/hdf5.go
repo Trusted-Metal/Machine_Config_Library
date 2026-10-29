@@ -35,18 +35,6 @@ func Parse(path string, includeBinary bool) (*MachineConfig, error) {
 	return r.parseWithOptions(includeBinary)
 }
 
-// GetCorrectionData loads the ClearBox Correction_Data grid for train index.
-func GetCorrectionData(path string, trainIndex int) (*CorrectionData, error) {
-	r := &Adapter{path: path}
-	return r.GetCorrectionData(trainIndex)
-}
-
-// GetInverseCorrectionData loads the ClearBox Inverse_Correction_Data grid for train index.
-func GetInverseCorrectionData(path string, trainIndex int) (*CorrectionData, error) {
-	r := &Adapter{path: path}
-	return r.GetInverseCorrectionData(trainIndex)
-}
-
 func (r *Adapter) parseWithOptions(includeBinary bool) (*MachineConfig, error) {
 	f, err := h5c.Open(r.path)
 	if err != nil {
@@ -96,24 +84,6 @@ func (r *Adapter) parse(f *h5c.File, includeBinary bool) (*MachineConfig, error)
 		return nil, err
 	}
 
-	// Change 1 (Consolidate): read the one shared Output_Path/
-	// Software_Trigger_Delay value up front, if ClearBox exists at all.
-	hasClearboxRoot := root.LinkExists(layout.GroupClearBoxRoot)
-	var sharedOutputPath *string
-	var sharedSoftwareTriggerDelay *int
-	if hasClearboxRoot {
-		cbRoot, err := f.Group(layout.GroupClearBoxRoot)
-		if err != nil {
-			return nil, err
-		}
-		sharedOutputPath = readStrAttr(cbRoot, "Output_Path")
-		sharedSoftwareTriggerDelay, err = readIntAttr(cbRoot, "Software_Trigger_Delay")
-		cbRoot.Close()
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	trainsGrp, err := f.Group(layout.RootOpticalTrains)
 	if err != nil {
 		return nil, err
@@ -126,7 +96,7 @@ func (r *Adapter) parse(f *h5c.File, includeBinary bool) (*MachineConfig, error)
 		if !trainsGrp.LinkExists(tid) {
 			break
 		}
-		train, err := parseTrain(f, root, tid, hasClearboxRoot, sharedOutputPath, sharedSoftwareTriggerDelay, includeBinary)
+		train, err := parseTrain(f, tid, includeBinary)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", tid, err)
 		}
@@ -189,11 +159,7 @@ func parseMachine(g *h5c.Group) (Machine, error) {
 
 func parseTrain(
 	f *h5c.File,
-	root *h5c.Group,
 	trainID string,
-	hasClearboxRoot bool,
-	sharedOutputPath *string,
-	sharedSoftwareTriggerDelay *int,
 	includeBinary bool,
 ) (OpticalTrain, error) {
 	base := layout.TrainPathByID(trainID)
@@ -248,18 +214,6 @@ func parseTrain(
 	card, err := parseScannerCard(scg)
 	if err != nil {
 		return OpticalTrain{}, err
-	}
-
-	// Change 1: ClearBox lives at Extensions/ClearBox/<train_id>/ now, not
-	// under this train's own group — only present if the shared root exists
-	// AND this specific train has its own subgroup there.
-	var clearbox *ClearBox
-	if hasClearboxRoot && root.LinkExists(layout.ClearboxPathByID(trainID)) {
-		cb, err := parseClearBox(f, trainID, sharedOutputPath, sharedSoftwareTriggerDelay, includeBinary)
-		if err != nil {
-			return OpticalTrain{}, err
-		}
-		clearbox = &cb
 	}
 
 	var sfcf *ScanFieldCorrectionFile
@@ -330,7 +284,6 @@ func parseTrain(
 		LightSource:                       light,
 		Collimator:                        collimator,
 		ScannerCard:                       card,
-		OptionalComponents:                OptionalComponents{Clearbox: clearbox},
 		ScanFieldCorrectionFile:           sfcf,
 	}, nil
 }
@@ -566,168 +519,6 @@ func parseScannerCard(g *h5c.Group) (ScannerCard, error) {
 	}, nil
 }
 
-// parseClearBox reads one Extensions/ClearBox/<train_id>/ subgroup. Change
-// 1: several v1.0 attrs no longer exist on disk (always nil here);
-// Firmware_Version is new; Output_Path/Software_Trigger_Delay come from the
-// shared Consolidate value read once by the caller, not from this group.
-func parseClearBox(f *h5c.File, trainID string, sharedOutputPath *string, sharedSoftwareTriggerDelay *int, includeBinary bool) (ClearBox, error) {
-	path := layout.ClearboxPathByID(trainID)
-	g, err := f.Group(path)
-	if err != nil {
-		return ClearBox{}, err
-	}
-	defer g.Close()
-
-	dp, err := readIntAttr(g, "Data_Port")
-	if err != nil {
-		return ClearBox{}, err
-	}
-	sp, err := readIntAttr(g, "Server_Port")
-	if err != nil {
-		return ClearBox{}, err
-	}
-	ato, err := readIntAttr(g, "Actual_Timing_Offset")
-	if err != nil {
-		return ClearBox{}, err
-	}
-	cto, err := readIntAttr(g, "Commanded_Timing_Offset")
-	if err != nil {
-		return ClearBox{}, err
-	}
-
-	cb := ClearBox{
-		IPAddress:                 readRequiredStr(g, "Ip_Address"),
-		SerialNumber:              readStrAttr(g, "Serial_Number"),
-		DataPort:                  dp,
-		ServerPort:                sp,
-		ActualTimingOffset:        ato,
-		CommandedTimingOffset:     cto,
-		Manufacturer:              readStrAttr(g, "Manufacturer"),
-		Model:                     readStrAttr(g, "Model"),
-		OutputPath:                sharedOutputPath,
-		SelectedCamera:            nil,
-		CustomVideoFormat:         nil,
-		VideoOutput:               nil,
-		ShowConsole:               nil,
-		SoftwareTriggerDelay:      sharedSoftwareTriggerDelay,
-		CorrectionGridDomainShape: nil,
-		InverseGridDomainShape:    nil,
-		SynchronousSensors:        parseSynchronousSensors(g),
-		FirmwareVersion:           readStrAttr(g, "Firmware_Version"),
-	}
-
-	if g.LinkExists(layout.GroupPowerCharacterization) {
-		pcg, err := g.OpenGroup(layout.GroupPowerCharacterization)
-		if err != nil {
-			return ClearBox{}, err
-		}
-		parsed, err := parsePowerCharacterization(pcg)
-		pcg.Close()
-		if err != nil {
-			return ClearBox{}, err
-		}
-		cb.PowerCharacterization = &parsed
-	}
-
-	if includeBinary {
-		if grid, err := readFloatGrid(f, path+"/"+layout.DSCorrectionData); err == nil {
-			cb.CorrectionData = grid
-		}
-		if grid, err := readFloatGrid(f, path+"/"+layout.DSInverseCorrectionData); err == nil {
-			cb.InverseCorrectionData = grid
-		}
-	}
-	return cb, nil
-}
-
-// parseSynchronousSensors enumerates Synchronous_Sensors/<name> sub-groups
-// — unchanged shape from v1.0 (Change 1's field-by-field table lists it as
-// a plain Path relocation, since it moves along with the rest of ClearBox).
-func parseSynchronousSensors(g *h5c.Group) map[string]SynchronousSensor {
-	sensors := map[string]SynchronousSensor{}
-	if !g.LinkExists("Synchronous_Sensors") {
-		return sensors
-	}
-	sensorsGrp, err := g.OpenGroup("Synchronous_Sensors")
-	if err != nil {
-		return sensors
-	}
-	defer sensorsGrp.Close()
-	for _, name := range sensorsGrp.SubGroupNames() {
-		sg, err := sensorsGrp.OpenGroup(name)
-		if err != nil {
-			continue
-		}
-		sensors[name] = parseSynchronousSensor(sg)
-		sg.Close()
-	}
-	return sensors
-}
-
-func parseSynchronousSensor(g *h5c.Group) SynchronousSensor {
-	enabled, _ := readBoolFromIntAttr(g, "Enabled")
-	rangeLow, _ := readFloatAttr(g, "Sensor_Output_Range_Low")
-	rangeHigh, _ := readFloatAttr(g, "Sensor_Output_Range_High")
-	portID, _ := readIntAttr(g, "Port_ID")
-	calibVerified, _ := readBoolFromIntAttr(g, "Calibration_Verified")
-	samplePeriod, _ := readFloatAttr(g, "Sample_Period")
-
-	constants := []EquationConstant{}
-	if rows, err := g.ReadEquationConstantsDataset("Derivation_Equation_Constants"); err == nil {
-		for _, r := range rows {
-			constants = append(constants, EquationConstant{Name: r.Name, Value: r.Value})
-		}
-	}
-	points := []CalibrationPoint{}
-	if rows, err := g.ReadCalibrationPointsDataset("Calibration_Points"); err == nil {
-		for _, r := range rows {
-			points = append(points, CalibrationPoint{InputValue: r.InputValue, OutputValue: r.OutputValue})
-		}
-	}
-
-	return SynchronousSensor{
-		Enabled:                     enabled,
-		SensorName:                  readStrAttr(g, "Sensor_Name"),
-		SensorOutputRangeLow:        rangeLow,
-		SensorOutputRangeHigh:       rangeHigh,
-		SensorOutputSpace:           readStrAttr(g, "Sensor_Output_Space"),
-		SensorModel:                 readStrAttr(g, "Sensor_Model"),
-		SensorManufacturer:          readStrAttr(g, "Sensor_Manufacturer"),
-		SensorScope:                 readStrAttr(g, "Sensor_Scope"),
-		UnitsDerivedQuantity:        readStrAttr(g, "Units_Derived_Quantity"),
-		PortID:                      portID,
-		SensorType:                  readStrAttr(g, "Sensor_Type"),
-		InputType:                   readStrAttr(g, "Input_Type"),
-		AlgorithmType:               readStrAttr(g, "Algorithm_Type"),
-		AlgorithmEquation:           readStrAttr(g, "Algorithm_Equation"),
-		CalibrationSource:           readStrAttr(g, "Calibration_Source"),
-		CalibrationVerified:         calibVerified,
-		SamplePeriod:                samplePeriod,
-		Metadata:                    readStrAttr(g, "Metadata"),
-		DerivationEquationConstants: constants,
-		CalibrationPoints:           points,
-	}
-}
-
-func readFloatGrid(f *h5c.File, path string) (*[][][]*float64, error) {
-	ds, err := f.OpenDataset(path)
-	if err != nil {
-		return nil, err
-	}
-	defer ds.Close()
-	dims, err := ds.Dims()
-	if err != nil || len(dims) != 3 {
-		return nil, fmt.Errorf("expected 3D dataset at %s", path)
-	}
-	n := dims[0] * dims[1] * dims[2]
-	flat := make([]float64, n)
-	if err := ds.ReadFloat64(flat); err != nil {
-		return nil, err
-	}
-	out := NestedGridFromFlat(flat, [3]int{int(dims[0]), int(dims[1]), int(dims[2])})
-	return &out, nil
-}
-
 func parseSFCF(f *h5c.File, path string, includeBinary bool) (*ScanFieldCorrectionFile, error) {
 	ds, err := f.OpenDataset(path)
 	if err != nil {
@@ -782,43 +573,7 @@ func parseSFCF(f *h5c.File, path string, includeBinary bool) (*ScanFieldCorrecti
 	return sfcf, nil
 }
 
-// GetCorrectionData loads the ClearBox Correction_Data grid for train index.
-func (r *Adapter) GetCorrectionData(trainIndex int) (*CorrectionData, error) {
-	return r.readCorrection(layout.ClearboxPath(trainIndex) + "/" + layout.DSCorrectionData)
-}
-
-// GetInverseCorrectionData loads the ClearBox Inverse_Correction_Data grid for train index.
-func (r *Adapter) GetInverseCorrectionData(trainIndex int) (*CorrectionData, error) {
-	return r.readCorrection(layout.ClearboxPath(trainIndex) + "/" + layout.DSInverseCorrectionData)
-}
-
-func (r *Adapter) readCorrection(path string) (*CorrectionData, error) {
-	f, err := h5c.Open(r.path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	ds, err := f.OpenDataset(path)
-	if err != nil {
-		return nil, err
-	}
-	defer ds.Close()
-	dims, err := ds.Dims()
-	if err != nil || len(dims) != 3 {
-		return nil, fmt.Errorf("expected 3D dataset")
-	}
-	n := dims[0] * dims[1] * dims[2]
-	data := make([]float64, n)
-	if err := ds.ReadFloat64(data); err != nil {
-		return nil, err
-	}
-	return &CorrectionData{
-		Data:  data,
-		Shape: [3]int{int(dims[0]), int(dims[1]), int(dims[2])},
-	}, nil
-}
-
-// parseExtensions reads every Extensions/ group core does not model, verbatim, as an opaque tree.
+// parseExtensions reads every Extensions/ group verbatim as an opaque tree — ClearBox included.
 func parseExtensions(root *h5c.Group) (map[string]*extension.Tree, error) {
 	if !root.LinkExists(layout.RootExtensions) {
 		return nil, nil
@@ -834,9 +589,6 @@ func parseExtensions(root *h5c.Group) (map[string]*extension.Tree, error) {
 	}
 	var out map[string]*extension.Tree
 	for _, m := range members {
-		if _, modelled := layout.ModelledExtensionNames[m.Name]; modelled {
-			continue
-		}
 		if !m.IsGroup {
 			return nil, fmt.Errorf("HDF5: expected Group at %q", layout.RootExtensions+"/"+m.Name)
 		}

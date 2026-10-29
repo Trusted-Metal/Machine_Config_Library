@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"machine-config-go/capabilities/v1_0/layout"
+	"machine-config-go/extension"
 	"machine-config-go/internal/models"
 )
 
@@ -92,11 +93,23 @@ func (b *MockConfigBuilder) Build() *MachineConfig {
 		trains[i] = b.buildTrain(i)
 	}
 
-	return &MachineConfig{
+	config := &MachineConfig{
 		Meta:          meta,
 		Machine:       machine,
 		OpticalTrains: trains,
 	}
+	if b.IncludeClearbox && b.NLasers > 0 {
+		groups := make([]models.ClearBoxTrain, b.NLasers)
+		for i := range groups {
+			groups[i] = models.ClearBoxTrain{TrainID: trains[i].TrainID, Tree: mockClearboxGroup(i)}
+		}
+		clearBox, err := models.ClearBoxFromV10Trains(groups)
+		if err != nil {
+			panic(err) // fixed, known-valid inputs
+		}
+		config.Extensions = map[string]*extension.Tree{models.ClearBoxExtensionName: clearBox}
+	}
+	return config
 }
 
 // Save builds the config and writes it to path.
@@ -176,11 +189,8 @@ func (b *MockConfigBuilder) buildTrain(index int) OpticalTrain {
 		SamplePeriodUnit:      StrPtr("μs"),
 	}
 
-	var cb *ClearBox
 	var sfcf *ScanFieldCorrectionFile
 	if b.IncludeClearbox {
-		c := mockClearbox(index)
-		cb = &c
 		s := mockSFCF(index)
 		sfcf = &s
 	}
@@ -217,7 +227,6 @@ func (b *MockConfigBuilder) buildTrain(index int) OpticalTrain {
 		LightSource:                      ls,
 		Collimator:                       col,
 		ScannerCard:                      sc,
-		OptionalComponents:               OptionalComponents{Clearbox: cb},
 		ScanFieldCorrectionFile:          sfcf,
 	}
 }
@@ -234,26 +243,42 @@ func mockAxis() AxisConfig {
 	}
 }
 
-func mockClearbox(index int) ClearBox {
+// mockClearboxGroup is one train's ClearBox group, authored the way a File_Version 1.0 file stores
+// it; Build() runs it through the v1.0 shim like the file reader does.
+func mockClearboxGroup(index int) *extension.Tree {
 	fwd := gaussianCorrectionGrid()
-	inv := scaleGrid(fwd, 0.9)
-	return ClearBox{
-		IPAddress:             fmt.Sprintf("192.168.1.%d", 10+index),
-		SerialNumber:          StrPtr(fmt.Sprintf("%03d", index+1)),
-		DataPort:              IntPtr(5001),
-		ServerPort:            IntPtr(20101),
-		ActualTimingOffset:    IntPtr(-8),
-		CommandedTimingOffset: IntPtr(50),
-		CorrectionData:        &fwd,
-		InverseCorrectionData: &inv,
-		OutputPath:            StrPtr("/recordings/"),
-		SelectedCamera:        StrPtr("Default"),
-		CustomVideoFormat:     StrPtr("MP4"),
-		VideoOutput:           StrPtr("HDMI"),
-		ShowConsole:           BoolPtr(false),
-		SoftwareTriggerDelay:  IntPtr(3000),
-		PowerCharacterization: mustPowerCharacterizationCoefficients("LINEAR", "50.0,100.0"),
+	inv := make([]float64, len(fwd))
+	for i, v := range fwd {
+		inv[i] = v * 0.9
 	}
+	shape := []uint64{257, 257, 2}
+
+	tree := extension.NewTree()
+	for name, value := range map[string]string{
+		"Ip_Address":               fmt.Sprintf("192.168.1.%d", 10+index),
+		"Serial_Number":            fmt.Sprintf("%03d", index+1),
+		"Output_Path":              "/recordings/",
+		"Selected_Camera":          "Default",
+		"Custom_Video_Format":      "MP4",
+		"Video_Output":             "HDMI",
+		"Volts_To_Watts_Algorithm": "LINEAR",
+		"Volts_To_Watts_Params":    "50.0,100.0",
+	} {
+		tree.Attrs[name] = extension.Attr{Dtype: extension.Utf8, Value: value}
+	}
+	for name, value := range map[string]int64{
+		"Data_Port":               5001,
+		"Server_Port":             20101,
+		"Actual_Timing_Offset":    -8,
+		"Commanded_Timing_Offset": 50,
+		"Show_Console":            0,
+		"Software_Trigger_Delay":  3000,
+	} {
+		tree.Attrs[name] = extension.Attr{Dtype: extension.I64, Value: value}
+	}
+	tree.Datasets["Correction_Data"] = &extension.Dataset{Dtype: extension.F64, Shape: shape, Data: fwd, Attrs: map[string]extension.Attr{}}
+	tree.Datasets["Inverse_Correction_Data"] = &extension.Dataset{Dtype: extension.F64, Shape: shape, Data: inv, Attrs: map[string]extension.Attr{}}
+	return tree
 }
 
 func mockSFCF(index int) ScanFieldCorrectionFile {
@@ -266,40 +291,19 @@ func mockSFCF(index int) ScanFieldCorrectionFile {
 	}
 }
 
-// gaussianCorrectionGrid builds a 257×257×2 Gaussian warp pattern.
+// gaussianCorrectionGrid builds a flat, row-major 257×257×2 Gaussian warp pattern.
 // Matches the Rust builder exactly: x/y normalized to [-1,1], warp = 2*exp(-(x²+y²)/0.5).
-func gaussianCorrectionGrid() [][][]*float64 {
+func gaussianCorrectionGrid() []float64 {
 	const n = 257
-	grid := make([][][]*float64, n)
+	grid := make([]float64, n*n*2)
 	for i := 0; i < n; i++ {
 		x := -1.0 + 2.0*float64(i)/float64(n-1)
-		grid[i] = make([][]*float64, n)
 		for j := 0; j < n; j++ {
 			y := -1.0 + 2.0*float64(j)/float64(n-1)
 			warp := 2.0 * math.Exp(-(x*x+y*y)/0.5)
-			v0, v1 := warp, warp*0.8
-			grid[i][j] = []*float64{&v0, &v1}
+			grid[(i*n+j)*2] = warp
+			grid[(i*n+j)*2+1] = warp * 0.8
 		}
 	}
 	return grid
-}
-
-// scaleGrid multiplies every non-nil cell by factor.
-func scaleGrid(src [][][]*float64, factor float64) [][][]*float64 {
-	dst := make([][][]*float64, len(src))
-	for i, row := range src {
-		dst[i] = make([][]*float64, len(row))
-		for j, col := range row {
-			dst[i][j] = make([]*float64, len(col))
-			for k, cell := range col {
-				if cell == nil {
-					dst[i][j][k] = nil
-				} else {
-					v := *cell * factor
-					dst[i][j][k] = &v
-				}
-			}
-		}
-	}
-	return dst
 }

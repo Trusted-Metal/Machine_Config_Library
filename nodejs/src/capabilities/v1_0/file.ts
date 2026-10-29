@@ -5,15 +5,12 @@ import { Hdf5AdapterV1_0 } from './hdf5.js';
 import { Hdf5WriterV1_0 } from './writer.js';
 import { MockConfigBuilder } from '../../builder.js';
 import { computeConfigurationHash } from '../../hash.js';
-import type { CorrectionData, MachineConfig } from '../../models.js';
-import { nestedToFlat } from '../../models.js';
+import type { MachineConfig } from '../../models.js';
 import { err, ok, type Result } from '../result.js';
 import { capabilityError, SessionClosedError, type CapabilityError } from '../errors.js';
 import { applySetMode, snapshot } from '../merge.js';
 import {
   SetMode,
-  type ClearBoxHandle,
-  type ClearBoxModel,
   type CollimatorModel,
   type LightSourceModel,
   type MachineConfigFile,
@@ -22,7 +19,6 @@ import {
   type MetaHandle,
   type MetaModel,
   type OpticalTrainModel,
-  type OptionalComponentsHandle,
   type ScannerCardModel,
   type ScannerModel,
   type TrainCollection,
@@ -162,37 +158,6 @@ export class MachineConfigFileV1_0 implements MachineConfigFile {
         snapshot(getTrain()['scanner_card']) as ScannerCardModel,
       setScannerCard: (model, mode = SetMode.Merge) =>
         setTrainProp('scanner_card', model, mode),
-      optionalComponents: (): OptionalComponentsHandle | null => {
-        this.assertOpen();
-        const oc = getTrain()['optional_components'] as Json | undefined;
-        const cb = oc?.['clearbox'];
-        if (cb == null) return null;
-        return {
-          clearbox: (): Result<ClearBoxHandle, CapabilityError> => {
-            this.assertOpen();
-            const again = getTrain()['optional_components'] as Json | undefined;
-            if (again?.['clearbox'] == null) {
-              return err(
-                capabilityError('NotPresent', 'clearbox is not present'),
-              );
-            }
-            return ok({
-              getModel: (): ClearBoxModel =>
-                snapshot(again['clearbox']) as ClearBoxModel,
-              setModel: (model, mode = SetMode.Merge): Result<void, CapabilityError> => {
-                this.assertOpen();
-                const o = getTrain()['optional_components'] as Json;
-                o['clearbox'] = applySetMode(
-                  o['clearbox'] as Json,
-                  model as unknown as Json,
-                  mode,
-                );
-                return ok(undefined);
-              },
-            });
-          },
-        };
-      },
     };
   }
 
@@ -229,55 +194,6 @@ export class MachineConfigFileV1_0 implements MachineConfigFile {
         }
       },
     };
-  }
-
-  private clearboxJson(index: number): Result<Json, CapabilityError> {
-    this.assertOpen();
-    const trains = this.data['optical_trains'] as Json[];
-    if (index < 0 || index >= trains.length) {
-      return err(
-        capabilityError(
-          'InvalidIndex',
-          `optical train index ${index} out of range [0, ${trains.length})`,
-        ),
-      );
-    }
-    const oc = trains[index]['optional_components'] as Json | undefined;
-    const cb = oc?.['clearbox'];
-    if (cb == null) {
-      return err(capabilityError('NotPresent', 'clearbox is not present'));
-    }
-    return ok(cb as Json);
-  }
-
-  /**
-   * Returns the `(257, 257, 2)` float64 correction grid for optical train
-   * `trainIndex` — same shape as {@link Hdf5AdapterV1_0.getCorrectionData}.
-   * Converts the already-loaded in-memory clearbox object rather than
-   * re-reading the file (and is therefore synchronous, unlike the Reader's
-   * version), so this works for both `open()`- and `create()`-based
-   * instances alike.
-   */
-  getCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError> {
-    const cb = this.clearboxJson(trainIndex);
-    if (!cb.ok) return cb;
-    const { flat, shape } = nestedToFlat(
-      cb.value['correction_data'] as Array<Array<Array<number | null>>> | null | undefined,
-    );
-    return ok({ data: flat, shape });
-  }
-
-  /**
-   * Returns the `(257, 257, 2)` float64 *inverse* correction grid for
-   * optical train `trainIndex`. See {@link getCorrectionData} for details.
-   */
-  getInverseCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError> {
-    const cb = this.clearboxJson(trainIndex);
-    if (!cb.ok) return cb;
-    const { flat, shape } = nestedToFlat(
-      cb.value['inverse_correction_data'] as Array<Array<Array<number | null>>> | null | undefined,
-    );
-    return ok({ data: flat, shape });
   }
 
   /**

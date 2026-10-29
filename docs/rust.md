@@ -115,16 +115,15 @@ let reader = MachineConfigReader::open("fixtures/reference_config.h5")?;
 let json = reader.to_json(true, false)?;
 std::fs::write("output.json", json)?;
 
-// With binary data: adds correction_data / inverse_correction_data (257×257×2
-// nested arrays) and raw_bytes to every ClearBox/SFCF.
+// With binary data: adds raw_bytes to every scan-field correction file. The ClearBox grids are
+// extension datasets and are always included.
 let full_json = reader.to_json(true, true)?;
 std::fs::write("output_full.json", full_json)?;
 ```
 
-> **Accessing binary data without JSON**: `reader.get_correction_data(train_index)` and
-> `reader.get_inverse_correction_data(train_index)` return `ndarray::Array3<f64>` of shape
-> `(257, 257, 2)`. `reader.get_scan_field_correction_bytes(train_index)` returns `Vec<u8>`.
-> These read directly from HDF5 without going through the model.
+> **Accessing binary data without JSON**: ClearBox grids are in `config.extensions["ClearBox"]` (use
+> case 9). `reader.get_scan_field_correction_bytes(train_index)` returns `Vec<u8>` and reads
+> directly from HDF5 without going through the model.
 
 ---
 
@@ -146,9 +145,9 @@ assert_eq!(config.meta.machine_name, reread.meta.machine_name);
 assert_eq!(config.meta.export_date,  reread.meta.export_date);
 ```
 
-> **Binary data in the writer**: if `correction_data` / `inverse_correction_data` are `None`
-> (config parsed with `parse()`, not `parse_with_binary()`), the writer writes zero-filled
-> `(257, 257, 2)` datasets. Use `parse_with_binary()` before writing to preserve the originals.
+> **Binary data in the writer**: the ClearBox grids travel inside `config.extensions`, so they are
+> written back verbatim. The scan-field correction bytes are only present when the config was
+> parsed with `parse_with_binary()`; otherwise the writer writes a zero-filled placeholder for them.
 
 ---
 
@@ -173,10 +172,13 @@ let config = MockConfigBuilder::new(2).build();
 assert_eq!(config.optical_trains.len(), 2);
 assert_eq!(config.meta.machine_name, "MockMachine");
 
-// Verify the correction grid
-let arr = MachineConfigReader::open("test_config.h5")?.get_correction_data(0)?;
-assert_eq!(arr.shape(), &[257, 257, 2]);
-println!("Peak correction: {:.4}", arr[[128, 128, 0]]);  // ≈ 2.0 (Gaussian peak)
+// Verify the correction grid (ClearBox is an extension tree; see use case 9)
+let config = MachineConfigReader::open("test_config.h5")?.parse()?;
+let ds = &config.extensions["ClearBox"].children["Optical_Train_01"].datasets["Correction_Data"];
+assert_eq!(ds.shape, vec![257, 257, 2]);
+if let DatasetData::F64(v) = &ds.data {
+    println!("Peak correction: {:.4}", v[(128 * 257 + 128) * 2]);  // ≈ 2.0 (Gaussian peak)
+}
 ```
 
 ---
@@ -209,22 +211,32 @@ println!("{:?}", client_attrs.get("Server_URL"));
 
 ## Use case 9 — Access ClearBox correction arrays
 
+ClearBox is not a typed model in core: it is the opaque `ClearBox` extension tree
+(`config.extensions["ClearBox"]`), in the File_Version 1.1 layout for both file versions (see
+[EXTENSION_CONTRACT.md](EXTENSION_CONTRACT.md#clearbox)). Each train is a child
+`Optical_Train_NN` with `Correction_Data` / `Inverse_Correction_Data` datasets, `(257, 257, 2)` f64
+row-major with `NaN` for out-of-field points.
+
 ```rust
+use machine_config::extension_contract::DatasetData;
 use machine_config::reader::MachineConfigReader;
 
-let reader = MachineConfigReader::open("fixtures/reference_config.h5")?;
+let config = MachineConfigReader::open("fixtures/reference_config.h5")?.parse()?;
 
-// Recommended: raw ndarray accessor, NaN preserved
-let arr = reader.get_correction_data(0)?;   // Array3<f64>, shape (257, 257, 2)
-println!("Non-finite cells: {}", arr.iter().filter(|v| !v.is_finite()).count());
-
-// Via parse_with_binary() model: nested Vec<Vec<Vec<Option<f64>>>>
-let config = reader.parse_with_binary()?;
-if let Some(cb) = &config.optical_trains[0].clearbox {
-    let data = cb.correction_data.as_ref().unwrap();
-    // None means the point is outside the correction field (was NaN in HDF5)
-    println!("Centre: x={:?}, y={:?}", data[128][128][0], data[128][128][1]);
+let root = &config.extensions["ClearBox"];
+let train = &root.children["Optical_Train_01"];
+let grid = &train.datasets["Correction_Data"];   // grid.shape == [257, 257, 2]
+if let DatasetData::F64(v) = &grid.data {
+    println!("Non-finite cells: {}", v.iter().filter(|x| !x.is_finite()).count());
+    println!("Centre: x={}, y={}", v[(128 * 257 + 128) * 2], v[(128 * 257 + 128) * 2 + 1]);
 }
+
+// Per-train scalars are extension attrs (with their stored dtypes); shared values are on the root.
+println!("{:?} {:?}", train.attrs["Ip_Address"], root.attrs["Output_Path"]);
+
+// Power characterization is a child group with two tables.
+let pc = &train.children["Power_Characterization"];
+println!("{:?}", pc.tables["Derivation_Equation_Constants"].rows);
 ```
 
 ---

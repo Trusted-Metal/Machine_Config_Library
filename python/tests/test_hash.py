@@ -135,39 +135,33 @@ def test_unset_unit_fields_round_trip_as_none_not_a_default(
     assert rt_train.scanner_card.sample_period_unit is None
 
 
-def test_correction_grid_patch_after_write_does_not_invalidate_hash(tmp_path) -> None:
-    """MockConfigBuilder.save() writes scalars via MachineConfigWriter, then
-    patches ClearBox correction datasets directly via h5py afterward. Binary
-    correction data is deliberately excluded from the configuration hash
-    (see machine_config/hash.py), so that post-hoc patch must not flip
-    is_valid to False.
+def test_correction_grids_are_part_of_the_hash(tmp_path) -> None:
+    """ClearBox's correction grids are extension datasets, so they flow through
+    the extension digest into the configuration hash: a file written by the
+    mock builder validates, and altering a grid changes the hash.
     """
     out = tmp_path / "out.h5"
     MockConfigBuilder(n_lasers=1, machine_name="HashTestMachine").save(out)
     config = MachineConfigReader(out).parse()
     assert config.meta.is_valid is True
 
+    before = compute_configuration_hash(config)
+    config.extensions["ClearBox"].children["Optical_Train_01"].datasets["Correction_Data"].data[0] += 1.0
+    assert compute_configuration_hash(config) != before
 
-def test_v1_0_and_v1_1_dict_builders_agree_on_firmware_version(tmp_path) -> None:
-    """Regression guard (found via a real cross-language configuration-hash
-    mismatch, tools/cross_check.py Phase 5): hash.py always builds its dict
-    via Hdf5AdapterV1_0, regardless of the config's actual file_version, on
-    the documented assumption that v1_0's and v1_1's _config_to_dict()
-    already produce identical output for identical MachineConfig content.
-    That assumption was false for ClearBox.firmware_version (a v1.1-only
-    on-disk attribute, but a real StableModel field regardless of version) —
-    v1_0's _clearbox_to_dict silently omitted it entirely. Verified against
-    fixtures/reference_config_v1_1.h5, which has firmware_version set.
+
+def test_v1_0_and_v1_1_dict_builders_agree(tmp_path) -> None:
+    """hash.py always builds its dict via Hdf5AdapterV1_0, on the documented
+    assumption that v1_0's and v1_1's _config_to_dict() produce identical output
+    for identical MachineConfig content (the cross-language mismatch found via
+    tools/cross_check.py Phase 5). reference_config_v1_1.h5 carries ClearBox with
+    its v1.1-only Firmware_Version.
     """
     if not _REFERENCE_V1_1.exists():
         pytest.skip(f"fixture not present: {_REFERENCE_V1_1}")
 
     config = MachineConfigReader(_REFERENCE_V1_1).parse()
-    assert any(
-        t.optional_components.clearbox is not None
-        and t.optional_components.clearbox.firmware_version is not None
-        for t in config.optical_trains
-    ), "fixture must actually exercise firmware_version for this test to be meaningful"
+    assert "Firmware_Version" in config.extensions["ClearBox"].children["Optical_Train_01"].attrs
 
     v1_0_builder = Hdf5AdapterV1_0(tmp_path)
     v1_1_builder = Hdf5AdapterV1_1(tmp_path)

@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use crate::capabilities::v1_0::hdf5::Hdf5AdapterV1_0;
 use crate::capabilities::v1_1::hdf5::Hdf5AdapterV1_1;
 use crate::error::{MachineConfigError, Result};
-use crate::models::{CorrectionData, ExtraAttrs, MachineConfig};
+use crate::models::{ExtraAttrs, MachineConfig};
 
 pub use crate::capabilities::v1_0::hdf5::peek_file_version;
 
@@ -20,8 +20,6 @@ pub use crate::capabilities::v1_0::hdf5::peek_file_version;
 pub trait ReaderAdapter {
     fn parse(&self) -> Result<MachineConfig>;
     fn parse_with_binary(&self) -> Result<MachineConfig>;
-    fn get_correction_data(&self, train_index: usize) -> Result<CorrectionData>;
-    fn get_inverse_correction_data(&self, train_index: usize) -> Result<CorrectionData>;
     fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>>;
     fn get_raw_group(&self, hdf5_path: &str) -> Result<ExtraAttrs>;
     fn to_json(&self, pretty: bool, include_binary: bool) -> Result<String>;
@@ -85,9 +83,9 @@ impl MachineConfigReader {
         Ok(Self::with_validated_hash(self.backend.parse()?))
     }
 
-    /// Like [`Self::parse`], but also loads binary correction-grid data.
+    /// Like [`Self::parse`], but also loads the `.fc3` bytes.
     /// `is_valid` is computed identically either way — the hash itself
-    /// always excludes binary data (see `hash.rs`).
+    /// always excludes them (see `hash.rs`).
     pub fn parse_with_binary(&self) -> Result<MachineConfig> {
         Ok(Self::with_validated_hash(self.backend.parse_with_binary()?))
     }
@@ -97,14 +95,6 @@ impl MachineConfigReader {
         let recomputed = crate::hash::compute_configuration_hash(&config);
         config.meta.is_valid = Some(recomputed == config.meta.configuration_hash);
         config
-    }
-
-    pub fn get_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
-        self.backend.get_correction_data(train_index)
-    }
-
-    pub fn get_inverse_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
-        self.backend.get_inverse_correction_data(train_index)
     }
 
     pub fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>> {
@@ -145,12 +135,6 @@ mod tests {
             unreachable!("not exercised by the registry-dispatch test")
         }
         fn parse_with_binary(&self) -> Result<MachineConfig> {
-            unreachable!("not exercised by the registry-dispatch test")
-        }
-        fn get_correction_data(&self, _train_index: usize) -> Result<CorrectionData> {
-            unreachable!("not exercised by the registry-dispatch test")
-        }
-        fn get_inverse_correction_data(&self, _train_index: usize) -> Result<CorrectionData> {
             unreachable!("not exercised by the registry-dispatch test")
         }
         fn get_scan_field_correction_bytes(&self, _train_index: usize) -> Result<Vec<u8>> {
@@ -235,14 +219,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_reference_clearbox_and_sfcf_metadata_without_binary() {
+    fn parse_reference_exposes_clearbox_as_an_extension_tree_and_sfcf_metadata() {
+        use crate::extension_contract::DatasetData;
         let config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
         let t1 = &config.optical_trains[0];
 
-        let cb = t1.optional_components.clearbox.as_ref().expect("clearbox present on reference fixture");
-        assert!(!cb.ip_address.is_empty());
-        assert!(cb.correction_data.is_none(), "parse() must not read binary correction grids");
-        assert!(cb.inverse_correction_data.is_none());
+        let tree = &config.extensions["ClearBox"];
+        let cb = &tree.children["Optical_Train_01"];
+        assert!(!cb.attrs["Ip_Address"].as_str().unwrap().is_empty());
+        let grid = &cb.datasets["Correction_Data"];
+        assert_eq!(grid.shape, [257, 257, 2]);
+        let DatasetData::F64(values) = &grid.data else { panic!("grid is not float64") };
+        assert!(values.iter().any(|v| v.is_nan()));
 
         let sfcf = t1
             .scan_field_correction_file
@@ -255,47 +243,26 @@ mod tests {
     #[test]
     fn parse_reference_has_no_synchronous_sensors() {
         let config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
-        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        assert!(cb.synchronous_sensors.is_empty());
+        let cb = &config.extensions["ClearBox"].children["Optical_Train_01"];
+        assert!(!cb.children.contains_key("Synchronous_Sensors"));
     }
 
     #[test]
     fn parse_synchronous_sensor_fixture_through_public_facade() {
-        // Same fixture/values as capabilities/v1_0/hdf5.rs's own
-        // synchronous_sensor_fixture_has_real_values test, but through the
-        // plain public MachineConfigReader facade rather than the internal
-        // adapter directly.
         let config = MachineConfigReader::open(REFERENCE_SENSORS).unwrap().parse().unwrap();
-        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        let sensor = &cb.synchronous_sensors["Oxygen Sensor"];
-        assert_eq!(sensor.sensor_name, Some("ZR800 Oxygen Analyzer".to_string()));
-        assert_eq!(sensor.port_id, Some(5));
-        assert_eq!(sensor.derivation_equation_constants.len(), 2);
-        assert_eq!(sensor.calibration_points.len(), 2);
+        let sensors = &config.extensions["ClearBox"].children["Optical_Train_01"].children
+            ["Synchronous_Sensors"];
+        let sensor = &sensors.children["Oxygen Sensor"];
+        assert_eq!(sensor.attrs["Sensor_Name"].as_str(), Some("ZR800 Oxygen Analyzer"));
+        assert_eq!(sensor.attrs["Port_ID"].as_i64(), Some(5));
     }
 
     #[test]
-    fn parse_with_binary_populates_correction_data_and_raw_bytes() {
+    fn parse_with_binary_populates_raw_bytes() {
         let config = MachineConfigReader::open(REFERENCE).unwrap().parse_with_binary().unwrap();
-        let t1 = &config.optical_trains[0];
-
-        let cb = t1.optional_components.clearbox.as_ref().unwrap();
-        let data = cb.correction_data.as_ref().expect("correction_data populated");
-        assert_eq!(data.len(), 257);
-        assert_eq!(data[0].len(), 257);
-        assert_eq!(data[0][0].len(), 2);
-
-        let sfcf = t1.scan_field_correction_file.as_ref().unwrap();
+        let sfcf = config.optical_trains[0].scan_field_correction_file.as_ref().unwrap();
         let raw = sfcf.raw_bytes.as_ref().expect("raw_bytes populated");
         assert_eq!(raw.len(), sfcf.file_size as usize);
-    }
-
-    #[test]
-    fn get_correction_data_shape_and_nan_present() {
-        let reader = MachineConfigReader::open(REFERENCE).unwrap();
-        let cd = reader.get_correction_data(0).unwrap();
-        assert_eq!(cd.shape, [257, 257, 2]);
-        assert!(cd.data.iter().any(|v| v.is_nan()));
     }
 
     #[test]
@@ -315,15 +282,15 @@ mod tests {
     }
 
     #[test]
-    fn reference_fixture_has_no_extensions() {
+    fn reference_fixture_carries_only_the_clearbox_extension() {
         let config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
-        assert!(config.extensions.is_empty());
+        assert_eq!(config.extensions.keys().collect::<Vec<_>>(), ["ClearBox"]);
     }
 
     #[test]
     fn opcua_fixture_exposes_the_legacy_group_as_an_extension_tree() {
         let config = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
-        assert_eq!(config.extensions.keys().collect::<Vec<_>>(), ["TM_OPCUA"]);
+        assert_eq!(config.extensions.keys().collect::<Vec<_>>(), ["ClearBox", "TM_OPCUA"]);
         let tree = &config.extensions["TM_OPCUA"];
         assert_eq!(
             tree.children.keys().map(String::as_str).collect::<Vec<_>>(),
@@ -362,16 +329,14 @@ mod tests {
         let json = reader.to_json(true, false).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert!(parsed.get("meta").is_some());
-        assert!(!json.contains("\"correction_data\""));
         assert!(!json.contains("\"raw_bytes\""));
         assert!(!json.contains("\"opcua\""));
     }
 
     #[test]
-    fn to_json_include_binary_adds_correction_and_raw_bytes() {
+    fn to_json_include_binary_adds_raw_bytes() {
         let reader = MachineConfigReader::open(REFERENCE).unwrap();
         let json = reader.to_json(false, true).unwrap();
-        assert!(json.contains("\"correction_data\""));
         assert!(json.contains("\"raw_bytes\""));
     }
 
@@ -379,12 +344,14 @@ mod tests {
     fn matches_python_golden_file() {
         let golden_path =
             concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_output.json");
-        let golden: serde_json::Value =
+        let mut golden: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(golden_path).unwrap()).unwrap();
 
         let reader = MachineConfigReader::open(REFERENCE).unwrap();
-        let ours: serde_json::Value =
+        let mut ours: serde_json::Value =
             serde_json::from_str(&reader.to_json(true, false).unwrap()).unwrap();
+        crate::extensions::strip_dataset_data(&mut golden);
+        crate::extensions::strip_dataset_data(&mut ours);
 
         assert_eq!(ours, golden, "Rust reader output diverges from the Python golden file");
     }

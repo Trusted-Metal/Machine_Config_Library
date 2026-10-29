@@ -88,14 +88,6 @@ public:
         return adapter()->getRawGroup(hdf5_path);
     }
 
-    CorrectionData getCorrectionData(size_t train_index) const {
-        return adapter()->getCorrectionData(train_index);
-    }
-
-    CorrectionData getInverseCorrectionData(size_t train_index) const {
-        return adapter()->getInverseCorrectionData(train_index);
-    }
-
     std::vector<uint8_t> getScanFieldCorrectionBytes(size_t train_index) const {
         return adapter()->getScanFieldCorrectionBytes(train_index);
     }

@@ -19,7 +19,6 @@ import numpy as np
 
 from machine_config.models import (
     AxisConfig,
-    ClearBox,
     Collimator,
     LightSource,
     MachineConfig,
@@ -27,23 +26,14 @@ from machine_config.models import (
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
-    SynchronousSensor,
-    nested_to_array,
 )
 
-from machine_config.power_characterization import (
-    backward_flat_fields_coefficients,
-    backward_flat_fields_points,
-)
+from machine_config import clearbox_legacy
+from machine_config.power_characterization import backward_flat_fields_points
 
 from machine_config.extension_contract import validate_tree
 from machine_config.extensions_hdf5 import write_extension_tree
 from . import layout
-from .hdf5 import (
-    EQUATION_CONSTANT_NAME_MAX_BYTES,
-    _CALIBRATION_POINT_DTYPE,
-    _EQUATION_CONSTANT_DTYPE,
-)
 
 
 class Hdf5WriterV1_0:
@@ -56,22 +46,32 @@ class Hdf5WriterV1_0:
     # Public API
     # ------------------------------------------------------------------
 
-    def _validate_extensions(self) -> None:
-        """Runs before the output file is created, so a rejected config never leaves a partial file."""
+    def _validate_extensions(self) -> dict:
+        """Runs before the output file is created, so a rejected config never leaves a partial file.
+
+        Returns the ClearBox extension split into one v1.0 group per optical train id.
+        """
         for name, tree in self.config.extensions.items():
             validate_tree(tree, name)
-            if name != layout.LEGACY_OPCUA_EXTENSION_NAME:
+            if name not in (layout.LEGACY_OPCUA_EXTENSION_NAME, clearbox_legacy.EXTENSION_NAME):
                 raise ValueError(
                     f'File_Version 1.0 has no Extensions group; cannot write extension "{name}"'
                 )
+        tree = self.config.extensions.get(clearbox_legacy.EXTENSION_NAME)
+        groups = clearbox_legacy.to_v1_0_trains(tree) if tree is not None else {}
+        known = {layout.train_id(i) for i in range(len(self.config.optical_trains))}
+        for train_id in groups:
+            if train_id not in known:
+                raise ValueError(f'ClearBox: no optical train "{train_id}" in this configuration')
+        return groups
 
     def write(self, path: str | Path) -> None:
         """Write *config* to an HDF5 file at *path* (creates or overwrites)."""
-        self._validate_extensions()
+        clearbox_groups = self._validate_extensions()
         with h5py.File(Path(path), "w") as f:
             self._write_root_attrs(f)
             self._write_machine(f)
-            self._write_optical_trains(f)
+            self._write_optical_trains(f, clearbox_groups)
             # v1.0 stores the TM_OPCUA extension at the root as ``OPCUA/``.
             tree = self.config.extensions.get(layout.LEGACY_OPCUA_EXTENSION_NAME)
             if tree is not None:
@@ -147,7 +147,7 @@ class Hdf5WriterV1_0:
     # Optical trains
     # ------------------------------------------------------------------
 
-    def _write_optical_trains(self, f: h5py.File) -> None:
+    def _write_optical_trains(self, f: h5py.File, clearbox_groups: dict) -> None:
         for i, train in enumerate(self.config.optical_trains):
             base = layout.train_path(i)
             grp  = f.require_group(base)
@@ -156,9 +156,10 @@ class Hdf5WriterV1_0:
             self._write_light_source(f.require_group(f"{base}/{layout.GROUP_LIGHT_SOURCE}"), train.light_source)
             self._write_collimator(f.require_group(f"{base}/{layout.GROUP_COLLIMATOR}"), train.collimator)
             self._write_scanner_card(f.require_group(f"{base}/{layout.GROUP_SCANNER_CARD}"), train.scanner_card)
-            if train.optional_components.clearbox is not None:
+            clearbox = clearbox_groups.get(layout.train_id(i))
+            if clearbox is not None:
                 opt = f.require_group(f"{base}/{layout.GROUP_OPTIONAL_COMPONENTS}")
-                self._write_clearbox(opt.require_group(layout.GROUP_CLEARBOX), train.optional_components.clearbox)
+                write_extension_tree(opt, layout.GROUP_CLEARBOX, clearbox)
             if train.scan_field_correction_file is not None:
                 self._write_sfcf(f, base, train.scan_field_correction_file)
 
@@ -282,95 +283,6 @@ class Hdf5WriterV1_0:
         grp.attrs["Communication_Protocol"] = self._s(sc.communication_protocol)
         grp.attrs["Sample_Period"]      = self._f(sc.sample_period)
         grp.attrs["Sample_Period_unit"] = self._s(sc.sample_period_unit)
-
-    def _write_clearbox(self, grp: h5py.Group, cb: ClearBox) -> None:
-        grp.attrs["Ip_Address"]           = cb.ip_address
-        grp.attrs["Serial_Number"]        = self._s(cb.serial_number)
-        grp.attrs["Data_Port"]            = self._i(cb.data_port)
-        grp.attrs["Server_Port"]          = self._i(cb.server_port)
-        grp.attrs["Actual_Timing_Offset"]    = self._i(cb.actual_timing_offset)
-        grp.attrs["Commanded_Timing_Offset"] = self._i(cb.commanded_timing_offset)
-        grp.attrs["Manufacturer"]         = self._s(cb.manufacturer)
-        grp.attrs["Model"]                = self._s(cb.model)
-        grp.attrs["Output_Path"]          = self._s(cb.output_path)
-        grp.attrs["Selected_Camera"]      = self._s(cb.selected_camera)
-        grp.attrs["Custom_Video_Format"]  = self._s(cb.custom_video_format)
-        grp.attrs["Video_Output"]         = self._s(cb.video_output)
-        grp.attrs["Show_Console"]         = self._b(cb.show_console)
-        grp.attrs["Software_Trigger_Delay"]    = self._i(cb.software_trigger_delay)
-        # power_characterization is the only StableModel representation of
-        # this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md) —
-        # always derive the flat v1.0 shape from it, unconditionally.
-        algorithm, params = backward_flat_fields_coefficients(cb.power_characterization)
-        grp.attrs["Volts_To_Watts_Algorithm"]  = self._s(algorithm)
-        grp.attrs["Volts_To_Watts_Params"]     = self._s(params)
-        grp.attrs["Correction_Grid_Domain_Shape"]  = self._s(cb.correction_grid_domain_shape)
-        grp.attrs["Inverse_Grid_Domain_Shape"]     = self._s(cb.inverse_grid_domain_shape)
-        grp.create_dataset(
-            "Correction_Data",
-            data=nested_to_array(cb.correction_data),
-        )
-        cds = grp["Correction_Data"]
-        cds.attrs["dimensions"] = "H,W,D"
-        cds.attrs["dtype"]      = "float64"
-        cds.attrs["shape"]      = f"{cds.shape[0]}x{cds.shape[1]}x{cds.shape[2]}"
-        grp.create_dataset(
-            "Inverse_Correction_Data",
-            data=nested_to_array(cb.inverse_correction_data),
-        )
-        ids = grp["Inverse_Correction_Data"]
-        ids.attrs["dimensions"] = "H,W,D"
-        ids.attrs["dtype"]      = "float64"
-        ids.attrs["shape"]      = f"{ids.shape[0]}x{ids.shape[1]}x{ids.shape[2]}"
-
-        # Synchronous_Sensors: only created when non-empty, so a ClearBox
-        # with no sensors looks identical on disk to before this field
-        # existed — no empty placeholder group. Mirrors ClearBox itself
-        # being entirely absent rather than an empty shell.
-        if cb.synchronous_sensors:
-            sensors_grp = grp.create_group("Synchronous_Sensors")
-            for name, sensor in cb.synchronous_sensors.items():
-                self._write_synchronous_sensor(sensors_grp.require_group(name), sensor)
-
-    def _write_synchronous_sensor(self, grp: h5py.Group, sensor: SynchronousSensor) -> None:
-        grp.attrs["Enabled"]                  = self._b(sensor.enabled)
-        grp.attrs["Sensor_Name"]              = self._s(sensor.sensor_name)
-        grp.attrs["Sensor_Output_Range_Low"]  = self._f(sensor.sensor_output_range_low)
-        grp.attrs["Sensor_Output_Range_High"] = self._f(sensor.sensor_output_range_high)
-        grp.attrs["Sensor_Output_Space"]      = self._s(sensor.sensor_output_space)
-        grp.attrs["Sensor_Model"]             = self._s(sensor.sensor_model)
-        grp.attrs["Sensor_Manufacturer"]      = self._s(sensor.sensor_manufacturer)
-        grp.attrs["Sensor_Scope"]             = self._s(sensor.sensor_scope)
-        grp.attrs["Units_Derived_Quantity"]   = self._s(sensor.units_derived_quantity)
-        grp.attrs["Port_ID"]                  = self._i(sensor.port_id)
-        grp.attrs["Sensor_Type"]              = self._s(sensor.sensor_type)
-        grp.attrs["Input_Type"]               = self._s(sensor.input_type)
-        grp.attrs["Algorithm_Type"]           = self._s(sensor.algorithm_type)
-        grp.attrs["Algorithm_Equation"]       = self._s(sensor.algorithm_equation)
-        grp.attrs["Calibration_Source"]       = self._s(sensor.calibration_source)
-        grp.attrs["Calibration_Verified"]     = self._b(sensor.calibration_verified)
-        grp.attrs["Sample_Period"]            = self._f(sensor.sample_period)
-        grp.attrs["Metadata"]                 = self._s(sensor.metadata)
-
-        for c in sensor.derivation_equation_constants:
-            name_bytes = len(c.name.encode("utf-8"))
-            if name_bytes > EQUATION_CONSTANT_NAME_MAX_BYTES:
-                raise ValueError(
-                    f"Derivation_Equation_Constants name {c.name!r} is {name_bytes} UTF-8 "
-                    f"bytes, which does not fit in the {EQUATION_CONSTANT_NAME_MAX_BYTES}-byte "
-                    "fixed-length field (would otherwise be silently truncated on write)."
-                )
-        constants = np.array(
-            [(c.name, c.value) for c in sensor.derivation_equation_constants],
-            dtype=_EQUATION_CONSTANT_DTYPE,
-        )
-        grp.create_dataset("Derivation_Equation_Constants", data=constants)
-
-        points = np.array(
-            [(p.input_value, p.output_value) for p in sensor.calibration_points],
-            dtype=_CALIBRATION_POINT_DTYPE,
-        )
-        grp.create_dataset("Calibration_Points", data=points)
 
     def _write_sfcf(
         self,

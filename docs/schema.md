@@ -19,7 +19,7 @@ Node.js uses Ajv, Rust enforces it implicitly via `serde`, and C++ uses pboettch
   - [light_source](#light_source)
   - [collimator](#collimator)
   - [scanner_card](#scanner_card)
-  - [optional_components.clearbox](#optional_componentsclearbox)
+  - [ClearBox (no longer a train field)](#clearbox-no-longer-a-train-field)
   - [scan_field_correction_file](#scan_field_correction_file)
 - [extensions](#extensions)
 - [Conventions](#conventions)
@@ -227,43 +227,19 @@ Applies to `x_axis`, `y_axis`, `z_axis`, and `focus`. All fields are optional.
 
 ---
 
-### optional_components.clearbox
+### ClearBox (no longer a train field)
 
-Present when the machine has a ClearBox unit. `additionalProperties: false` — no extra keys
-are permitted.
-
-| Field | Type | Notes |
-|---|---|---|
-| `ip_address` | `string` | **Required.** IP address of the ClearBox unit |
-| `serial_number` | `string\|null` | |
-| `data_port` | `integer\|null` | Default 5001 |
-| `server_port` | `integer\|null` | Default 20101 |
-| `actual_timing_offset` | `integer\|null` | |
-| `commanded_timing_offset` | `integer\|null` | |
-| `correction_data` | `array\|null` | 257×257×2 nested array of `number\|null`; `null` = out-of-field (NaN in HDF5) |
-| `inverse_correction_data` | `array\|null` | Same shape as `correction_data` |
-| `manufacturer` | `string\|null` | |
-| `model` | `string\|null` | |
-| `output_path` | `string\|null` | |
-| `selected_camera` | `string\|null` | |
-| `custom_video_format` | `string\|null` | |
-| `video_output` | `string\|null` | |
-| `show_console` | `boolean\|null` | |
-| `software_trigger_delay` | `integer\|null` | Milliseconds |
-| `volts_to_watts_algorithm` | `string\|null` | |
-| `volts_to_watts_params` | `string\|null` | |
-| `correction_grid_domain_shape` | `string\|null` | |
-| `inverse_grid_domain_shape` | `string\|null` | |
-
-> By default `correction_data` and `inverse_correction_data` are omitted from `export-json`
-> output (and therefore not present in the schema-validated JSON). They only appear when
-> `include_binary=True` / `--include-binary` is used.
+ClearBox is not part of the core model: the train's `optional_components` object no longer exists. ClearBox
+is carried as the `ClearBox` entry of the top-level [extensions](#extensions) object (see
+[EXTENSION_CONTRACT.md](EXTENSION_CONTRACT.md#clearbox) for its tree layout), for both file versions.
+Its correction grids are extension datasets (`dtype`, `shape` and a flat row-major `data` list; `NaN`/`Infinity`
+appear as the strings `"NaN"` / `"Infinity"`), so they are part of the default `export-json` output.
 
 ---
 
 ### scan_field_correction_file
 
-Optional (`object | null`). Present when a ClearBox correction file is attached to the train.
+Optional (`object | null`). Present when a scan-field correction file is attached to the train.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -306,7 +282,7 @@ Core's typed `opcua` property no longer exists in any language.
 - **`extra` fields**: attributes present in HDF5 that are not mapped to named schema fields are
   collected into an `extra` object on the relevant struct. They are written back verbatim by the
   writer. Values must be `string`, `integer`, or `number`.
-- **Binary data is outside the schema**: `correction_data`, `inverse_correction_data`, and
-  `raw_bytes` appear in the schema definition as optional but are excluded from the default
-  `export-json` output. The schema therefore validates the default output; it does not constrain
-  the full binary output.
+- **Binary data is outside the schema**: `raw_bytes` appears in the schema definition as optional
+  but is excluded from the default `export-json` output. Extension datasets (including the ClearBox
+  grids) are part of the output but only constrained as opaque objects.
+

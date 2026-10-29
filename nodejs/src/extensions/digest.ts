@@ -4,6 +4,7 @@ import {
   type ExtensionAttr,
   type ExtensionDtype,
   type ExtensionScalar,
+  type ExtensionTable,
   type ExtensionTree,
 } from "./contract.js";
 
@@ -16,6 +17,14 @@ import {
  *   attr    = name, u8 dtypeTag, u8 kind (0 scalar, 1 array), [u32 count], value*
  *   dataset = u8 dtypeTag, u32 rank, u64 dim*, u64 count, value*, attr map (as in tree)
  *   value   = utf8: u32 byteLength + bytes; ints: fixed width; f32/f64: IEEE bits
+ *
+ * Appended after the datasets only when a tree has tables (so trees without them hash as in 0.1.0):
+ *
+ *   tables  = u32 0xFFFFFFFF, u32 tableCount, (name table)*
+ *   table   = u32 fieldCount, (name, u8 dtypeTag, u32 size)*, u64 rows, column values*, attr map
+ *
+ * Table fields keep their declared order (it is the compound member order); each column's values
+ * follow in that order, row by row within a column.
  *
  * Entries are sorted by the UTF-8 bytes of their names. NaN is encoded as the
  * quiet NaN and -0 is encoded as +0, so equal values always hash equal.
@@ -119,6 +128,27 @@ function tree(h: Hash, t: ExtensionTree): void {
     const values = ds.data as ArrayLike<number | bigint>;
     for (let i = 0; i < values.length; i++) value(h, ds.dtype, values[i]);
     attrMap(h, ds.attrs);
+  }
+  const tableNames = sortedNames(Object.keys(t.tables ?? {}));
+  if (tableNames.length > 0) {
+    u32(h, 0xffffffff);
+    u32(h, tableNames.length);
+    for (const n of tableNames) {
+      const table = (t.tables as Record<string, ExtensionTable>)[n];
+      name(h, n);
+      u32(h, table.fields.length);
+      for (const f of table.fields) {
+        name(h, f.name);
+        h.update(Uint8Array.of(DTYPE_TAG[f.dtype]));
+        u32(h, f.size ?? 0);
+      }
+      u64(h, table.rows);
+      for (const f of table.fields) {
+        const column = table.columns[f.name] as ArrayLike<ExtensionScalar>;
+        for (let i = 0; i < column.length; i++) value(h, f.dtype, column[i]);
+      }
+      attrMap(h, table.attrs);
+    }
   }
 }
 

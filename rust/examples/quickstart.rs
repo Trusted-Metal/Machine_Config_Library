@@ -53,16 +53,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             scanner.scan_head_offset_x,
             scanner.scan_head_offset_y,
         );
-        match file.get_clearbox(i) {
-            Ok(Some(_)) => println!("           clearbox: present"),
-            Ok(None) => println!("           optionalComponents: none"),
-            Err(e) => println!("           clearbox: {e}"),
-        }
     }
 
     let scanner0 = file.get_scanner(0).map_err(|e| e.to_string())?;
-    let correction = MachineConfigReader::open(&dummy)?.get_correction_data(0)?;
-    println!("Correction grid: {:?}   (train 0)", correction.shape);
+    let config = MachineConfigReader::open(&dummy)?.parse()?;
+    match config.extensions.get("ClearBox") {
+        Some(tree) => println!("ClearBox       : {} train group(s)", tree.children.len()),
+        None => println!("ClearBox       : none"),
+    }
 
     println!();
     file.set_scanner(0, scanner0.clone(), SetMode::Merge)

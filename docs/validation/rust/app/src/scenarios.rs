@@ -5,16 +5,30 @@ mod common;
 
 use common::{av_fixture, bitwise_equal};
 use machine_config::capabilities::{open_machine_config, SetMode};
-use machine_config::extension_contract::{Attr, AttrValue, Dtype, Scalar};
+use machine_config::extension_contract::{Attr, AttrValue, DatasetData, Dtype, Scalar};
 use machine_config::{
-    canonical_digest, ClearBox, Collimator, ExtensionTree, LightSource, Machine, MachineConfig,
+    canonical_digest, Collimator, ExtensionTree, LightSource, Machine, MachineConfig,
     MachineConfigError, MachineConfigMeta, MachineConfigReader, MachineConfigWriter,
-    MockConfigBuilder, OpticalTrain, OptionalComponents, ScanFieldCorrectionFile, Scanner,
-    ScannerCard,
+    MockConfigBuilder, OpticalTrain, ScanFieldCorrectionFile, Scanner, ScannerCard,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::Path;
+
+// ClearBox is an opaque extension tree: extensions["ClearBox"] / Optical_Train_NN / <dataset>.
+fn clearbox_grid(cfg: &MachineConfig, index: usize, name: &str) -> Result<(Vec<usize>, Vec<f64>), String> {
+    let key = format!("Optical_Train_{:02}", index + 1);
+    let ds = cfg
+        .extensions
+        .get("ClearBox")
+        .and_then(|c| c.children.get(&key))
+        .and_then(|t| t.datasets.get(name))
+        .ok_or_else(|| format!("ClearBox/{key}/{name} missing"))?;
+    match &ds.data {
+        DatasetData::F64(v) => Ok((ds.shape.clone(), v.clone())),
+        other => Err(format!("{name} is {:?}, expected f64", other.dtype())),
+    }
+}
 
 // S-01: Read reference fixture, all scalar fields
 //
@@ -110,28 +124,33 @@ pub fn run_s02(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
         Err(e) => return (false, format!("open failed: {e}")),
     };
 
-    let cd = match reader.get_correction_data(0) {
+    let cfg = match reader.parse() {
         Ok(c) => c,
-        Err(e) => return (false, format!("get_correction_data failed: {e}")),
-    };
-    let icd = match reader.get_inverse_correction_data(0) {
-        Ok(c) => c,
-        Err(e) => return (false, format!("get_inverse_correction_data failed: {e}")),
+        Err(e) => return (false, format!("parse failed: {e}")),
     };
 
-    if cd.shape != [257, 257, 2] {
-        return (false, format!("correction_data shape: {:?}", cd.shape));
+    let (cd_shape, cd) = match clearbox_grid(&cfg, 0, "Correction_Data") {
+        Ok(c) => c,
+        Err(e) => return (false, e),
+    };
+    let (icd_shape, icd) = match clearbox_grid(&cfg, 0, "Inverse_Correction_Data") {
+        Ok(c) => c,
+        Err(e) => return (false, e),
+    };
+
+    if cd_shape != [257, 257, 2] {
+        return (false, format!("correction_data shape: {:?}", cd_shape));
     }
-    if icd.shape != [257, 257, 2] {
-        return (false, format!("inverse_correction_data shape: {:?}", icd.shape));
+    if icd_shape != [257, 257, 2] {
+        return (false, format!("inverse_correction_data shape: {:?}", icd_shape));
     }
-    if !cd.data.iter().any(|v| v.is_finite()) {
+    if !cd.iter().any(|v| v.is_finite()) {
         return (false, "correction_data: no finite values".to_string());
     }
-    if !icd.data.iter().any(|v| v.is_finite()) {
+    if !icd.iter().any(|v| v.is_finite()) {
         return (false, "inverse_correction_data: no finite values".to_string());
     }
-    if bitwise_equal(&cd.data, &icd.data) {
+    if bitwise_equal(&cd, &icd) {
         return (
             false,
             "correction_data and inverse_correction_data are identical".to_string(),
@@ -139,7 +158,7 @@ pub fn run_s02(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
     }
 
     let mut hasher = Sha256::new();
-    for v in &cd.data {
+    for v in &cd {
         hasher.update(v.to_le_bytes());
     }
     let cd_hash = hex::encode(hasher.finalize());
@@ -272,13 +291,13 @@ pub fn run_s05(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
         Err(e) => return (false, format!("parse_with_binary failed: {e}")),
     };
 
-    let cd_before = match reader.get_correction_data(0) {
+    let (_, cd_before) = match clearbox_grid(&cfg, 0, "Correction_Data") {
         Ok(c) => c,
-        Err(e) => return (false, format!("get_correction_data failed: {e}")),
+        Err(e) => return (false, e),
     };
-    let icd_before = match reader.get_inverse_correction_data(0) {
+    let (_, icd_before) = match clearbox_grid(&cfg, 0, "Inverse_Correction_Data") {
         Ok(c) => c,
-        Err(e) => return (false, format!("get_inverse_correction_data failed: {e}")),
+        Err(e) => return (false, e),
     };
 
     let tmp = match tempfile::Builder::new().suffix(".h5").tempfile() {
@@ -289,34 +308,34 @@ pub fn run_s05(fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
         return (false, format!("write failed: {e}"));
     }
 
-    let reader2 = match MachineConfigReader::open(tmp.path()) {
-        Ok(r) => r,
+    let cfg_after = match MachineConfigReader::open(tmp.path()).and_then(|r| r.parse_with_binary()) {
+        Ok(c) => c,
         Err(e) => return (false, format!("reopen failed: {e}")),
     };
-    let cd_after = match reader2.get_correction_data(0) {
+    let (_, cd_after) = match clearbox_grid(&cfg_after, 0, "Correction_Data") {
         Ok(c) => c,
-        Err(e) => return (false, format!("readback get_correction_data failed: {e}")),
+        Err(e) => return (false, format!("readback {e}")),
     };
-    let icd_after = match reader2.get_inverse_correction_data(0) {
+    let (_, icd_after) = match clearbox_grid(&cfg_after, 0, "Inverse_Correction_Data") {
         Ok(c) => c,
-        Err(e) => return (false, format!("readback get_inverse_correction_data failed: {e}")),
+        Err(e) => return (false, format!("readback {e}")),
     };
 
-    if !bitwise_equal(&cd_before.data, &cd_after.data) {
+    if !bitwise_equal(&cd_before, &cd_after) {
         return (
             false,
             format!(
                 "correction_data mismatch: {}... -> {}...",
-                &sha256_hex(&cd_before.data)[..16],
-                &sha256_hex(&cd_after.data)[..16]
+                &sha256_hex(&cd_before)[..16],
+                &sha256_hex(&cd_after)[..16]
             ),
         );
     }
-    if !bitwise_equal(&icd_before.data, &icd_after.data) {
+    if !bitwise_equal(&icd_before, &icd_after) {
         return (false, "inverse_correction_data mismatch after roundtrip".to_string());
     }
 
-    let cd_hash = sha256_hex(&cd_before.data);
+    let cd_hash = sha256_hex(&cd_before);
     (true, format!("correction_data preserved: SHA-256={cd_hash}"))
 }
 
@@ -347,18 +366,12 @@ pub fn run_s06(_fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
         return (false, "machine_name is empty".to_string());
     }
 
-    let clearbox = match &cfg.optical_trains[0].optional_components.clearbox {
-        Some(cb) => cb,
-        None => return (false, "clearbox is None".to_string()),
+    let (_, grid) = match clearbox_grid(&cfg, 0, "Correction_Data") {
+        Ok(g) => g,
+        Err(e) => return (false, e),
     };
-    let grid = match &clearbox.correction_data {
-        Some(g) => g,
-        None => return (false, "correction_data is None".to_string()),
-    };
-    let center = match grid[128][128][0] {
-        Some(v) => v,
-        None => return (false, "correction_data centre cell is None".to_string()),
-    };
+    // Row-major [257, 257, 2]: centre cell, first component.
+    let center = grid[(128 * 257 + 128) * 2];
     if !center.is_finite() || (center - 2.0).abs() > 0.01 {
         return (false, format!("correction_data center: expected ~2.0, got {center}"));
     }
@@ -469,7 +482,7 @@ fn server_url(tree: &ExtensionTree) -> Option<String> {
 // Action:      1. Add a third optical train (clone train 1, change train_id)
 //              2. Change build_plate_x from 250.0 to 350.0
 //              3. Set scan_head_rotation on new train to 90.0
-//              4. Clear all correction data on the new train (clearbox = None)
+//              4. The new train carries no ClearBox (its extension subtree is absent)
 //              5. Change machine_name to "MODIFIED_ACONITY_VALIDATION"
 // Expected:    All five changes persist after write → read; file_version
 //              unchanged at "1.0".
@@ -500,7 +513,6 @@ pub fn run_s08(_fixtures_dir: &Path, real_dir: &Path) -> (bool, String) {
     let mut new_train = cfg.optical_trains[1].clone();
     new_train.train_id = "Optical_Train_03".to_string();
     new_train.scanner.scan_head_rotation = Some(90.0);
-    new_train.optional_components.clearbox = None;
     modified.optical_trains.push(new_train);
 
     let tmp = match tempfile::Builder::new().suffix(".h5").tempfile() {
@@ -526,8 +538,15 @@ pub fn run_s08(_fixtures_dir: &Path, real_dir: &Path) -> (bool, String) {
         Some(r) if (r - 90.0).abs() <= 0.001 => {}
         other => return (false, format!("train[2].scan_head_rotation: got {other:?}")),
     }
-    if rb.optical_trains[2].optional_components.clearbox.is_some() {
-        return (false, "train[2].clearbox should be None".to_string());
+    let cb_children: Vec<&String> = match rb.extensions.get("ClearBox") {
+        Some(t) => t.children.keys().collect(),
+        None => return (false, "ClearBox extension missing after roundtrip".to_string()),
+    };
+    if cb_children.iter().any(|k| *k == "Optical_Train_03")
+        || !(cb_children.iter().any(|k| *k == "Optical_Train_01")
+            && cb_children.iter().any(|k| *k == "Optical_Train_02"))
+    {
+        return (false, format!("ClearBox train groups after roundtrip: {cb_children:?}"));
     }
     if rb.meta.machine_name != "MODIFIED_ACONITY_VALIDATION" {
         return (false, format!("machine_name: got '{}'", rb.meta.machine_name));
@@ -536,7 +555,7 @@ pub fn run_s08(_fixtures_dir: &Path, real_dir: &Path) -> (bool, String) {
         return (false, format!("file_version changed: '{}'", rb.meta.file_version));
     }
 
-    (true, "3 trains, build_plate_x=350.0, rotation=90.0, clearbox cleared, machine_name OK".to_string())
+    (true, "3 trains, build_plate_x=350.0, rotation=90.0, new train has no ClearBox, machine_name OK".to_string())
 }
 
 // S-09: Public type export surface
@@ -566,12 +585,10 @@ pub fn run_s09(_fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
     let light_source: &LightSource = &train.light_source;
     let collimator: &Collimator = &train.collimator;
     let scanner_card: &ScannerCard = &train.scanner_card;
-    let optional_components: &OptionalComponents = &train.optional_components;
 
-    let clearbox: &ClearBox = match &optional_components.clearbox {
-        Some(cb) => cb,
-        None => return (false, "expected builder to include a clearbox by default".to_string()),
-    };
+    if !config.extensions.contains_key("ClearBox") {
+        return (false, "expected builder to include a ClearBox extension by default".to_string());
+    }
     let sfcf: &ScanFieldCorrectionFile = match &train.scan_field_correction_file {
         Some(s) => s,
         None => return (false, "expected builder to include an SFCF by default".to_string()),
@@ -587,7 +604,6 @@ pub fn run_s09(_fixtures_dir: &Path, _real_dir: &Path) -> (bool, String) {
         || light_source.manufacturer.is_empty()
         || collimator.manufacturer.is_empty()
         || scanner_card.manufacturer.is_empty()
-        || clearbox.ip_address.is_empty()
         || sfcf.document_name.is_empty()
     {
         return (false, "one or more constructed fields were unexpectedly empty".to_string());

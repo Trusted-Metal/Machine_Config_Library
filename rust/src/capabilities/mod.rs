@@ -114,8 +114,7 @@ pub fn supported_file_versions() -> Vec<&'static str> {
 mod tests {
     use super::*;
     use crate::models::{
-        ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfigMeta,
-        OpticalTrain, Scanner, ScannerCard,
+        Collimator, LightSource, Machine, MachineConfigMeta, OpticalTrain, Scanner, ScannerCard,
     };
 
     const REFERENCE: &str =
@@ -198,26 +197,6 @@ mod tests {
             _model: ScannerCard,
             _mode: SetMode,
         ) -> Result<(), CapabilityError> {
-            unreachable!("not exercised by the registry-dispatch tests")
-        }
-        fn get_clearbox(&self, _index: usize) -> Result<Option<ClearBox>, CapabilityError> {
-            unreachable!("not exercised by the registry-dispatch tests")
-        }
-        fn set_clearbox(
-            &mut self,
-            _index: usize,
-            _model: ClearBox,
-            _mode: SetMode,
-        ) -> Result<(), CapabilityError> {
-            unreachable!("not exercised by the registry-dispatch tests")
-        }
-        fn get_correction_data(&self, _index: usize) -> Result<CorrectionData, CapabilityError> {
-            unreachable!("not exercised by the registry-dispatch tests")
-        }
-        fn get_inverse_correction_data(
-            &self,
-            _index: usize,
-        ) -> Result<CorrectionData, CapabilityError> {
             unreachable!("not exercised by the registry-dispatch tests")
         }
         fn is_valid(&self) -> bool {

@@ -70,8 +70,6 @@ public:
     machine_config::MachineConfig parseWithBinary() const override { return {}; }
     std::string toJson(int, bool) const override { return "{}"; }
     nlohmann::json getRawGroup(const std::string&) const override { return nlohmann::json::object(); }
-    machine_config::CorrectionData getCorrectionData(size_t) const override { return {}; }
-    machine_config::CorrectionData getInverseCorrectionData(size_t) const override { return {}; }
     std::vector<uint8_t> getScanFieldCorrectionBytes(size_t) const override { return {}; }
 };
 
@@ -112,41 +110,12 @@ public:
         return ResultT<machine_config::ScannerCard>::Err("NotPresent", "fake");
     }
     Result setScannerCard(std::size_t, const machine_config::ScannerCard&, SetMode) override { return Result::Ok(); }
-    bool hasOptionalComponents(std::size_t) const override { return false; }
-    ResultT<machine_config::ClearBox> getClearbox(std::size_t) const override {
-        return ResultT<machine_config::ClearBox>::Err("NotPresent", "fake");
-    }
-    Result setClearbox(std::size_t, const machine_config::ClearBox&, SetMode) override { return Result::Ok(); }
-    ResultT<machine_config::CorrectionData> getCorrectionData(std::size_t) const override {
-        return ResultT<machine_config::CorrectionData>::Err("NotPresent", "fake");
-    }
-    ResultT<machine_config::CorrectionData> getInverseCorrectionData(std::size_t) const override {
-        return ResultT<machine_config::CorrectionData>::Err("NotPresent", "fake");
-    }
     bool isValid() const override { return false; }
     Result save(const std::string* = nullptr) override { return Result::Ok(); }
     void close() override {}
 };
 
 }  // namespace
-
-// CorrectionData has no operator==; IEEE 754 NaN != NaN would make a naive
-// element-wise == fail even on bit-for-bit identical real correction grids
-// (which always contain NaN cells). Treat "both NaN" as equal.
-static bool correctionDataEqual(const machine_config::CorrectionData& a,
-                                 const machine_config::CorrectionData& b) {
-    if (a.shape != b.shape) return false;
-    if (a.data.size() != b.data.size()) return false;
-    for (std::size_t i = 0; i < a.data.size(); ++i) {
-        bool an = std::isnan(a.data[i]), bn = std::isnan(b.data[i]);
-        if (an || bn) {
-            if (!(an && bn)) return false;
-        } else if (a.data[i] != b.data[i]) {
-            return false;
-        }
-    }
-    return true;
-}
 
 TEST_CASE("CapabilityOpenGetScannerMatchesReader") {
     auto opened = MachineConfigFileV1_0::open(REF);
@@ -246,109 +215,43 @@ TEST_CASE("CapabilityErrorRewrapPreservesDetails") {
     REQUIRE(rewrapped.errorDetails().size() == 2);
 }
 
-TEST_CASE("CapabilityClearboxOptional") {
-    auto opened = MachineConfigFileV1_0::open(REF);
-    REQUIRE(opened.ok());
-    REQUIRE(opened.value()->hasOptionalComponents(0));
-    REQUIRE(opened.value()->getClearbox(0).ok());
-    opened.value()->close();
+TEST_CASE("CapabilityClearBoxExtensionSurvivesASessionOpenAndSave") {
+    for (const char* fixture : {REF.c_str(), REFERENCE_V1_1.c_str()}) {
+        auto before = MachineConfigReader{fixture}.parse();
+        const auto want = machine_config::extension::canonicalDigest(before.extensions.at("ClearBox"));
 
-    machine_config::MockConfigBuilder b;
-    b.laser_count = 1;
-    b.include_clearbox = false;
-    auto cfg = b.build();
-    auto out = tmpPath("no_cb");
-    machine_config::MachineConfigWriter{cfg}.write(out);
-    auto no_cb = MachineConfigFileV1_0::open(out);
-    REQUIRE(no_cb.ok());
-    REQUIRE_FALSE(no_cb.value()->hasOptionalComponents(0));
-    auto cb = no_cb.value()->getClearbox(0);
-    REQUIRE_FALSE(cb.ok());
-    REQUIRE(cb.errorCode() == "NotPresent");
-    no_cb.value()->close();
-    std::filesystem::remove(out);
-}
+        auto opened = openMachineConfig(fixture);
+        REQUIRE(opened.ok());
+        auto file = opened.value();
+        auto scanner = file->getScanner(0);
+        REQUIRE(scanner.ok());
+        auto edited = scanner.value();
+        edited.working_distance = 77.5;
+        REQUIRE(file->setScanner(0, edited, SetMode::Merge).ok());
 
-// getClearbox() surfaces synchronous_sensors too, not just the scalar fields.
-TEST_CASE("CapabilityClearboxSynchronousSensors") {
-    auto opened = MachineConfigFileV1_0::open(SENSORS_REF);
-    REQUIRE(opened.ok());
-    auto cb = opened.value()->getClearbox(0);
-    REQUIRE(cb.ok());
-    REQUIRE(cb.value().synchronous_sensors.count("Oxygen Sensor") == 1);
-    REQUIRE(cb.value().synchronous_sensors.at("Oxygen Sensor").sensor_name ==
-            std::optional<std::string>{"ZR800 Oxygen Analyzer"});
-    opened.value()->close();
-}
+        auto out = tmpPath("clearbox_session");
+        const std::string outS = out.string();
+        REQUIRE(file->save(&outS).ok());
+        file->close();
 
-TEST_CASE("CapabilityGetCorrectionDataMatchesReader") {
-    auto opened = MachineConfigFileV1_0::open(REF);
-    REQUIRE(opened.ok());
-    auto file = opened.value();
-
-    MachineConfigReader reader(REF);
-    auto expected = reader.getCorrectionData(0);
-    auto result = file->getCorrectionData(0);
-    REQUIRE(result.ok());
-    REQUIRE(correctionDataEqual(result.value(), expected));
-
-    auto expectedInv = reader.getInverseCorrectionData(0);
-    auto resultInv = file->getInverseCorrectionData(0);
-    REQUIRE(resultInv.ok());
-    REQUIRE(correctionDataEqual(resultInv.value(), expectedInv));
-    file->close();
-}
-
-TEST_CASE("CapabilityGetCorrectionDataShapeAndNaNPresentThroughFacade") {
-    auto opened = MachineConfigFileV1_0::open(REF);
-    REQUIRE(opened.ok());
-    auto cd = opened.value()->getCorrectionData(0);
-    REQUIRE(cd.ok());
-    REQUIRE(cd.value().shape == std::array<std::size_t, 3>{257, 257, 2});
-    bool any_nan = false;
-    for (double v : cd.value().data) {
-        if (std::isnan(v)) { any_nan = true; break; }
+        auto after = MachineConfigReader{out}.parse();
+        REQUIRE(machine_config::extension::canonicalDigest(after.extensions.at("ClearBox")) == want);
+        std::filesystem::remove(out);
     }
-    REQUIRE(any_nan);
-    opened.value()->close();
 }
 
-TEST_CASE("CapabilityGetCorrectionDataMissingClearboxIsNotPresent") {
-    // Every stock fixture's trains have a ClearBox, so build one without.
-    machine_config::MockConfigBuilder b;
-    b.laser_count = 1;
-    b.include_clearbox = false;
-    auto cfg = b.build();
-    auto out = tmpPath("cd_no_cb");
-    machine_config::MachineConfigWriter{cfg}.write(out);
-
-    auto opened = MachineConfigFileV1_0::open(out);
-    REQUIRE(opened.ok());
-    auto result = opened.value()->getCorrectionData(0);
-    REQUIRE_FALSE(result.ok());
-    REQUIRE(result.errorCode() == "NotPresent");
-    auto resultInv = opened.value()->getInverseCorrectionData(0);
-    REQUIRE_FALSE(resultInv.ok());
-    REQUIRE(resultInv.errorCode() == "NotPresent");
-    opened.value()->close();
-    std::filesystem::remove(out);
-}
-
-TEST_CASE("CapabilityGetCorrectionDataWorksOnCreateBasedInstanceWithoutTouchingDisk") {
-    // The specific case that rules out delegate-to-Reader-by-reopening: a
-    // create()-d facade has no path at all, so this must convert the
-    // already-loaded in-memory model, not re-read from anywhere.
+TEST_CASE("CapabilityCreateBasedInstanceCarriesTheClearBoxExtension") {
     auto created = createMachineConfig("1.0");
     REQUIRE(created.ok());
     auto file = created.value();
-
-    auto cd = file->getCorrectionData(0);
-    REQUIRE(cd.ok());
-    REQUIRE(cd.value().shape == std::array<std::size_t, 3>{257, 257, 2});
-    auto icd = file->getInverseCorrectionData(0);
-    REQUIRE(icd.ok());
-    REQUIRE(icd.value().shape == std::array<std::size_t, 3>{257, 257, 2});
+    auto out = tmpPath("created_clearbox");
+    const std::string outS = out.string();
+    REQUIRE(file->save(&outS).ok());
     file->close();
+
+    auto back = MachineConfigReader{out}.parse();
+    REQUIRE(back.extensions.count("ClearBox") == 1);
+    std::filesystem::remove(out);
 }
 
 TEST_CASE("CapabilityCreateSetMetaSaveReopen") {

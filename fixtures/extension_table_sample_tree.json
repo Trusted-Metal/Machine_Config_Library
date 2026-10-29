@@ -1,0 +1,146 @@
+{
+  "attrs": {
+    "Schema": {
+      "dtype": "utf8",
+      "value": "1.0"
+    }
+  },
+  "children": {
+    "Train_1": {
+      "attrs": {},
+      "children": {},
+      "datasets": {},
+      "tables": {
+        "Points": {
+          "fields": [
+            {
+              "name": "input_value",
+              "dtype": "f64"
+            },
+            {
+              "name": "output_value",
+              "dtype": "f64"
+            }
+          ],
+          "rows": 2,
+          "columns": {
+            "input_value": [
+              4,
+              20
+            ],
+            "output_value": [
+              -1,
+              6
+            ]
+          },
+          "attrs": {}
+        }
+      }
+    }
+  },
+  "datasets": {},
+  "tables": {
+    "Constants": {
+      "fields": [
+        {
+          "name": "name",
+          "dtype": "utf8",
+          "size": 64
+        },
+        {
+          "name": "value",
+          "dtype": "f64"
+        }
+      ],
+      "rows": 2,
+      "columns": {
+        "name": [
+          "a",
+          "b"
+        ],
+        "value": [
+          0.4375,
+          -2.75
+        ]
+      },
+      "attrs": {
+        "Units": {
+          "dtype": "utf8",
+          "value": "V"
+        }
+      }
+    },
+    "Mixed": {
+      "fields": [
+        {
+          "name": "id",
+          "dtype": "u32"
+        },
+        {
+          "name": "count",
+          "dtype": "i64"
+        },
+        {
+          "name": "ratio",
+          "dtype": "f32"
+        },
+        {
+          "name": "flag",
+          "dtype": "u8"
+        },
+        {
+          "name": "label",
+          "dtype": "utf8",
+          "size": 8
+        }
+      ],
+      "rows": 3,
+      "columns": {
+        "id": [
+          1,
+          2,
+          4294967295
+        ],
+        "count": [
+          "-9007199254740993",
+          "0",
+          "7"
+        ],
+        "ratio": [
+          0.5,
+          -1.5,
+          2
+        ],
+        "flag": [
+          0,
+          1,
+          1
+        ],
+        "label": [
+          "x",
+          "µm",
+          ""
+        ]
+      },
+      "attrs": {}
+    },
+    "Empty": {
+      "fields": [
+        {
+          "name": "input_value",
+          "dtype": "f64"
+        },
+        {
+          "name": "output_value",
+          "dtype": "f64"
+        }
+      ],
+      "rows": 0,
+      "columns": {
+        "input_value": [],
+        "output_value": []
+      },
+      "attrs": {}
+    }
+  }
+}

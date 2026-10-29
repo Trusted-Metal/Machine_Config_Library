@@ -6,8 +6,7 @@
 use crate::capabilities::errors::CapabilityError;
 use crate::capabilities::result::Result;
 use crate::models::{
-    ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfigMeta,
-    OpticalTrain, Scanner, ScannerCard,
+    Collimator, LightSource, Machine, MachineConfigMeta, OpticalTrain, Scanner, ScannerCard,
 };
 use std::path::Path;
 
@@ -46,12 +45,6 @@ pub trait MachineConfigFile {
 
     fn get_scanner_card(&self, index: usize) -> Result<ScannerCard, CapabilityError>;
     fn set_scanner_card(&mut self, index: usize, model: ScannerCard, mode: SetMode) -> Result<(), CapabilityError>;
-
-    fn get_clearbox(&self, index: usize) -> Result<Option<ClearBox>, CapabilityError>;
-    fn set_clearbox(&mut self, index: usize, model: ClearBox, mode: SetMode) -> Result<(), CapabilityError>;
-
-    fn get_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError>;
-    fn get_inverse_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError>;
 
     fn is_valid(&self) -> bool;
 

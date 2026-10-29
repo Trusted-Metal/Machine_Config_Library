@@ -10,7 +10,7 @@
  * Pre-stable (0.x) until a second extension has been ported against it.
  */
 
-export const EXTENSION_CONTRACT_VERSION = "0.1.0";
+export const EXTENSION_CONTRACT_VERSION = "0.1.1";
 
 /** Fixed-width storage types; each maps 1:1 to an HDF5 type. */
 export type ExtensionDtype =
@@ -54,11 +54,34 @@ export interface ExtensionDataset {
   attrs: Record<string, ExtensionAttr>;
 }
 
-/** Order of attrs/children/datasets is not significant. */
+/** One column of a compound table. `size` is the fixed byte length of a `utf8` column and is absent for numeric ones. */
+export interface ExtensionTableField {
+  name: string;
+  dtype: ExtensionDtype;
+  size?: number;
+}
+
+/**
+ * 1-D compound dataset (HDF5 compound type): one row per record, one named column per field.
+ * `fields` order is the compound member order and is significant. A `utf8` column is a fixed-length
+ * string of at most `size` UTF-8 bytes; numeric columns use the typed array of their dtype.
+ */
+export interface ExtensionTable {
+  fields: ExtensionTableField[];
+  rows: number;
+  columns: Record<string, ExtensionNumericArray | string[]>;
+  attrs: Record<string, ExtensionAttr>;
+}
+
+/**
+ * Order of attrs/children/datasets/tables is not significant. `tables` is absent unless used, so
+ * trees without compound data are shaped exactly as in contract 0.1.0.
+ */
 export interface ExtensionTree {
   attrs: Record<string, ExtensionAttr>;
   children: Record<string, ExtensionTree>;
   datasets: Record<string, ExtensionDataset>;
+  tables?: Record<string, ExtensionTable>;
 }
 
 export class ExtensionContractError extends Error {
@@ -181,4 +204,56 @@ export function assertValidExtensionTree(tree: ExtensionTree, path = ""): void {
     }
     assertAttrs(ds.attrs, dsPath);
   }
+  for (const [name, table] of Object.entries(tree.tables ?? {})) {
+    const tablePath = join(path, name);
+    assertValidNodeName(name, tablePath);
+    if (seen.has(name) || name in tree.datasets) {
+      throw new ExtensionContractError(tablePath, "a table cannot share a name with a dataset or child group");
+    }
+    assertValidTable(table, tablePath);
+  }
+}
+
+function assertValidTable(table: ExtensionTable, path: string): void {
+  if (table.fields.length === 0) throw new ExtensionContractError(path, "a table needs at least one field");
+  if (!Number.isInteger(table.rows) || table.rows < 0) {
+    throw new ExtensionContractError(path, `invalid row count ${table.rows}`);
+  }
+  const names = new Set<string>();
+  for (const field of table.fields) {
+    const fieldPath = join(path, field.name);
+    assertValidNodeName(field.name, fieldPath);
+    if (names.has(field.name)) throw new ExtensionContractError(fieldPath, "duplicate field name");
+    names.add(field.name);
+    if (!isExtensionDtype(field.dtype)) {
+      throw new ExtensionContractError(fieldPath, `unknown dtype "${String(field.dtype)}"`);
+    }
+    const column = table.columns[field.name];
+    if (column === undefined) throw new ExtensionContractError(fieldPath, "missing column");
+    if (column.length !== table.rows) {
+      throw new ExtensionContractError(fieldPath, `column length ${column.length} does not match ${table.rows} rows`);
+    }
+    if (field.dtype === "utf8") {
+      if (!Number.isInteger(field.size) || (field.size as number) < 1) {
+        throw new ExtensionContractError(fieldPath, "a utf8 field needs a positive integer size");
+      }
+      if (!Array.isArray(column)) throw new ExtensionContractError(fieldPath, "utf8 column must be a string array");
+      column.forEach((v, i) => {
+        assertScalarMatches("utf8", v, `${fieldPath}[${i}]`);
+        const bytes = new TextEncoder().encode(v).length;
+        if (bytes > (field.size as number)) {
+          throw new ExtensionContractError(`${fieldPath}[${i}]`, `${bytes} UTF-8 bytes do not fit the ${field.size}-byte field`);
+        }
+      });
+    } else {
+      if (field.size !== undefined) throw new ExtensionContractError(fieldPath, "size is only valid for utf8 fields");
+      if (!(column instanceof TYPED_ARRAY_FOR[field.dtype])) {
+        throw new ExtensionContractError(fieldPath, `column must be a ${TYPED_ARRAY_FOR[field.dtype].name} for dtype ${field.dtype}`);
+      }
+    }
+  }
+  for (const name of Object.keys(table.columns)) {
+    if (!names.has(name)) throw new ExtensionContractError(join(path, name), "column has no matching field");
+  }
+  assertAttrs(table.attrs, path);
 }

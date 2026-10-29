@@ -15,6 +15,7 @@ IMPLEMENTATION_PLAN.md section 1.7 before committing.
 from __future__ import annotations
 
 import hashlib
+import json
 import pathlib
 import sys
 
@@ -32,6 +33,25 @@ def _separator(title: str) -> None:
     print(f"\n-- {title} " + "-" * max(0, 58 - len(title)))
 
 
+def strip_dataset_data(value) -> None:
+    """Elide every extension dataset's ``data`` (dtype, shape and attrs stay).
+
+    The reference file's ClearBox correction grids make the full export ~27 MB, so the golden
+    keeps only their metadata. Every language's golden check strips ``data`` on both sides.
+    """
+    if isinstance(value, dict):
+        datasets = value.get("datasets")
+        if isinstance(datasets, dict):
+            for ds in datasets.values():
+                if isinstance(ds, dict):
+                    ds.pop("data", None)
+        for v in value.values():
+            strip_dataset_data(v)
+    elif isinstance(value, list):
+        for v in value:
+            strip_dataset_data(v)
+
+
 def generate_reference_output() -> str:
     """Parse reference_config.h5 and write reference_output.json + .sha256."""
     h5_path = FIXTURES / "reference_config.h5"
@@ -40,10 +60,12 @@ def generate_reference_output() -> str:
 
     _separator("Generating reference_output.json")
     reader = MachineConfigReader(h5_path)
-    json_text = reader.to_json(indent=2)
+    parsed = json.loads(reader.to_json(indent=2))
+    strip_dataset_data(parsed)
+    json_text = json.dumps(parsed, indent=2, ensure_ascii=False)
 
     json_path = FIXTURES / "reference_output.json"
-    json_path.write_text(json_text, encoding="utf-8")
+    json_path.write_bytes(json_text.encode("utf-8"))
     print(f"  Written: {json_path.relative_to(REPO_ROOT)}")
 
     digest = hashlib.sha256(json_text.encode("utf-8")).hexdigest()
@@ -86,7 +108,7 @@ def print_review_checklist() -> None:
         "Train 02: offset_x=86.074  offset_y=-21.695  rotation=180.0",
         "Train 01 thermal_lensing_passed = false",
         "Train 02 thermal_lensing_passed = true",
-        "Both trains: clearbox present with scalar fields (no correction_data arrays — use include_binary=True to inspect)",
+        "Both trains: ClearBox extension present (per-train attrs, Power_Characterization, grids with data elided)",
         "Train 01 scan_field_correction_file.file_size = 1138799  (no raw_bytes — use include_binary=True)",
         "Train 02 scan_field_correction_file.file_size = 1142763  (no raw_bytes — use include_binary=True)",
         "No OPCUA fields appear anywhere in the output",

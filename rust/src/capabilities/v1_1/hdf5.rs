@@ -249,24 +249,6 @@ impl Hdf5AdapterV1_1 {
         self.parse_inner(&f, true)
     }
 
-    pub fn get_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
-        let f = H5File::open(&self.path)?;
-        let tid = layout::train_id(train_index);
-        let path = layout::correction_data_path_by_id(&tid);
-        let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
-        let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
-        Ok(CorrectionData { data: arr.into_raw_vec_and_offset().0, shape })
-    }
-
-    pub fn get_inverse_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
-        let f = H5File::open(&self.path)?;
-        let tid = layout::train_id(train_index);
-        let path = layout::inverse_correction_data_path_by_id(&tid);
-        let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
-        let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
-        Ok(CorrectionData { data: arr.into_raw_vec_and_offset().0, shape })
-    }
-
     pub fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>> {
         let f = H5File::open(&self.path)?;
         let tid = layout::train_id(train_index);
@@ -332,16 +314,6 @@ impl Hdf5AdapterV1_1 {
             recoater_blade_type: read_str(&m, "Recoater_Blade_Type")?,
         };
 
-        // ---- ClearBox: shared Output_Path/Software_Trigger_Delay (Consolidate, Change 1) ----
-        let has_clearbox_root = f.group(layout::GROUP_CLEARBOX).is_ok();
-        let mut shared_output_path: Option<String> = None;
-        let mut shared_software_trigger_delay: Option<i64> = None;
-        if has_clearbox_root {
-            let cb_root = f.group(layout::GROUP_CLEARBOX)?;
-            shared_output_path = read_str(&cb_root, "Output_Path")?;
-            shared_software_trigger_delay = read_int(&cb_root, "Software_Trigger_Delay")?;
-        }
-
         let trains_grp = require_group(&m, "Optical_Trains")?;
         let mut train_ids: Vec<String> = trains_grp
             .member_names()?
@@ -351,16 +323,7 @@ impl Hdf5AdapterV1_1 {
         train_ids.sort();
         let optical_trains = train_ids
             .iter()
-            .map(|tid| {
-                self.parse_train(
-                    f,
-                    tid,
-                    has_clearbox_root,
-                    shared_output_path.clone(),
-                    shared_software_trigger_delay,
-                    include_binary,
-                )
-            })
+            .map(|tid| self.parse_train(f, tid, include_binary))
             .collect::<Result<Vec<_>>>()?;
 
         let extensions = self.parse_extensions(f)?;
@@ -368,7 +331,7 @@ impl Hdf5AdapterV1_1 {
         Ok(MachineConfig { meta, machine, optical_trains, extensions })
     }
 
-    /// Every group under `Extensions/` that core does not model, verbatim.
+    /// Every group under `Extensions/`, verbatim (ClearBox included).
     fn parse_extensions(
         &self,
         f: &H5File,
@@ -376,9 +339,6 @@ impl Hdf5AdapterV1_1 {
         let mut out = std::collections::BTreeMap::new();
         let Ok(root) = f.group(layout::ROOT_EXTENSIONS) else { return Ok(out) };
         for name in root.member_names()? {
-            if layout::MODELLED_EXTENSION_NAMES.contains(&name.as_str()) {
-                continue;
-            }
             let grp = root.group(&name).map_err(|_| {
                 MachineConfigError::Parse(format!(
                     "expected a group at '{}/{name}'",
@@ -390,15 +350,7 @@ impl Hdf5AdapterV1_1 {
         Ok(out)
     }
 
-    fn parse_train(
-        &self,
-        f: &H5File,
-        train_id: &str,
-        has_clearbox_root: bool,
-        shared_output_path: Option<String>,
-        shared_software_trigger_delay: Option<i64>,
-        include_binary: bool,
-    ) -> Result<OpticalTrain> {
+    fn parse_train(&self, f: &H5File, train_id: &str, include_binary: bool) -> Result<OpticalTrain> {
         let base = layout::train_path_by_id(train_id);
         let a = require_group(f, &base)?;
 
@@ -408,21 +360,6 @@ impl Hdf5AdapterV1_1 {
         let collimator = self.parse_collimator(&require_group(&a, layout::GROUP_COLLIMATOR)?)?;
         let scanner_card =
             self.parse_scanner_card(&require_group(&a, layout::GROUP_SCANNER_CARD)?)?;
-
-        let clearbox = if has_clearbox_root {
-            let cb_path = layout::clearbox_path_by_id(train_id);
-            match f.group(&cb_path) {
-                Ok(grp) => Some(self.parse_clearbox(
-                    &grp,
-                    shared_output_path,
-                    shared_software_trigger_delay,
-                    include_binary,
-                )?),
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
 
         let sfcf_path = layout::scan_field_correction_file_path_by_id(train_id);
         let sfcf = match f.dataset(&sfcf_path) {
@@ -485,7 +422,6 @@ impl Hdf5AdapterV1_1 {
             light_source,
             collimator,
             scanner_card,
-            optional_components: OptionalComponents { clearbox },
             scan_field_correction_file: sfcf,
         })
     }
@@ -626,105 +562,6 @@ impl Hdf5AdapterV1_1 {
         })
     }
 
-    fn parse_clearbox(
-        &self,
-        grp: &Group,
-        shared_output_path: Option<String>,
-        shared_software_trigger_delay: Option<i64>,
-        include_binary: bool,
-    ) -> Result<ClearBox> {
-        let (correction_data, inverse_correction_data) = if include_binary {
-            let cd = grp.dataset(layout::DS_CORRECTION_DATA)?.read::<f64, ndarray::Ix3>()?;
-            let icd =
-                grp.dataset(layout::DS_INVERSE_CORRECTION_DATA)?.read::<f64, ndarray::Ix3>()?;
-            (Some(nan_array3_to_nested(&cd)), Some(nan_array3_to_nested(&icd)))
-        } else {
-            (None, None)
-        };
-        let synchronous_sensors = match grp.group("Synchronous_Sensors") {
-            Ok(sensors_grp) => {
-                let mut map = IndexMap::new();
-                for name in sensors_grp.member_names()? {
-                    let sg = sensors_grp.group(&name)?;
-                    map.insert(name, self.parse_synchronous_sensor(&sg)?);
-                }
-                map
-            }
-            Err(_) => IndexMap::new(),
-        };
-        let power_characterization = match grp.group(layout::GROUP_POWER_CHARACTERIZATION) {
-            Ok(pc_grp) => Some(self.parse_power_characterization(&pc_grp)?),
-            Err(_) => None,
-        };
-        Ok(ClearBox {
-            ip_address: read_required_str(grp, "Ip_Address")?,
-            serial_number: read_str(grp, "Serial_Number")?,
-            data_port: read_int(grp, "Data_Port")?,
-            server_port: read_int(grp, "Server_Port")?,
-            actual_timing_offset: read_int(grp, "Actual_Timing_Offset")?,
-            commanded_timing_offset: read_int(grp, "Commanded_Timing_Offset")?,
-            correction_data,
-            inverse_correction_data,
-            manufacturer: read_str(grp, "Manufacturer")?,
-            model: read_str(grp, "Model")?,
-            // Change 1 (Consolidate): one shared value for every train that
-            // has a ClearBox, read from Extensions/ClearBox/ itself.
-            output_path: shared_output_path,
-            software_trigger_delay: shared_software_trigger_delay,
-            // Change 1 (Removal): no on-disk source in v1.1.
-            selected_camera: None,
-            custom_video_format: None,
-            video_output: None,
-            show_console: None,
-            correction_grid_domain_shape: None,
-            inverse_grid_domain_shape: None,
-            synchronous_sensors,
-            firmware_version: read_str(grp, "Firmware_Version")?,
-            power_characterization,
-        })
-    }
-
-    fn parse_synchronous_sensor(&self, grp: &Group) -> Result<SynchronousSensor> {
-        let derivation_equation_constants = match grp.dataset("Derivation_Equation_Constants") {
-            Ok(ds) => ds
-                .read_raw::<RawEquationConstant>()?
-                .into_iter()
-                .map(|r| EquationConstant { name: r.name.as_str().to_string(), value: r.value })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        let calibration_points = match grp.dataset("Calibration_Points") {
-            Ok(ds) => ds
-                .read_raw::<RawCalibrationPoint>()?
-                .into_iter()
-                .map(|r| CalibrationPoint { input_value: r.input_value, output_value: r.output_value })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        Ok(SynchronousSensor {
-            enabled: read_bool_from_int(grp, "Enabled")?,
-            sensor_name: read_str(grp, "Sensor_Name")?,
-            sensor_output_range_low: read_float(grp, "Sensor_Output_Range_Low")?,
-            sensor_output_range_high: read_float(grp, "Sensor_Output_Range_High")?,
-            sensor_output_space: read_str(grp, "Sensor_Output_Space")?,
-            sensor_model: read_str(grp, "Sensor_Model")?,
-            sensor_manufacturer: read_str(grp, "Sensor_Manufacturer")?,
-            sensor_scope: read_str(grp, "Sensor_Scope")?,
-            units_derived_quantity: read_str(grp, "Units_Derived_Quantity")?,
-            port_id: read_int(grp, "Port_ID")?,
-            sensor_type: read_str(grp, "Sensor_Type")?,
-            input_type: read_str(grp, "Input_Type")?,
-            algorithm_type: read_str(grp, "Algorithm_Type")?,
-            algorithm_equation: read_str(grp, "Algorithm_Equation")?,
-            calibration_source: read_str(grp, "Calibration_Source")?,
-            calibration_verified: read_bool_from_int(grp, "Calibration_Verified")?,
-            sample_period: read_float(grp, "Sample_Period")?,
-            metadata: read_str(grp, "Metadata")?,
-            derivation_equation_constants,
-            calibration_points,
-        })
-    }
-
     fn parse_sfcf(&self, ds: &Dataset, include_binary: bool) -> Result<ScanFieldCorrectionFile> {
         let raw_bytes = if include_binary { Some(ds.read_raw::<u8>()?) } else { None };
         Ok(ScanFieldCorrectionFile {
@@ -747,12 +584,6 @@ impl ReaderAdapter for Hdf5AdapterV1_1 {
     }
     fn parse_with_binary(&self) -> Result<MachineConfig> {
         self.parse_with_binary()
-    }
-    fn get_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
-        self.get_correction_data(train_index)
-    }
-    fn get_inverse_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
-        self.get_inverse_correction_data(train_index)
     }
     fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>> {
         self.get_scan_field_correction_bytes(train_index)

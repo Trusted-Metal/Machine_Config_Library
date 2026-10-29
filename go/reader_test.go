@@ -13,6 +13,7 @@ import (
 
 	machineconfig "machine-config-go"
 	"machine-config-go/capabilities"
+	"machine-config-go/extension"
 	"machine-config-go/internal/h5c"
 )
 
@@ -86,31 +87,66 @@ func TestClearboxPresent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb == nil {
-		t.Fatal("expected clearbox")
+	root := clearboxRoot(t, cfg)
+	if len(root.Children) != 2 {
+		t.Fatalf("expected 2 per-train children, got %d", len(root.Children))
 	}
-	if cb.IPAddress == "" {
+	cb := clearboxTrain(t, cfg, 0)
+	if cbText(cb, "Ip_Address") == "" {
 		t.Fatal("clearbox ip empty")
+	}
+	if _, ok := cbInt(cb, "Data_Port"); !ok {
+		t.Fatal("clearbox Data_Port missing or not an integer")
 	}
 }
 
-// ===========================================================================
-// SynchronousSensor
-// ===========================================================================
-
-func TestSynchronousSensorsEmptyWhenFixtureHasNone(t *testing.T) {
+func TestClearboxSharedValuesLiveOnTheRootOnce(t *testing.T) {
 	path := filepath.Join(fixturesDir(t), "reference_config.h5")
 	cfg, err := machineconfig.NewReader(path).Parse()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb == nil {
-		t.Fatal("expected clearbox")
+	root := clearboxRoot(t, cfg)
+	if cbText(root, "Output_Path") == "" {
+		t.Fatal("root Output_Path missing")
 	}
-	if len(cb.SynchronousSensors) != 0 {
-		t.Fatalf("expected no sensors, got %v", cb.SynchronousSensors)
+	if _, ok := cbInt(root, "Software_Trigger_Delay"); !ok {
+		t.Fatal("root Software_Trigger_Delay missing")
+	}
+	train := clearboxTrain(t, cfg, 0)
+	if _, ok := train.Attrs["Output_Path"]; ok {
+		t.Fatal("Output_Path must not be repeated per train")
+	}
+	// v1.0-only attributes ride along; the flat Volts_To_Watts fields became Power_Characterization.
+	if _, ok := train.Attrs["Show_Console"]; !ok {
+		t.Fatal("v1.0-only Show_Console should ride along on each train")
+	}
+	if _, ok := train.Attrs["Volts_To_Watts_Algorithm"]; ok {
+		t.Fatal("Volts_To_Watts_Algorithm should have become Power_Characterization")
+	}
+}
+
+// ===========================================================================
+// Synchronous sensors
+// ===========================================================================
+
+func sensorsOf(t *testing.T, cfg *machineconfig.MachineConfig) map[string]*extension.Tree {
+	t.Helper()
+	group := clearboxTrain(t, cfg, 0).Children["Synchronous_Sensors"]
+	if group == nil {
+		t.Fatal("train 0 has no Synchronous_Sensors")
+	}
+	return group.Children
+}
+
+func TestSynchronousSensorsAbsentWhenFixtureHasNone(t *testing.T) {
+	path := filepath.Join(fixturesDir(t), "reference_config.h5")
+	cfg, err := machineconfig.NewReader(path).Parse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := clearboxTrain(t, cfg, 0).Children["Synchronous_Sensors"]; ok {
+		t.Fatal("expected no Synchronous_Sensors")
 	}
 }
 
@@ -122,81 +158,74 @@ func TestSynchronousSensorFixtureHasRealValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb == nil {
-		t.Fatal("expected clearbox")
+	sensors := sensorsOf(t, cfg)
+	if len(sensors) != 1 {
+		t.Fatalf("expected exactly 1 sensor, got %d", len(sensors))
 	}
-	if len(cb.SynchronousSensors) != 1 {
-		t.Fatalf("expected exactly 1 sensor, got %d", len(cb.SynchronousSensors))
-	}
-	s, ok := cb.SynchronousSensors["Oxygen Sensor"]
+	s, ok := sensors["Oxygen Sensor"]
 	if !ok {
 		t.Fatal(`expected key "Oxygen Sensor"`)
 	}
 
-	strEq := func(field string, got *string, want string) {
-		if got == nil || *got != want {
-			t.Errorf("%s: got %v want %q", field, got, want)
+	for field, want := range map[string]string{
+		"Sensor_Name":            "ZR800 Oxygen Analyzer",
+		"Sensor_Output_Space":    "log10(ppm)",
+		"Sensor_Model":           "ZR810",
+		"Sensor_Manufacturer":    "Industrial Physics",
+		"Sensor_Scope":           "Global",
+		"Units_Derived_Quantity": "ppm",
+		"Sensor_Type":            "Oxygen Sensor",
+		"Input_Type":             "4-20 mA",
+		"Algorithm_Type":         "Log-Linear",
+		"Algorithm_Equation":     "log(ppm) = a*mA + b",
+		"Calibration_Source":     "Datasheet",
+	} {
+		if got := cbText(s, field); got != want {
+			t.Errorf("%s: got %q want %q", field, got, want)
 		}
 	}
-	floatEq := func(field string, got *float64, want float64) {
-		if got == nil || *got != want {
+	for field, want := range map[string]float64{
+		"Sensor_Output_Range_Low":  -1.0,
+		"Sensor_Output_Range_High": 6.0,
+		"Sample_Period":            5.0,
+	} {
+		if got, ok := cbFloat(s, field); !ok || got != want {
 			t.Errorf("%s: got %v want %v", field, got, want)
 		}
 	}
-	boolEq := func(field string, got *bool, want bool) {
-		if got == nil || *got != want {
-			t.Errorf("%s: got %v want %v", field, got, want)
-		}
+	if got, ok := cbInt(s, "Port_ID"); !ok || got != 5 {
+		t.Errorf("Port_ID: got %v want 5", got)
+	}
+	if !strings.Contains(cbText(s, "Metadata"), "Synchronous Sensor because Clearbox is responsible") {
+		t.Errorf("Metadata: got %q", cbText(s, "Metadata"))
 	}
 
-	boolEq("enabled", s.Enabled, true)
-	strEq("sensor_name", s.SensorName, "ZR800 Oxygen Analyzer")
-	floatEq("sensor_output_range_low", s.SensorOutputRangeLow, -1.0)
-	floatEq("sensor_output_range_high", s.SensorOutputRangeHigh, 6.0)
-	strEq("sensor_output_space", s.SensorOutputSpace, "log10(ppm)")
-	strEq("sensor_model", s.SensorModel, "ZR810")
-	strEq("sensor_manufacturer", s.SensorManufacturer, "Industrial Physics")
-	strEq("sensor_scope", s.SensorScope, "Global")
-	strEq("units_derived_quantity", s.UnitsDerivedQuantity, "ppm")
-	if s.PortID == nil || *s.PortID != 5 {
-		t.Errorf("port_id: got %v want 5", s.PortID)
+	consts := s.Tables["Derivation_Equation_Constants"]
+	if consts == nil {
+		t.Fatal("missing Derivation_Equation_Constants table")
 	}
-	strEq("sensor_type", s.SensorType, "Oxygen Sensor")
-	strEq("input_type", s.InputType, "4-20 mA")
-	strEq("algorithm_type", s.AlgorithmType, "Log-Linear")
-	strEq("algorithm_equation", s.AlgorithmEquation, "log(ppm) = a*mA + b")
-	strEq("calibration_source", s.CalibrationSource, "Datasheet")
-	boolEq("calibration_verified", s.CalibrationVerified, false)
-	floatEq("sample_period", s.SamplePeriod, 5.0)
-	if s.Metadata == nil || !strings.Contains(*s.Metadata, "Synchronous Sensor because Clearbox is responsible") {
-		t.Errorf("metadata: got %v", s.Metadata)
+	if !reflect.DeepEqual(consts.Columns["name"], []string{"a", "b"}) ||
+		!reflect.DeepEqual(consts.Columns["value"], []float64{0.4375, -2.75}) {
+		t.Errorf("derivation_equation_constants: got %+v", consts.Columns)
 	}
-
-	wantConstants := []machineconfig.EquationConstant{
-		{Name: "a", Value: 0.4375},
-		{Name: "b", Value: -2.75},
+	points := s.Tables["Calibration_Points"]
+	if points == nil {
+		t.Fatal("missing Calibration_Points table")
 	}
-	if !reflect.DeepEqual(s.DerivationEquationConstants, wantConstants) {
-		t.Errorf("derivation_equation_constants: got %+v want %+v", s.DerivationEquationConstants, wantConstants)
-	}
-
-	wantPoints := []machineconfig.CalibrationPoint{
-		{InputValue: 4.0, OutputValue: -1.0},
-		{InputValue: 20.0, OutputValue: 6.0},
-	}
-	if !reflect.DeepEqual(s.CalibrationPoints, wantPoints) {
-		t.Errorf("calibration_points: got %+v want %+v", s.CalibrationPoints, wantPoints)
+	if !reflect.DeepEqual(points.Columns["input_value"], []float64{4.0, 20.0}) ||
+		!reflect.DeepEqual(points.Columns["output_value"], []float64{-1.0, 6.0}) {
+		t.Errorf("calibration_points: got %+v", points.Columns)
 	}
 
 	// log(ppm) = a*mA + b, per algorithm_equation — proves the points are
 	// recorded in Sensor_Output_Space (log10(ppm)) units, not the linear
 	// Units_Derived_Quantity (ppm) units of the same underlying quantity.
-	a, b := s.DerivationEquationConstants[0].Value, s.DerivationEquationConstants[1].Value
-	for _, p := range s.CalibrationPoints {
-		got := a*p.InputValue + b
-		if math.Abs(got-p.OutputValue) > 1e-10 {
-			t.Errorf("a*%v+b = %v, want %v", p.InputValue, got, p.OutputValue)
+	values := consts.Columns["value"].([]float64)
+	in := points.Columns["input_value"].([]float64)
+	out := points.Columns["output_value"].([]float64)
+	for i := range in {
+		if got := values[0]*in[i] + values[1]; math.Abs(got-out[i]) > 1e-10 {
+			t.Errorf("a*%v+b = %v, want %v", in[i], got, out[i])
 		}
 	}
 }
@@ -210,34 +239,27 @@ func TestCombinedOpcuaAndSynchronousSensorsFixtureHasBoth(t *testing.T) {
 	if cfg.Extensions["TM_OPCUA"] == nil {
 		t.Fatal("expected the TM_OPCUA extension")
 	}
-	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb == nil {
-		t.Fatal("expected clearbox")
-	}
-	s, ok := cb.SynchronousSensors["Oxygen Sensor"]
+	s, ok := sensorsOf(t, cfg)["Oxygen Sensor"]
 	if !ok {
 		t.Fatal(`expected key "Oxygen Sensor"`)
 	}
-	wantConstants := []machineconfig.EquationConstant{
-		{Name: "a", Value: 0.4375},
-		{Name: "b", Value: -2.75},
-	}
-	if !reflect.DeepEqual(s.DerivationEquationConstants, wantConstants) {
-		t.Errorf("derivation_equation_constants: got %+v want %+v", s.DerivationEquationConstants, wantConstants)
+	if !reflect.DeepEqual(s.Tables["Derivation_Equation_Constants"].Columns["name"], []string{"a", "b"}) {
+		t.Errorf("derivation_equation_constants: got %+v", s.Tables["Derivation_Equation_Constants"].Columns)
 	}
 }
 
-func TestGetCorrectionData(t *testing.T) {
+func TestClearboxCorrectionGrid(t *testing.T) {
 	path := filepath.Join(fixturesDir(t), "reference_config.h5")
-	cd, err := machineconfig.NewReader(path).GetCorrectionData(0)
+	cfg, err := machineconfig.NewReader(path).Parse()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cd.Shape != [3]int{257, 257, 2} {
-		t.Fatalf("shape = %v", cd.Shape)
+	data, shape := cbGrid(t, cfg, 0, "Correction_Data")
+	if !reflect.DeepEqual(shape, []uint64{257, 257, 2}) {
+		t.Fatalf("shape = %v", shape)
 	}
 	nan := 0
-	for _, v := range cd.Data {
+	for _, v := range data {
 		if math.IsNaN(v) {
 			nan++
 		}
@@ -297,14 +319,6 @@ func (fakeReaderAdapter) Parse(opts machineconfig.ParseOptions) (*machineconfig.
 	return &machineconfig.MachineConfig{
 		Meta: machineconfig.MachineConfigMeta{MachineName: "fake-sentinel"},
 	}, nil
-}
-
-func (fakeReaderAdapter) GetCorrectionData(trainIndex int) (*machineconfig.CorrectionData, error) {
-	return nil, nil
-}
-
-func (fakeReaderAdapter) GetInverseCorrectionData(trainIndex int) (*machineconfig.CorrectionData, error) {
-	return nil, nil
 }
 
 func TestReaderRegistryRejectsUnregisteredVersion(t *testing.T) {
@@ -558,17 +572,18 @@ func TestTrainIDs(t *testing.T) {
 // Inverse correction data
 // ---------------------------------------------------------------------------
 
-func TestGetInverseCorrectionData(t *testing.T) {
+func TestClearboxInverseCorrectionGrid(t *testing.T) {
 	path := filepath.Join(fixturesDir(t), "reference_config.h5")
-	inv, err := machineconfig.NewReader(path).GetInverseCorrectionData(0)
+	cfg, err := machineconfig.NewReader(path).Parse()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inv.Shape != [3]int{257, 257, 2} {
-		t.Fatalf("inverse shape = %v", inv.Shape)
+	inv, shape := cbGrid(t, cfg, 0, "Inverse_Correction_Data")
+	if !reflect.DeepEqual(shape, []uint64{257, 257, 2}) {
+		t.Fatalf("inverse shape = %v", shape)
 	}
 	nan := 0
-	for _, v := range inv.Data {
+	for _, v := range inv {
 		if math.IsNaN(v) {
 			nan++
 		}
@@ -577,13 +592,10 @@ func TestGetInverseCorrectionData(t *testing.T) {
 		t.Fatal("expected NaNs in inverse correction grid")
 	}
 	// forward and inverse grids must differ
-	fwd, err := machineconfig.NewReader(path).GetCorrectionData(0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fwd, _ := cbGrid(t, cfg, 0, "Correction_Data")
 	same := true
-	for i := range fwd.Data {
-		if !math.IsNaN(fwd.Data[i]) && !math.IsNaN(inv.Data[i]) && fwd.Data[i] != inv.Data[i] {
+	for i := range fwd {
+		if !math.IsNaN(fwd[i]) && !math.IsNaN(inv[i]) && fwd[i] != inv[i] {
 			same = false
 			break
 		}
@@ -616,8 +628,8 @@ func TestJSONTopLevelKeys(t *testing.T) {
 			t.Errorf("JSON missing top-level key %q", key)
 		}
 	}
-	if _, ok := v["extensions"]; ok {
-		t.Error("reference fixture JSON must not contain an extensions key")
+	if _, ok := v["extensions"]; !ok {
+		t.Error("reference fixture JSON must contain the ClearBox extension")
 	}
 
 	// the opcua fixture carries its OPCUA group as an opaque extension

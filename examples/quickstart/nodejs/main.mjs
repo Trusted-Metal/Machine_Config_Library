@@ -49,6 +49,11 @@ async function run() {
   console.log(`Machine name   : ${meta.machine_name}`);
   console.log(`Optical trains : ${file.opticalTrains().length}`);
 
+  // ClearBox is an opaque extension tree: extensions.ClearBox.children.Optical_Train_NN.
+  const reader = new MachineConfigReader(DUMMY);
+  const clearboxRoot = (await reader.parse()).extensions.ClearBox;
+  const trainKey = (n) => `Optical_Train_${String(n + 1).padStart(2, '0')}`;
+
   let i = 0;
   for (const train of file.opticalTrains()) {
     const scanner = train.getScanner();
@@ -56,13 +61,7 @@ async function run() {
       `  Train ${i}  wd=${scanner.working_distance} ${scanner.working_distance_unit ?? ''}  ` +
         `offset x=${scanner.scan_head_offset_x}, y=${scanner.scan_head_offset_y}`,
     );
-    const oc = train.optionalComponents();
-    if (oc == null) {
-      console.log('           optionalComponents: none');
-    } else {
-      const cb = oc.clearbox();
-      console.log(`           clearbox: ${cb.ok ? 'present' : cb.error.code}`);
-    }
+    console.log(`           clearbox: ${clearboxRoot?.children[trainKey(i)] ? 'present' : 'none'}`);
     i += 1;
   }
 
@@ -73,8 +72,7 @@ async function run() {
   }
   const scanner = train0.value.getScanner();
 
-  const reader = new MachineConfigReader(DUMMY);
-  const correction = await reader.getCorrectionData(0);
+  const correction = clearboxRoot.children[trainKey(0)].datasets.Correction_Data;
   console.log(`Correction grid: [${correction.shape.join(', ')}]   (train 0)`);
 
   console.log();

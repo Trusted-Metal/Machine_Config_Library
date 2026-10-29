@@ -491,9 +491,6 @@ private:
         ot.light_source = parseLightSource(grp.getGroup("Light_Source"));
         ot.collimator   = parseCollimator(grp.getGroup("Collimator"));
         ot.scanner_card = parseScannerCard(grp.getGroup("Scanner_Card"));
-        if (grp.exist("Optional_Components/ClearBox"))
-            ot.optional_components.clearbox = parseClearBox(
-                grp.getGroup("Optional_Components/ClearBox"));
         if (grp.exist("scan_field_correction_file"))
             ot.scan_field_correction_file = parseSfcf(
                 grp.getDataSet("scan_field_correction_file"));
@@ -590,90 +587,6 @@ private:
         sc.sample_period      = readFloat(grp, "Sample_Period");
         sc.sample_period_unit = readUnitLocked(grp, "Sample_Period_unit", "μs");
         return sc;
-    }
-
-    ClearBox parseClearBox(const HighFive::Group& grp) const {
-        ClearBox cb;
-        cb.ip_address              = readRequiredStr(grp, "Ip_Address");
-        cb.serial_number           = readStr(grp, "Serial_Number");
-        cb.data_port               = readInt(grp, "Data_Port");
-        cb.server_port             = readInt(grp, "Server_Port");
-        cb.actual_timing_offset    = readInt(grp, "Actual_Timing_Offset");
-        cb.commanded_timing_offset = readInt(grp, "Commanded_Timing_Offset");
-        cb.manufacturer            = readStr(grp, "Manufacturer");
-        cb.model                   = readStr(grp, "Model");
-        cb.output_path             = readStr(grp, "Output_Path");
-        cb.selected_camera         = readStr(grp, "Selected_Camera");
-        cb.custom_video_format     = readStr(grp, "Custom_Video_Format");
-        cb.video_output            = readStr(grp, "Video_Output");
-        cb.show_console            = readBoolFromInt(grp, "Show_Console");
-        cb.software_trigger_delay  = readInt(grp, "Software_Trigger_Delay");
-        cb.correction_grid_domain_shape = readStr(grp, "Correction_Grid_Domain_Shape");
-        cb.inverse_grid_domain_shape    = readStr(grp, "Inverse_Grid_Domain_Shape");
-        cb.synchronous_sensors          = parseSynchronousSensors(grp);
-        return cb;
-    }
-
-    static std::string fixedBufToString(const char* buf, std::size_t n) {
-        std::size_t len = 0;
-        while (len < n && buf[len] != '\0') ++len;
-        return std::string(buf, len);
-    }
-
-    std::vector<EquationConstant> readEquationConstants(const HighFive::Group& grp) const {
-        std::vector<EquationConstant> out;
-        if (!grp.exist("Derivation_Equation_Constants")) return out;
-        std::vector<MockV1_1EquationConstantRow> rows;
-        grp.getDataSet("Derivation_Equation_Constants").read(rows);
-        out.reserve(rows.size());
-        for (const auto& r : rows)
-            out.push_back({fixedBufToString(r.name, MockV1_1EquationConstantMaxNameBytes), r.value});
-        return out;
-    }
-
-    std::vector<CalibrationPoint> readCalibrationPoints(const HighFive::Group& grp) const {
-        std::vector<CalibrationPoint> out;
-        if (!grp.exist("Calibration_Points")) return out;
-        std::vector<MockV1_1CalibrationPointRow> rows;
-        grp.getDataSet("Calibration_Points").read(rows);
-        out.reserve(rows.size());
-        for (const auto& r : rows)
-            out.push_back({r.input_value, r.output_value});
-        return out;
-    }
-
-    SynchronousSensor parseSynchronousSensor(const HighFive::Group& grp) const {
-        SynchronousSensor s;
-        s.enabled                    = readBoolFromInt(grp, "Enabled");
-        s.sensor_name                = readStr(grp, "Sensor_Name");
-        s.sensor_output_range_low    = readFloat(grp, "Sensor_Output_Range_Low");
-        s.sensor_output_range_high   = readFloat(grp, "Sensor_Output_Range_High");
-        s.sensor_output_space        = readStr(grp, "Sensor_Output_Space");
-        s.sensor_model               = readStr(grp, "Sensor_Model");
-        s.sensor_manufacturer        = readStr(grp, "Sensor_Manufacturer");
-        s.sensor_scope               = readStr(grp, "Sensor_Scope");
-        s.units_derived_quantity     = readStr(grp, "Units_Derived_Quantity");
-        s.port_id                    = readInt(grp, "Port_ID");
-        s.sensor_type                = readStr(grp, "Sensor_Type");
-        s.input_type                 = readStr(grp, "Input_Type");
-        s.algorithm_type             = readStr(grp, "Algorithm_Type");
-        s.algorithm_equation         = readStr(grp, "Algorithm_Equation");
-        s.calibration_source         = readStr(grp, "Calibration_Source");
-        s.calibration_verified       = readBoolFromInt(grp, "Calibration_Verified");
-        s.sample_period              = readFloat(grp, "Sample_Period");
-        s.metadata                   = readStr(grp, "Metadata");
-        s.derivation_equation_constants = readEquationConstants(grp);
-        s.calibration_points            = readCalibrationPoints(grp);
-        return s;
-    }
-
-    std::map<std::string, SynchronousSensor> parseSynchronousSensors(const HighFive::Group& grp) const {
-        std::map<std::string, SynchronousSensor> sensors;
-        if (!grp.exist("Synchronous_Sensors")) return sensors;
-        auto sensors_grp = grp.getGroup("Synchronous_Sensors");
-        for (const auto& name : sensors_grp.listObjectNames())
-            sensors[name] = parseSynchronousSensor(sensors_grp.getGroup(name));
-        return sensors;
     }
 
     ScanFieldCorrectionFile parseSfcf(const HighFive::DataSet& ds) const {
@@ -792,11 +705,6 @@ private:
         auto cg = grp.createGroup("Collimator");   writeCollimator(cg, t.collimator);
         auto kg = grp.createGroup("Scanner_Card"); writeScannerCard(kg, t.scanner_card);
 
-        if (t.optional_components.clearbox) {
-            auto og = grp.createGroup("Optional_Components");
-            auto bg = og.createGroup("ClearBox");
-            writeClearBox(bg, *t.optional_components.clearbox);
-        }
         if (t.scan_field_correction_file)
             writeSfcf(grp, *t.scan_field_correction_file);
     }
@@ -885,102 +793,6 @@ private:
         ws(grp, "Communication_Protocol",  sc.communication_protocol.value_or(""));
         wf(grp, "Sample_Period",           sc.sample_period);
         ws(grp, "Sample_Period_unit",      sc.sample_period_unit.value_or("\xce\xbcs"));
-    }
-
-    void writeClearBox(HighFive::Group& grp, const ClearBox& cb) const {
-        ws(grp, "Ip_Address",                  cb.ip_address);
-        ws(grp, "Serial_Number",               cb.serial_number.value_or(""));
-        wi(grp, "Data_Port",                   cb.data_port);
-        wi(grp, "Server_Port",                 cb.server_port);
-        wi(grp, "Actual_Timing_Offset",        cb.actual_timing_offset);
-        wi(grp, "Commanded_Timing_Offset",     cb.commanded_timing_offset);
-        ws(grp, "Manufacturer",                cb.manufacturer.value_or(""));
-        ws(grp, "Model",                       cb.model.value_or(""));
-        ws(grp, "Output_Path",                 cb.output_path.value_or(""));
-        ws(grp, "Selected_Camera",             cb.selected_camera.value_or(""));
-        ws(grp, "Custom_Video_Format",         cb.custom_video_format.value_or(""));
-        ws(grp, "Video_Output",                cb.video_output.value_or(""));
-        wb(grp, "Show_Console",                cb.show_console);
-        wi(grp, "Software_Trigger_Delay",      cb.software_trigger_delay);
-        ws(grp, "Correction_Grid_Domain_Shape",cb.correction_grid_domain_shape.value_or(""));
-        ws(grp, "Inverse_Grid_Domain_Shape",   cb.inverse_grid_domain_shape.value_or(""));
-        writeCorrectionDataset(grp, "Correction_Data",         cb.correction_data);
-        writeCorrectionDataset(grp, "Inverse_Correction_Data", cb.inverse_correction_data);
-
-        if (!cb.synchronous_sensors.empty()) {
-            auto sensors_grp = grp.createGroup("Synchronous_Sensors");
-            for (const auto& [name, sensor] : cb.synchronous_sensors) {
-                auto sg = sensors_grp.createGroup(name);
-                writeSynchronousSensor(sg, sensor);
-            }
-        }
-    }
-
-    void writeEquationConstants(HighFive::Group& grp,
-                                 const std::vector<EquationConstant>& constants) const {
-        std::vector<MockV1_1EquationConstantRow> rows;
-        rows.reserve(constants.size());
-        for (const auto& c : constants) {
-            if (c.name.size() > MockV1_1EquationConstantMaxNameBytes) {
-                throw std::runtime_error(
-                    "Derivation_Equation_Constants name '" + c.name + "' is " +
-                    std::to_string(c.name.size()) + " UTF-8 bytes, which does not fit in the " +
-                    std::to_string(MockV1_1EquationConstantMaxNameBytes) +
-                    "-byte fixed-length field (would otherwise be silently truncated on write).");
-            }
-            MockV1_1EquationConstantRow row{};
-            std::memset(row.name, 0, sizeof(row.name));
-            std::memcpy(row.name, c.name.data(), c.name.size());
-            row.value = c.value;
-            rows.push_back(row);
-        }
-        grp.createDataSet("Derivation_Equation_Constants", rows);
-    }
-
-    void writeCalibrationPoints(HighFive::Group& grp,
-                                 const std::vector<CalibrationPoint>& points) const {
-        std::vector<MockV1_1CalibrationPointRow> rows;
-        rows.reserve(points.size());
-        for (const auto& p : points)
-            rows.push_back({p.input_value, p.output_value});
-        grp.createDataSet("Calibration_Points", rows);
-    }
-
-    void writeSynchronousSensor(HighFive::Group& grp, const SynchronousSensor& s) const {
-        wb(grp, "Enabled", s.enabled);
-        ws(grp, "Sensor_Name", s.sensor_name.value_or(""));
-        wf(grp, "Sensor_Output_Range_Low", s.sensor_output_range_low);
-        wf(grp, "Sensor_Output_Range_High", s.sensor_output_range_high);
-        ws(grp, "Sensor_Output_Space", s.sensor_output_space.value_or(""));
-        ws(grp, "Sensor_Model", s.sensor_model.value_or(""));
-        ws(grp, "Sensor_Manufacturer", s.sensor_manufacturer.value_or(""));
-        ws(grp, "Sensor_Scope", s.sensor_scope.value_or(""));
-        ws(grp, "Units_Derived_Quantity", s.units_derived_quantity.value_or(""));
-        wi(grp, "Port_ID", s.port_id);
-        ws(grp, "Sensor_Type", s.sensor_type.value_or(""));
-        ws(grp, "Input_Type", s.input_type.value_or(""));
-        ws(grp, "Algorithm_Type", s.algorithm_type.value_or(""));
-        ws(grp, "Algorithm_Equation", s.algorithm_equation.value_or(""));
-        ws(grp, "Calibration_Source", s.calibration_source.value_or(""));
-        wb(grp, "Calibration_Verified", s.calibration_verified);
-        wf(grp, "Sample_Period", s.sample_period);
-        ws(grp, "Metadata", s.metadata.value_or(""));
-        writeEquationConstants(grp, s.derivation_equation_constants);
-        writeCalibrationPoints(grp, s.calibration_points);
-    }
-
-    void writeCorrectionDataset(HighFive::Group& grp, const std::string& name,
-                                  const std::optional<Grid3D>& grid) const {
-        std::array<size_t, 3> shape{};
-        auto flat = detail::gridToFlat(grid, shape);
-        auto ds = grp.createDataSet<double>(
-            name, HighFive::DataSpace({shape[0], shape[1], shape[2]}));
-        H5Dwrite(ds.getId(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, flat.data());
-        ws(ds, "dimensions", "H,W,D");
-        ws(ds, "dtype", "float64");
-        ws(ds, "shape", std::to_string(shape[0]) + "x" +
-                        std::to_string(shape[1]) + "x" +
-                        std::to_string(shape[2]));
     }
 
     void writeSfcf(HighFive::Group& train_grp, const ScanFieldCorrectionFile& sfcf) const {
