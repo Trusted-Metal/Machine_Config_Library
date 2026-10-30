@@ -1,3 +1,16 @@
+## [1.0.0-rc.1](https://github.com/Trusted-Metal/Machine_Config_Library/compare/v0.2.0-rc.10...v1.0.0-rc.1) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* ClearBox is no longer part of the typed MachineConfig model in any language.
+optical_trains[].optional_components and the ClearBox type are removed. Read and write
+extensions[ClearBox] with mcf-ext-clearbox (Node, Rust) instead.
+See docs/migrations/clearbox_to_extension.md.
+
+### Documentation
+
+* ClearBox migration note and plan status ([19a5d61](https://github.com/Trusted-Metal/Machine_Config_Library/commit/19a5d61a8c215442866907b1143189c6fcc51125))
+
 ## [0.2.0-rc.10](https://github.com/Trusted-Metal/Machine_Config_Library/compare/v0.2.0-rc.9...v0.2.0-rc.10) (2026-10-30)
 
 ### Features
