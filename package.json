@@ -1,6 +1,6 @@
 {
   "name": "machine-config-library",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "description": "Multi-language machine configuration library (tooling root — not published)",
   "private": true,
   "type": "module",

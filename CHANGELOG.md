@@ -1,3 +1,74 @@
+## [1.0.0](https://github.com/Trusted-Metal/Machine_Config_Library/compare/v0.1.0...v1.0.0) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* ClearBox is no longer part of the typed MachineConfig model in any language.
+optical_trains[].optional_components and the ClearBox type are removed. Read and write
+extensions[ClearBox] with mcf-ext-clearbox (Node, Rust) instead.
+See docs/migrations/clearbox_to_extension.md.
+
+### Features
+
+* Add C++ tarball and version reporting; added Rust cargo-package CI check ([d6d4d82](https://github.com/Trusted-Metal/Machine_Config_Library/commit/d6d4d8232ed3e0dece9b5ea29095d71e61ff7439))
+* Add Node tgz and Python wheel build support, Go implementation ([bf60969](https://github.com/Trusted-Metal/Machine_Config_Library/commit/bf60969b7aeb39533b9d024b863c9dd85ef2d2c7))
+* added capabilities to lib for Rust, updated testing ([3079e77](https://github.com/Trusted-Metal/Machine_Config_Library/commit/3079e773312840267bd6fcbdefa3dcb2a7695b9f))
+* Added hash writing/hash checking to MCF to all languages, updated testing/docs ([dc14d57](https://github.com/Trusted-Metal/Machine_Config_Library/commit/dc14d571bdbafba3e0680db19431c979ec179cf7))
+* Added methods to access correction/inverse correction data at facade level, updated testing ([79f9ffc](https://github.com/Trusted-Metal/Machine_Config_Library/commit/79f9ffc81c8ca9d60ecf47e79f87b21952a5c212))
+* Added OPCUA fields to C++ and GO, added validation tests ([c710d40](https://github.com/Trusted-Metal/Machine_Config_Library/commit/c710d40d76dcc7d5f0d9020bbef984f64686b473))
+* Added OPCUA fields to Node and Python, added validation tests ([a738a36](https://github.com/Trusted-Metal/Machine_Config_Library/commit/a738a3672adb8e617c69c7931112594483af1ccb))
+* Added Recoater_Blade_Type as optional attribute across all languages, updated testing ([e221148](https://github.com/Trusted-Metal/Machine_Config_Library/commit/e22114879d8eec4ee510d37da8f0b1f7f6e14e5b))
+* added scanner invert flags for each language, updated tests ([711ec79](https://github.com/Trusted-Metal/Machine_Config_Library/commit/711ec794ae6e2281383f6ff73b360dbad17db08d))
+* Added Synchronous Sensors to all 5 languages, updated testing, fixture files ([715615b](https://github.com/Trusted-Metal/Machine_Config_Library/commit/715615b6f056517936893477f2d9d7ab70fe7fd0))
+* Added V1.1 MCF support to all 5 languages, updated testing and fixture files ([00204be](https://github.com/Trusted-Metal/Machine_Config_Library/commit/00204be794471b44433eadd76b5ee9e24b2ab4fa))
+* Condensed application testing files ([c027cdf](https://github.com/Trusted-Metal/Machine_Config_Library/commit/c027cdf6850523199a44da67547dd67fdebadd97))
+* **cpp:** Added cpp testing application, updated testing documents ([b5ba12e](https://github.com/Trusted-Metal/Machine_Config_Library/commit/b5ba12ea432dcbc88f8a87ee3e0eb6af17193175))
+* **cpp:** Finished up initial implementation, quickstart example, workflow example ([912c501](https://github.com/Trusted-Metal/Machine_Config_Library/commit/912c501c7ce6c14dbd5cba06eb1c096af15e4aba))
+* **go:** add CLI binary, cross-platform CGo CLI, expanded tests ([0b91080](https://github.com/Trusted-Metal/Machine_Config_Library/commit/0b910800b623de702eb5ebe44add8856874c1d4c))
+* **go:** Added go testing application, address ci cross-language speed issue ([84007bc](https://github.com/Trusted-Metal/Machine_Config_Library/commit/84007bc6900c92ca052e0b162da635101e918205))
+* **go:** Completed Go implementation, added additional tests where needed ([a9b22e4](https://github.com/Trusted-Metal/Machine_Config_Library/commit/a9b22e4156521bd49d0c4985aea9d3f499124555))
+* Moved implementation plans to local folder, added to git ignore, untracked files ([c337cc4](https://github.com/Trusted-Metal/Machine_Config_Library/commit/c337cc48c92955ef6072ceb0beffa7bb4ea1fad9))
+* **node:** Added node testing app implementation, removed old code pre-refactor ([c824072](https://github.com/Trusted-Metal/Machine_Config_Library/commit/c824072eddfb51cf4824bbb8a1990108b301b020))
+* **python:** Updated documentation, added python example app, established test files ([7ef1c36](https://github.com/Trusted-Metal/Machine_Config_Library/commit/7ef1c3699f93c684c83345309da275c7f7c7541a))
+* refactor to support stable interfaces ([f972630](https://github.com/Trusted-Metal/Machine_Config_Library/commit/f972630f13595a1e8a6ea449d8845c6a9a03cc84))
+* remove clearbox from core MCF ([ed1817f](https://github.com/Trusted-Metal/Machine_Config_Library/commit/ed1817f3dfbba8323752b03d31670be28b24a57f))
+* **rust:** Added rust testing application, updated testing documentation ([923800a](https://github.com/Trusted-Metal/Machine_Config_Library/commit/923800afd7e4d5a943fdd571b0cd824fdfe4fe93))
+* Standarized how all languages use the adapter/capabilites functionality ([e75cefc](https://github.com/Trusted-Metal/Machine_Config_Library/commit/e75cefc2efabfdcea58d5d5af7ac8fbf003cf803))
+* unify power characterization def. for all languages to represent implemented file structs ([1eb19b3](https://github.com/Trusted-Metal/Machine_Config_Library/commit/1eb19b3c79f70187bead09b2a4209aedb3cdaac2))
+* Updated OPCUA schema, added opcua fields to rust with field validation, testing ([0cc5cff](https://github.com/Trusted-Metal/Machine_Config_Library/commit/0cc5cff4f298d0687e571088ef95e34ddd297687))
+
+### Bug Fixes
+
+* address npm vulnerabilities by preventing installation of core npm deps we arent using ([17690be](https://github.com/Trusted-Metal/Machine_Config_Library/commit/17690bebc55da18b6337ba9ccaa94bb9ea518e86))
+* bug fix, documentation update ([db79e38](https://github.com/Trusted-Metal/Machine_Config_Library/commit/db79e387d90146ee1aea616fcfb0a790fde5d54a))
+* **ci:** add HDF5 bin dir to PATH on Windows so DLLs are found at build time ([7fcdfe6](https://github.com/Trusted-Metal/Machine_Config_Library/commit/7fcdfe64b80fd95c26ae75343729f1b0cf9a3203))
+* **ci:** Added additional tests for Go implementation, ci fix ([29c05d4](https://github.com/Trusted-Metal/Machine_Config_Library/commit/29c05d414706d17f8d9aff198b8d957d899dd32c))
+* **ci:** additional fixes for go implementation of ci ([5525841](https://github.com/Trusted-Metal/Machine_Config_Library/commit/55258418b1a21916a3d390b30d653116ff2622b8))
+* **ci:** disable husky hooks in release canidate workflow ([bb43368](https://github.com/Trusted-Metal/Machine_Config_Library/commit/bb43368a5c1c64345f38decdab2a8705fafd25c3))
+* **ci:** fix ci for cross_check and go workflows ([d3cd21b](https://github.com/Trusted-Metal/Machine_Config_Library/commit/d3cd21b9461536565577e5b961d99edf63c2c776))
+* **ci:** install libhdf5-dev on Linux in cross-check workflow ([6c25874](https://github.com/Trusted-Metal/Machine_Config_Library/commit/6c25874c8a40d1d9c0a94dd2f41d2dfa94f3b9f1))
+* **ci:** pin Rust target dir to rust/target via .cargo/config.toml ([f625611](https://github.com/Trusted-Metal/Machine_Config_Library/commit/f6256115d0c8d626b3b694b5923e8de44ea1f9b9))
+* **ci:** set CC explicitly for Windows CGo to bypass MSYS2 POSIX PATH ([9b03302](https://github.com/Trusted-Metal/Machine_Config_Library/commit/9b03302450039479525b6b730ada4bea71c151b3))
+* **ci:** update Rust binary path after root workspace Cargo.toml was added ([d6a003d](https://github.com/Trusted-Metal/Machine_Config_Library/commit/d6a003d7f89afa3f3edc0771734db5d9b1bba3a2))
+* **ci:** use cygpath to resolve MinGW64 gcc path; use POSIX include path ([9ed05de](https://github.com/Trusted-Metal/Machine_Config_Library/commit/9ed05de3e1ee81be67cc55c280b40494ecf61f19))
+* **ci:** use SSH deploy key to bypass branch ruleset for semantic-release push ([47b8c0f](https://github.com/Trusted-Metal/Machine_Config_Library/commit/47b8c0fdd3b1fe5f5da494d68919ee24bbaa5d60))
+* **ci:** use vcpkg HDF5 on Windows instead of broken HDF5_STATIC env var ([e7b0ab4](https://github.com/Trusted-Metal/Machine_Config_Library/commit/e7b0ab448d0306f90835ebd8264639ce53857c4a))
+* **cpp:** reader fix ([10ff8e8](https://github.com/Trusted-Metal/Machine_Config_Library/commit/10ff8e854278703bc2c27440e94785f356f92761))
+* dependabot using 0.0.0 as version number for vulnerabilities, bumping ([ae06b8f](https://github.com/Trusted-Metal/Machine_Config_Library/commit/ae06b8f2595c174850bcebf564c54e710ccb7a97))
+* fix package verification ([2299bc0](https://github.com/Trusted-Metal/Machine_Config_Library/commit/2299bc0ed3d6360ec1cb23b098728f8b8528ad49))
+* **go:** fix read parity failures in HDF5 v1.0 adaptor ([b93f94b](https://github.com/Trusted-Metal/Machine_Config_Library/commit/b93f94b8702b6a93cf56e46bebbcab36eb0fd27a))
+* **go:** use hardcoded MSYS2 CGo paths on Windows instead of pkg-config ([da5de96](https://github.com/Trusted-Metal/Machine_Config_Library/commit/da5de9695eb6c8af9ae52dc06906c3fccfa66392))
+* Last push as ci, no version bump, no artifact generation test, correcting ([d7f3e0e](https://github.com/Trusted-Metal/Machine_Config_Library/commit/d7f3e0e43f4a90c0df704409fe16a8bebd785476))
+* **nodejs:** read CLI version from package.json instead of hardcoding ([3a52122](https://github.com/Trusted-Metal/Machine_Config_Library/commit/3a521229212cb87197ea462b5716c7236624c38f))
+* order of operations issue in windows test ([1506ef3](https://github.com/Trusted-Metal/Machine_Config_Library/commit/1506ef33b85489b00cb1794e6f8cc0186a5436c4))
+* Removed static feature from dependency to work with capture software ([d4702d5](https://github.com/Trusted-Metal/Machine_Config_Library/commit/d4702d596697be699a4a4d2de8746506fadca66f))
+* resolve additional CodeQL alrerts on branch ([976dd18](https://github.com/Trusted-Metal/Machine_Config_Library/commit/976dd18d7b7a3efb96cd1213a899aef953e1233b))
+* resolve CI failures and CodeQL alerts on branch ([6e2ba25](https://github.com/Trusted-Metal/Machine_Config_Library/commit/6e2ba25dff328c24cf20cb3ef8995e4ef3b7690d))
+* restructure into version folders ([8f6faee](https://github.com/Trusted-Metal/Machine_Config_Library/commit/8f6faee64ec1abe46e33c415e7c5b6e7f22290fd))
+
+### Documentation
+
+* ClearBox migration note and plan status ([19a5d61](https://github.com/Trusted-Metal/Machine_Config_Library/commit/19a5d61a8c215442866907b1143189c6fcc51125))
+
 ## [1.0.0-rc.1](https://github.com/Trusted-Metal/Machine_Config_Library/compare/v0.2.0-rc.10...v1.0.0-rc.1) (2026-10-30)
 
 ### ⚠ BREAKING CHANGES
