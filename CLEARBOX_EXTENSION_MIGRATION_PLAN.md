@@ -1,7 +1,10 @@
 # ClearBox Extension Migration Plan
 
 Status: Phase 0 (contract 0.1.1 tables) and Phase 1 (core makes ClearBox opaque) are implemented in all five
-languages, uncommitted; see the Phase 1 status note in section 6. Phases 2 and 3 are not started.
+languages (Phase 1 is on branch SD-1745); Phase 2 is done: `Trusted-Metal/mcf-ext-clearbox` (Node and Rust codecs)
+is released as v1.0.0 and tested against core in CI. Phase 3: `rdt-core` is migrated and verified on real files
+(branch `SD-1745-clearbox-ext`, awaiting a core release to pin); `clearbox-tauri` is not started. See the status
+notes in section 6 and `docs/migrations/clearbox_to_extension.md`.
 
 Goal: extract ClearBox out of core's typed `MachineConfig` model and into a standalone
 `mcf-ext-clearbox` package — a pure pack/unpack codec over the extension contract, the same
@@ -231,6 +234,11 @@ Rust enables serde_json `float_roundtrip` (without it JSON round trips lost one 
   done" bullets.
 
 **Phase 2 — new repo: `mcf-ext-clearbox`.**
+*Status: Node and Rust codecs implemented in `C:\repo\mcf-ext-clearbox` (see its `DESIGN.md`). Only the unversioned
+layout core writes today exists (no `Schema_Version` attribute yet), which keeps core's 1.0 writer unchanged. Checked
+against real files: the codec matches the old typed model on 35 real configs, Node and Rust agree on 37 real trees,
+and core writes and re-reads packed trees for all 37 in both file versions. Not done: a remote and CI run,
+Python/Go/C++ ports, and the Rust crate still declares its own copy of the tree types.*
 Structure mirrors `mcf-ext-opcua` (`DESIGN.md`, `nodejs/`, `rust/`, `fixtures/`, release tooling).
 Node + Rust first (see §8 for why that covers both named consumers; Python/Go/C++ ports deferred,
 same as `mcf-ext-opcua` today).
@@ -264,6 +272,11 @@ same as `mcf-ext-opcua` today).
   don't change.
 - Update `docs/clearbox-tauri-integration.md` and `docs/architecture-overview.md` to describe the
   new boundary (mirrors how those docs already describe the OPC UA boundary).
+
+Status (rdt-core): done as a thin adapter in `api/endpoints/machines/clearbox-extension/` that keeps the
+per-train snake_case shape the mapper and `CLEARBOX_FIELD_MAP` already use, so the import field map and DB
+logic did not change. Verified on 35 real rdt-core exports (48 ClearBox trains): every value read through
+extension matches what the old typed model returned; write-then-read through core is lossless for a 1.1 target.
 
 ## 7. Scope boundary: LightSource.power_characterization stays in core
 
