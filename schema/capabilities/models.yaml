@@ -123,27 +123,6 @@ models:
       - { id: sample_period, type: number, nullable: true }
       - { id: sample_period_unit, type: string, nullable: true }
 
-  ClearBox:
-    extra: true
-    fields:
-      - { id: ip_address, type: string, nullable: false }
-      - { id: serial_number, type: string, nullable: true }
-      - { id: data_port, type: number, nullable: true }
-      - { id: server_port, type: number, nullable: true }
-      - { id: actual_timing_offset, type: number, nullable: true }
-      - { id: commanded_timing_offset, type: number, nullable: true }
-      - { id: manufacturer, type: string, nullable: true }
-      - { id: model, type: string, nullable: true }
-      - { id: output_path, type: string, nullable: true }
-      - { id: selected_camera, type: string, nullable: true }
-      - { id: custom_video_format, type: string, nullable: true }
-      - { id: video_output, type: string, nullable: true }
-      - { id: show_console, type: boolean, nullable: true }
-      - { id: software_trigger_delay, type: number, nullable: true }
-      - { id: correction_grid_domain_shape, type: string, nullable: true }
-      - { id: inverse_grid_domain_shape, type: string, nullable: true }
-      - { id: firmware_version, type: string, nullable: true } # v1.1 (Change 1); no v1.0 source
-
   ScanFieldCorrectionFile:
     extra: true
     fields:

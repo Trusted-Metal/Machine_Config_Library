@@ -11,8 +11,8 @@
 //! (and every later real version) that quietly depends on it. This file
 //! instead reimplements the equivalent of `Hdf5AdapterV1_0::parse()` /
 //! `Hdf5WriterV1_0::write()` from scratch: every subcomponent this mock does
-//! *not* change (OPCUA, ClearBox, LightSource, Collimator, ScannerCard,
-//! SynchronousSensor, sfcf, all other Scanner/AxisConfig fields) is read and
+//! *not* change (OPCUA, LightSource, Collimator, ScannerCard,
+//! sfcf, all other Scanner/AxisConfig fields) is read and
 //! written natively here, not borrowed from `capabilities::v1_0`. The 10
 //! documented differences are implemented directly in the native
 //! read/write paths rather than as a patch-after-the-fact. Mirrors
@@ -37,35 +37,14 @@
 //! mock directly rather than through `MachineConfigReader`/`MachineConfigWriter`
 //! (see VALIDATION_PLAN.md §9.3 for the reasoning).
 
-use hdf5::types::{FixedUnicode, TypeDescriptor, VarLenAscii, VarLenUnicode};
+use hdf5::types::{TypeDescriptor, VarLenAscii, VarLenUnicode};
 use hdf5::{Dataset, File as H5File, Group, Location};
 use indexmap::IndexMap;
 use machine_config::error::{MachineConfigError, Result};
 use machine_config::models::*;
 use machine_config::MachineConfig;
-use ndarray::{Array1, Array3};
+use ndarray::Array1;
 use std::path::{Path, PathBuf};
-
-// ---------------------------------------------------------------------------
-// On-disk compound-dataset rows — local copies of
-// `capabilities::v1_0::hdf5::{RawEquationConstant, RawCalibrationPoint}`.
-// Those are `pub(crate)` to the library and therefore invisible from this
-// integration-test crate; duplicated here rather than reached into.
-// ---------------------------------------------------------------------------
-
-#[derive(hdf5::H5Type, Clone, Debug)]
-#[repr(C)]
-struct RawEquationConstant {
-    name: FixedUnicode<64>,
-    value: f64,
-}
-
-#[derive(hdf5::H5Type, Clone, Debug)]
-#[repr(C)]
-struct RawCalibrationPoint {
-    input_value: f64,
-    output_value: f64,
-}
 
 // ---------------------------------------------------------------------------
 // MockV1_1Layout — on-disk constants that differ from v1.0
@@ -350,35 +329,6 @@ fn write_extra_value(grp: &Group, key: &str, val: &serde_json::Value) -> Result<
     Ok(())
 }
 
-/// Local copy of `models::nested_to_array3` (`pub(crate)`, invisible here).
-/// `None` outer value or an empty grid become a zero-filled `(257, 257, 2)`
-/// array, matching the ClearBox correction-grid dataset shape everywhere
-/// else in this codebase.
-fn nested_to_array3(data: &Option<Vec<Vec<Vec<Option<f64>>>>>) -> Array3<f64> {
-    const SHAPE: (usize, usize, usize) = (257, 257, 2);
-    let zero = || Array3::<f64>::zeros(SHAPE);
-    let outer = match data {
-        None => return zero(),
-        Some(v) if v.is_empty() => return zero(),
-        Some(v) => v,
-    };
-    let d0 = outer.len();
-    let d1 = outer[0].len();
-    let d2 = if d1 > 0 { outer[0][0].len() } else { 0 };
-    if d0 == 0 || d1 == 0 || d2 == 0 {
-        return zero();
-    }
-    let mut arr = Array3::<f64>::from_elem((d0, d1, d2), f64::NAN);
-    for (i, row) in outer.iter().enumerate() {
-        for (j, col) in row.iter().enumerate() {
-            for (k, &v) in col.iter().enumerate() {
-                arr[[i, j, k]] = v.unwrap_or(f64::NAN);
-            }
-        }
-    }
-    arr
-}
-
 // ---------------------------------------------------------------------------
 // MockV1_1Reader — fully independent mock-v1.1 HDF5 parser
 // ---------------------------------------------------------------------------
@@ -472,11 +422,6 @@ impl MockV1_1Reader {
         let collimator = self.parse_collimator(&require_group(&a, "Collimator")?)?;
         let scanner_card = self.parse_scanner_card(&require_group(&a, "Scanner_Card")?)?;
 
-        let clearbox = match a.group("Optional_Components/ClearBox") {
-            Ok(grp) => Some(self.parse_clearbox(&grp)?),
-            Err(_) => None,
-        };
-
         let sfcf = match a.dataset("scan_field_correction_file") {
             Ok(ds) => Some(self.parse_sfcf(&ds)?),
             Err(_) => None,
@@ -537,7 +482,6 @@ impl MockV1_1Reader {
             light_source,
             collimator,
             scanner_card,
-            optional_components: OptionalComponents { clearbox },
             scan_field_correction_file: sfcf,
         })
     }
@@ -650,87 +594,6 @@ impl MockV1_1Reader {
         })
     }
 
-    /// Unlike `Hdf5AdapterV1_0::parse_clearbox`, there is no binary-inclusion
-    /// mode here — `MockV1_1Reader::parse()` is scalar-only, matching this
-    /// mock's only public entry point.
-    fn parse_clearbox(&self, grp: &Group) -> Result<ClearBox> {
-        let synchronous_sensors = match grp.group("Synchronous_Sensors") {
-            Ok(sensors_grp) => {
-                let mut map = IndexMap::new();
-                for name in sensors_grp.member_names()? {
-                    let sg = sensors_grp.group(&name)?;
-                    map.insert(name, self.parse_synchronous_sensor(&sg)?);
-                }
-                map
-            }
-            Err(_) => IndexMap::new(),
-        };
-        Ok(ClearBox {
-            ip_address: read_required_str(grp, "Ip_Address")?,
-            serial_number: read_str(grp, "Serial_Number")?,
-            data_port: read_int(grp, "Data_Port")?,
-            server_port: read_int(grp, "Server_Port")?,
-            actual_timing_offset: read_int(grp, "Actual_Timing_Offset")?,
-            commanded_timing_offset: read_int(grp, "Commanded_Timing_Offset")?,
-            correction_data: None,
-            inverse_correction_data: None,
-            manufacturer: read_str(grp, "Manufacturer")?,
-            model: read_str(grp, "Model")?,
-            output_path: read_str(grp, "Output_Path")?,
-            selected_camera: read_str(grp, "Selected_Camera")?,
-            custom_video_format: read_str(grp, "Custom_Video_Format")?,
-            video_output: read_str(grp, "Video_Output")?,
-            show_console: read_bool_from_int(grp, "Show_Console")?,
-            software_trigger_delay: read_int(grp, "Software_Trigger_Delay")?,
-            correction_grid_domain_shape: read_str(grp, "Correction_Grid_Domain_Shape")?,
-            inverse_grid_domain_shape: read_str(grp, "Inverse_Grid_Domain_Shape")?,
-            synchronous_sensors,
-            firmware_version: None,
-            power_characterization: None,
-        })
-    }
-
-    fn parse_synchronous_sensor(&self, grp: &Group) -> Result<SynchronousSensor> {
-        let derivation_equation_constants = match grp.dataset("Derivation_Equation_Constants") {
-            Ok(ds) => ds
-                .read_raw::<RawEquationConstant>()?
-                .into_iter()
-                .map(|r| EquationConstant { name: r.name.as_str().to_string(), value: r.value })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        let calibration_points = match grp.dataset("Calibration_Points") {
-            Ok(ds) => ds
-                .read_raw::<RawCalibrationPoint>()?
-                .into_iter()
-                .map(|r| CalibrationPoint { input_value: r.input_value, output_value: r.output_value })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        Ok(SynchronousSensor {
-            enabled: read_bool_from_int(grp, "Enabled")?,
-            sensor_name: read_str(grp, "Sensor_Name")?,
-            sensor_output_range_low: read_float(grp, "Sensor_Output_Range_Low")?,
-            sensor_output_range_high: read_float(grp, "Sensor_Output_Range_High")?,
-            sensor_output_space: read_str(grp, "Sensor_Output_Space")?,
-            sensor_model: read_str(grp, "Sensor_Model")?,
-            sensor_manufacturer: read_str(grp, "Sensor_Manufacturer")?,
-            sensor_scope: read_str(grp, "Sensor_Scope")?,
-            units_derived_quantity: read_str(grp, "Units_Derived_Quantity")?,
-            port_id: read_int(grp, "Port_ID")?,
-            sensor_type: read_str(grp, "Sensor_Type")?,
-            input_type: read_str(grp, "Input_Type")?,
-            algorithm_type: read_str(grp, "Algorithm_Type")?,
-            algorithm_equation: read_str(grp, "Algorithm_Equation")?,
-            calibration_source: read_str(grp, "Calibration_Source")?,
-            calibration_verified: read_bool_from_int(grp, "Calibration_Verified")?,
-            sample_period: read_float(grp, "Sample_Period")?,
-            metadata: read_str(grp, "Metadata")?,
-            derivation_equation_constants,
-            calibration_points,
-        })
-    }
-
     fn parse_sfcf(&self, ds: &Dataset) -> Result<ScanFieldCorrectionFile> {
         Ok(ScanFieldCorrectionFile {
             document_name: read_required_str(ds, "document_name")?,
@@ -782,12 +645,6 @@ impl<'a> MockV1_1Writer<'a> {
 
             let sc_grp = train_grp.create_group("Scanner_Card")?;
             self.write_scanner_card(&sc_grp, &train.scanner_card)?;
-
-            if let Some(cb) = &train.optional_components.clearbox {
-                let opt_grp = train_grp.create_group("Optional_Components")?;
-                let cb_grp = opt_grp.create_group("ClearBox")?;
-                self.write_clearbox(&cb_grp, cb)?;
-            }
 
             if let Some(sfcf) = &train.scan_field_correction_file {
                 self.write_sfcf(&train_grp, sfcf)?;
@@ -971,99 +828,6 @@ impl<'a> MockV1_1Writer<'a> {
         ws(grp, "Communication_Protocol", sc.communication_protocol.as_deref().unwrap_or(""))?;
         wf(grp, "Sample_Period", sc.sample_period)?;
         ws(grp, "Sample_Period_unit", sc.sample_period_unit.as_deref().unwrap_or("\u{03bc}s"))?;
-        Ok(())
-    }
-
-    fn write_clearbox(&self, grp: &Group, cb: &ClearBox) -> Result<()> {
-        ws(grp, "Ip_Address", &cb.ip_address)?;
-        ws(grp, "Serial_Number", cb.serial_number.as_deref().unwrap_or(""))?;
-        wi(grp, "Data_Port", cb.data_port)?;
-        wi(grp, "Server_Port", cb.server_port)?;
-        wi(grp, "Actual_Timing_Offset", cb.actual_timing_offset)?;
-        wi(grp, "Commanded_Timing_Offset", cb.commanded_timing_offset)?;
-        ws(grp, "Manufacturer", cb.manufacturer.as_deref().unwrap_or(""))?;
-        ws(grp, "Model", cb.model.as_deref().unwrap_or(""))?;
-        ws(grp, "Output_Path", cb.output_path.as_deref().unwrap_or(""))?;
-        ws(grp, "Selected_Camera", cb.selected_camera.as_deref().unwrap_or(""))?;
-        ws(grp, "Custom_Video_Format", cb.custom_video_format.as_deref().unwrap_or(""))?;
-        ws(grp, "Video_Output", cb.video_output.as_deref().unwrap_or(""))?;
-        wb(grp, "Show_Console", cb.show_console)?;
-        wi(grp, "Software_Trigger_Delay", cb.software_trigger_delay)?;
-        ws(grp, "Correction_Grid_Domain_Shape", cb.correction_grid_domain_shape.as_deref().unwrap_or(""))?;
-        ws(grp, "Inverse_Grid_Domain_Shape", cb.inverse_grid_domain_shape.as_deref().unwrap_or(""))?;
-
-        let cd_arr = nested_to_array3(&cb.correction_data);
-        let shape = cd_arr.shape().to_owned();
-        let cd_ds = grp.new_dataset_builder().with_data(&cd_arr).create("Correction_Data")?;
-        ws_ds(&cd_ds, "dimensions", "H,W,D")?;
-        ws_ds(&cd_ds, "dtype", "float64")?;
-        ws_ds(&cd_ds, "shape", &format!("{}x{}x{}", shape[0], shape[1], shape[2]))?;
-
-        let icd_arr = nested_to_array3(&cb.inverse_correction_data);
-        let icd_shape = icd_arr.shape().to_owned();
-        let icd_ds = grp.new_dataset_builder().with_data(&icd_arr).create("Inverse_Correction_Data")?;
-        ws_ds(&icd_ds, "dimensions", "H,W,D")?;
-        ws_ds(&icd_ds, "dtype", "float64")?;
-        ws_ds(&icd_ds, "shape", &format!("{}x{}x{}", icd_shape[0], icd_shape[1], icd_shape[2]))?;
-
-        if !cb.synchronous_sensors.is_empty() {
-            let sensors_grp = grp.create_group("Synchronous_Sensors")?;
-            for (name, sensor) in &cb.synchronous_sensors {
-                let sg = sensors_grp.create_group(name)?;
-                self.write_synchronous_sensor(&sg, sensor)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn write_synchronous_sensor(&self, grp: &Group, sensor: &SynchronousSensor) -> Result<()> {
-        wb(grp, "Enabled", sensor.enabled)?;
-        ws(grp, "Sensor_Name", sensor.sensor_name.as_deref().unwrap_or(""))?;
-        wf(grp, "Sensor_Output_Range_Low", sensor.sensor_output_range_low)?;
-        wf(grp, "Sensor_Output_Range_High", sensor.sensor_output_range_high)?;
-        ws(grp, "Sensor_Output_Space", sensor.sensor_output_space.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Model", sensor.sensor_model.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Manufacturer", sensor.sensor_manufacturer.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Scope", sensor.sensor_scope.as_deref().unwrap_or(""))?;
-        ws(grp, "Units_Derived_Quantity", sensor.units_derived_quantity.as_deref().unwrap_or(""))?;
-        wi(grp, "Port_ID", sensor.port_id)?;
-        ws(grp, "Sensor_Type", sensor.sensor_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Input_Type", sensor.input_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Algorithm_Type", sensor.algorithm_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Algorithm_Equation", sensor.algorithm_equation.as_deref().unwrap_or(""))?;
-        ws(grp, "Calibration_Source", sensor.calibration_source.as_deref().unwrap_or(""))?;
-        wb(grp, "Calibration_Verified", sensor.calibration_verified)?;
-        wf(grp, "Sample_Period", sensor.sample_period)?;
-        ws(grp, "Metadata", sensor.metadata.as_deref().unwrap_or(""))?;
-
-        let const_rows: Vec<RawEquationConstant> = sensor
-            .derivation_equation_constants
-            .iter()
-            .map(|c| -> Result<RawEquationConstant> {
-                Ok(RawEquationConstant {
-                    name: c.name.parse().map_err(|e| {
-                        MachineConfigError::Parse(format!(
-                            "Derivation_Equation_Constants name {:?} does not fit in a \
-                             64-byte FixedUnicode field: {e:?}",
-                            c.name
-                        ))
-                    })?,
-                    value: c.value,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let const_arr = Array1::from(const_rows);
-        grp.new_dataset_builder().with_data(&const_arr).create("Derivation_Equation_Constants")?;
-
-        let point_rows: Vec<RawCalibrationPoint> = sensor
-            .calibration_points
-            .iter()
-            .map(|p| RawCalibrationPoint { input_value: p.input_value, output_value: p.output_value })
-            .collect();
-        let point_arr = Array1::from(point_rows);
-        grp.new_dataset_builder().with_data(&point_arr).create("Calibration_Points")?;
-
         Ok(())
     }
 

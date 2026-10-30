@@ -49,10 +49,14 @@ async function run() {
   console.log();
   console.log('Before calibration:');
   const reader = new MachineConfigReader(DUMMY);
+  // ClearBox is an opaque extension tree: extensions.ClearBox.children.Optical_Train_NN.
+  const correctionOf = async (r, n) =>
+    (await r.parse()).extensions.ClearBox.children[`Optical_Train_${String(n + 1).padStart(2, '0')}`]
+      .datasets.Correction_Data;
   let i = 0;
   for (const train of file.opticalTrains()) {
     const s = train.getScanner();
-    const cd = await reader.getCorrectionData(i);
+    const cd = await correctionOf(reader, i);
     console.log(`  Train ${i + 1}  offset x=${s.scan_head_offset_x}, y=${s.scan_head_offset_y}`);
     console.log(`           correction grid [${cd.shape.join(', ')}]`);
     i += 1;
@@ -108,7 +112,7 @@ async function run() {
     if (s.scan_head_offset_y !== ey) {
       failures.push(`  train${t + 1} offset_y: expected ${ey}, got ${s.scan_head_offset_y}`);
     }
-    const cd = await reader2.getCorrectionData(t);
+    const cd = await correctionOf(reader2, t);
     if (cd.shape[0] !== 257 || cd.shape[1] !== 257 || cd.shape[2] !== 2) {
       failures.push(`  train${t + 1} correction shape: expected [257,257,2], got [${cd.shape}]`);
     }

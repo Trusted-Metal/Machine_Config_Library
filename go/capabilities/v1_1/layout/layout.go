@@ -15,33 +15,26 @@ const (
 	RootMachine       = "Machine"
 	RootOpticalTrains = "Machine/Optical_Trains"
 
-	// RootExtensions holds every v1.1 optional, cross-cutting section
-	// (ClearBox, plus every opaque extension tree). Present only if at least one of them exists —
-	// never written as an empty placeholder group.
+	// RootExtensions holds every v1.1 optional, cross-cutting section: every extension is an opaque
+	// tree, ClearBox included. Present only if at least one exists — never written as an empty
+	// placeholder group.
 	RootExtensions = "Extensions"
-	// GroupClearBoxRoot is Change 1's relocated ClearBox home: one shared
-	// Output_Path/Software_Trigger_Delay (Consolidate) plus one <train_id>
-	// subgroup per train that has a ClearBox.
-	GroupClearBoxRoot = "Extensions/ClearBox"
 
 	TrainIDPrefix = "Optical_Train_"
 	GroupScanner  = "Scanner"
 	// Note: no GroupOptionalComponents / GroupClearBox under a train in
 	// v1.1 — Optional_Components is removed entirely (Change 1); ClearBox
-	// lives under RootExtensions/GroupClearBoxRoot instead.
+	// lives under Extensions/ClearBox as an ordinary extension tree.
 	GroupLightSource = "Light_Source"
 	GroupCollimator  = "Collimator"
 	GroupScannerCard = "Scanner_Card"
 
 	// GroupPowerCharacterization is Changes 3/4's structured replacement for
-	// Volts_To_Watts_*/Watts_To_Volts_*, used identically under both a
-	// per-train ClearBox subgroup and a train's Light_Source group.
-	GroupPowerCharacterization     = "Power_Characterization"
-	DSDerivationEquationConstants  = "Derivation_Equation_Constants"
-	DSCharacterizationPoints       = "Characterization_Points"
-	DSCorrectionData               = "Correction_Data"
-	DSInverseCorrectionData        = "Inverse_Correction_Data"
-	DSScanFieldCorrectionFile      = "scan_field_correction_file"
+	// Volts_To_Watts_*/Watts_To_Volts_*, under a train's Light_Source group.
+	GroupPowerCharacterization    = "Power_Characterization"
+	DSDerivationEquationConstants = "Derivation_Equation_Constants"
+	DSCharacterizationPoints      = "Characterization_Points"
+	DSScanFieldCorrectionFile     = "scan_field_correction_file"
 )
 
 func TrainID(index int) string {
@@ -75,22 +68,3 @@ func CollimatorPathByID(tid string) string {
 func ScannerCardPathByID(tid string) string {
 	return TrainPathByID(tid) + "/" + GroupScannerCard
 }
-
-// ClearboxPath is the index-based variant, used by the top-level
-// GetCorrectionData/GetInverseCorrectionData free functions (mirrors
-// v1_0/layout's ClearboxPath).
-func ClearboxPath(index int) string {
-	return GroupClearBoxRoot + "/" + TrainID(index)
-}
-
-func ClearboxPathByID(tid string) string {
-	return GroupClearBoxRoot + "/" + tid
-}
-
-func ClearboxPowerCharacterizationPathByID(tid string) string {
-	return ClearboxPathByID(tid) + "/" + GroupPowerCharacterization
-}
-
-// ModelledExtensionNames are the Extensions/ groups core models itself and therefore never exposes
-// as opaque extension trees.
-var ModelledExtensionNames = map[string]struct{}{"ClearBox": {}}

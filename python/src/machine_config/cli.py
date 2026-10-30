@@ -17,6 +17,21 @@ from .schema import SCHEMA
 from .writer import MachineConfigWriter
 
 
+def _elide_dataset_data(value) -> None:
+    """Drop the ``data`` array of every extension dataset so ``inspect -v`` stays readable."""
+    if isinstance(value, dict):
+        datasets = value.get("datasets")
+        if isinstance(datasets, dict):
+            for ds in datasets.values():
+                if isinstance(ds, dict):
+                    ds.pop("data", None)
+        for v in value.values():
+            _elide_dataset_data(v)
+    elif isinstance(value, list):
+        for v in value:
+            _elide_dataset_data(v)
+
+
 @click.group()
 @click.version_option(version="0.1.0", prog_name="machine-config")
 def main() -> None:
@@ -90,6 +105,7 @@ def inspect(path: str, verbose: bool) -> None:
 
     if verbose:
         config_dict = reader._config_to_dict(config)
+        _elide_dataset_data(config_dict)
         click.echo("\n--- Full Configuration ---")
         click.echo(
             yaml.dump(
@@ -158,9 +174,8 @@ def validate(path: str) -> None:
     is_flag=True,
     default=False,
     help=(
-        "Include correction arrays and raw .fc3 bytes in the output. "
-        "Produces large output (~14 MB for a 2-laser config). "
-        "Default: metadata and scalar fields only."
+        "Include the raw .fc3 bytes in the output. "
+        "Extension datasets (ClearBox correction grids) are always included in full."
     ),
 )
 def export_json(path: str, output: str | None, indent: int, include_binary: bool) -> None:
@@ -267,14 +282,18 @@ def correction_hash(path: str, train: int, inverse: bool) -> None:
     import hashlib
     import numpy as np  # noqa: PLC0415
     try:
-        reader = MachineConfigReader(path)
-        arr: np.ndarray = (
-            reader.get_inverse_correction_data(train)
-            if inverse
-            else reader.get_correction_data(train)
-        )
+        config = MachineConfigReader(path).parse()
+        name = "Inverse_Correction_Data" if inverse else "Correction_Data"
+        train_id = f"Optical_Train_{train + 1:02d}"
+        clearbox = config.extensions.get("ClearBox")
+        grid = clearbox.children.get(train_id) if clearbox else None
+        dataset = grid.datasets.get(name) if grid else None
+        if dataset is None:
+            raise ValueError(f"no ClearBox {name} for {train_id}")
+        if dataset.dtype != "f64":
+            raise ValueError(f"ClearBox {name} for {train_id} is not float64")
         # Explicit little-endian float64 for cross-platform determinism.
-        digest = hashlib.sha256(arr.astype("<f8").tobytes()).hexdigest()
+        digest = hashlib.sha256(np.array(dataset.data, dtype="<f8").tobytes()).hexdigest()
         click.echo(digest)
     except Exception as exc:  # noqa: BLE001
         click.echo(f"Error: {exc}", err=True)

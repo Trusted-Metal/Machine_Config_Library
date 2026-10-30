@@ -11,15 +11,14 @@ from pathlib import Path
 from typing import Optional
 
 import h5py
-import numpy as np
 
+from machine_config import clearbox_legacy
 from machine_config.extension_contract import tree_from_json, tree_to_json
 from machine_config.extensions_hdf5 import read_extension_tree
 from machine_config.models import (
     AxisConfig,
     BuildPlate,
     CalibrationPoint,
-    ClearBox,
     Collimator,
     EquationConstant,
     LightSource,
@@ -27,19 +26,13 @@ from machine_config.models import (
     MachineConfig,
     MachineConfigMeta,
     OpticalTrain,
-    OptionalComponents,
     PowerCharacterization,
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
-    SynchronousSensor,
-    nan_array_to_nested,
 )
 from machine_config.capabilities.file_version import MissingRequiredGroup
-from machine_config.power_characterization import (
-    forward_power_characterization_coefficients,
-    forward_power_characterization_points,
-)
+from machine_config.power_characterization import forward_power_characterization_points
 from machine_config.schema import SCHEMA_VERSION
 
 from . import layout
@@ -48,35 +41,6 @@ from . import layout
 _KNOWN_ROOT_KEYS: frozenset[str] = frozenset(
     {"machine_name", "manufacturer", "model", "serial_number",
      "File_Version", "Export_Date", "Configuration_Hash"}
-)
-
-# HDF5 attribute names that are modelled as typed fields on OpcuaTrigger.
-# Any attribute NOT in this set is collected into OpcuaTrigger.extra.
-# HDF5 attribute names that are modelled as typed fields on OpcuaClientConfig.
-# Any attribute NOT in this set is collected into OpcuaClientConfig.extra.
-# HDF5 attribute names that are modelled as typed fields on OpcuaPipeConfig.
-# Any attribute NOT in this set is collected into OpcuaPipeConfig.extra.
-# Compound dtypes for SynchronousSensor's two datasets. First use of a
-# structured/compound HDF5 type anywhere in this codebase — no prior
-# precedent to match, confirmed by grep before writing this.
-#
-# `name` is a fixed-length (64-byte) UTF-8 string, not h5py's default
-# variable-length string — a deliberate, cross-language decision. The HDF5 C
-# library cannot convert between fixed-length and variable-length strings
-# when they're compound-type *members* (confirmed at the raw H5Tinsert/
-# H5Dread level), and Node.js's h5wasm cannot write a non-empty VLEN string
-# inside a compound row at all. Fixed-length is the one representation every
-# language's HDF5 binding can both read and write here. See
-# SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string convention" section.
-EQUATION_CONSTANT_NAME_MAX_BYTES = 64
-_EQUATION_CONSTANT_DTYPE = np.dtype(
-    [
-        ("name", h5py.string_dtype(encoding="utf-8", length=EQUATION_CONSTANT_NAME_MAX_BYTES)),
-        ("value", "f8"),
-    ]
-)
-_CALIBRATION_POINT_DTYPE = np.dtype(
-    [("input_value", "f8"), ("output_value", "f8")]
 )
 
 
@@ -116,16 +80,6 @@ class Hdf5AdapterV1_0:
             except KeyError as exc:
                 raise MissingRequiredGroup(str(exc)) from exc
 
-    def get_correction_data(self, train_index: int) -> np.ndarray:
-        """Return the ``(257, 257, 2)`` float64 galvo correction grid (0-indexed train)."""
-        with h5py.File(self.path, "r") as f:
-            return f[layout.correction_data_path(train_index)][:]
-
-    def get_inverse_correction_data(self, train_index: int) -> np.ndarray:
-        """Return the ``(257, 257, 2)`` float64 inverse correction grid (0-indexed train)."""
-        with h5py.File(self.path, "r") as f:
-            return f[layout.inverse_correction_data_path(train_index)][:]
-
     def get_scan_field_correction_bytes(self, train_index: int) -> bytes:
         """Return the raw ``.fc3`` correction-file bytes embedded as a uint8 dataset."""
         with h5py.File(self.path, "r") as f:
@@ -148,14 +102,10 @@ class Hdf5AdapterV1_0:
 
         Args:
             indent: JSON indentation level.
-            include_binary: When ``True``, correction arrays
-                (``correction_data``, ``inverse_correction_data``) and the
-                raw ``.fc3`` bytes (``raw_bytes``) are included in the output.
-                Defaults to ``False`` — the JSON contains only scalar/metadata
-                fields, keeping the output compact and human-readable.
-                The HDF5 file remains the source of truth for binary data;
-                use :meth:`get_correction_data` and
-                :meth:`get_scan_field_correction_bytes` to access it.
+            include_binary: When ``True``, the raw ``.fc3`` bytes (``raw_bytes``)
+                are included in the output. Defaults to ``False``. Extension
+                trees (ClearBox's correction grids included) are always complete.
+                Use :meth:`get_scan_field_correction_bytes` for direct access.
         """
         config = self.parse()
         return json.dumps(
@@ -285,8 +235,8 @@ class Hdf5AdapterV1_0:
         train_ids = layout.train_ids(trains_grp.keys())
         optical_trains = [self._parse_train(f, tid) for tid in train_ids]
 
-        # ---- Optional OPCUA group ------------------------------------------------
-        extensions = self._parse_extensions(f)
+        # ---- Extensions: ClearBox (shimmed from per-train groups) and OPCUA ------
+        extensions = self._parse_extensions(f, train_ids)
 
         return MachineConfig(
             meta=meta,
@@ -295,12 +245,21 @@ class Hdf5AdapterV1_0:
             extensions=extensions,
         )
 
-    def _parse_extensions(self, f: h5py.File) -> dict:
-        """File_Version 1.0 stores the one extension it can hold at the root as ``OPCUA/``."""
-        if layout.ROOT_OPCUA not in f:
-            return {}
-        name = layout.LEGACY_OPCUA_EXTENSION_NAME
-        return {name: read_extension_tree(f[layout.ROOT_OPCUA], name)}
+    def _parse_extensions(self, f: h5py.File, train_ids: list) -> dict:
+        """File_Version 1.0 keeps ClearBox per train and the TM_OPCUA extension at the root as ``OPCUA/``."""
+        extensions: dict = {}
+        clearbox_trains = []
+        for tid in train_ids:
+            path = layout.clearbox_path_by_id(tid)
+            if path in f:
+                clearbox_trains.append((tid, read_extension_tree(f[path], tid)))
+        clearbox = clearbox_legacy.from_v1_0_trains(clearbox_trains)
+        if clearbox is not None:
+            extensions[clearbox_legacy.EXTENSION_NAME] = clearbox
+        if layout.ROOT_OPCUA in f:
+            name = layout.LEGACY_OPCUA_EXTENSION_NAME
+            extensions[name] = read_extension_tree(f[layout.ROOT_OPCUA], name)
+        return extensions
 
     def _parse_train(self, f: h5py.File, train_id: str) -> OpticalTrain:
         base_path = layout.train_path_by_id(train_id)
@@ -310,9 +269,6 @@ class Hdf5AdapterV1_0:
         light_source = self._parse_light_source(f[layout.light_source_path_by_id(train_id)])
         collimator = self._parse_collimator(f[layout.collimator_path_by_id(train_id)])
         scanner_card = self._parse_scanner_card(f[layout.scanner_card_path_by_id(train_id)])
-
-        clearbox_path = layout.clearbox_path_by_id(train_id)
-        clearbox = self._parse_clearbox(f[clearbox_path]) if clearbox_path in f else None
 
         sfcf_path = layout.scan_field_correction_file_path_by_id(train_id)
         sfcf = self._parse_sfcf(f[sfcf_path]) if sfcf_path in f else None
@@ -374,7 +330,6 @@ class Hdf5AdapterV1_0:
             light_source=light_source,
             collimator=collimator,
             scanner_card=scanner_card,
-            optional_components=OptionalComponents(clearbox=clearbox),
             scan_field_correction_file=sfcf,
         )
 
@@ -498,92 +453,6 @@ class Hdf5AdapterV1_0:
             sample_period_unit=self._read_str_locked(a, "Sample_Period_unit", "μs"),
         )
 
-    def _parse_clearbox(self, grp: h5py.Group) -> ClearBox:
-        a = grp.attrs
-        volts_to_watts_algorithm = self._read_str(a, "Volts_To_Watts_Algorithm")
-        volts_to_watts_params = self._read_str(a, "Volts_To_Watts_Params")
-        corr_data = nan_array_to_nested(grp["Correction_Data"][:])
-        inv_data  = nan_array_to_nested(grp["Inverse_Correction_Data"][:])
-        # Synchronous_Sensors: absent entirely (e.g. today's plain
-        # reference_config.h5) and present-but-empty are the same state — an
-        # empty dict, not a separate "absent" marker.
-        synchronous_sensors: dict[str, SynchronousSensor] = {}
-        if "Synchronous_Sensors" in grp:
-            sensors_grp = grp["Synchronous_Sensors"]
-            for name in sensors_grp.keys():
-                synchronous_sensors[name] = self._parse_synchronous_sensor(sensors_grp[name])
-        return ClearBox(
-            ip_address=str(a.get("Ip_Address", "")),
-            serial_number=self._read_str(a, "Serial_Number"),
-            data_port=self._read_int(a, "Data_Port"),
-            server_port=self._read_int(a, "Server_Port"),
-            actual_timing_offset=self._read_int(a, "Actual_Timing_Offset"),
-            commanded_timing_offset=self._read_int(a, "Commanded_Timing_Offset"),
-            correction_data=corr_data,
-            inverse_correction_data=inv_data,
-            manufacturer=self._read_str(a, "Manufacturer"),
-            model=self._read_str(a, "Model"),
-            output_path=self._read_str(a, "Output_Path"),
-            selected_camera=self._read_str(a, "Selected_Camera"),
-            custom_video_format=self._read_str(a, "Custom_Video_Format"),
-            video_output=self._read_str(a, "Video_Output"),
-            show_console=self._read_bool_from_int(a, "Show_Console"),
-            software_trigger_delay=self._read_int(a, "Software_Trigger_Delay"),
-            correction_grid_domain_shape=self._read_str(
-                a, "Correction_Grid_Domain_Shape"
-            ),
-            inverse_grid_domain_shape=self._read_str(a, "Inverse_Grid_Domain_Shape"),
-            synchronous_sensors=synchronous_sensors,
-            power_characterization=forward_power_characterization_coefficients(
-                volts_to_watts_algorithm, volts_to_watts_params
-            ),
-        )
-
-    def _parse_synchronous_sensor(self, grp: h5py.Group) -> SynchronousSensor:
-        """Parses one ClearBox/Synchronous_Sensors/<key>/ sub-group. Both
-        compound datasets default to an empty list if the dataset itself is
-        absent — the same "never raise on missing optional data" discipline
-        used everywhere else in this reader, extended to datasets, not just
-        attributes.
-        """
-        a = grp.attrs
-        derivation_equation_constants: list[EquationConstant] = []
-        if "Derivation_Equation_Constants" in grp:
-            rows = grp["Derivation_Equation_Constants"][()]
-            derivation_equation_constants = [
-                EquationConstant(name=row["name"].decode("utf-8"), value=float(row["value"]))
-                for row in rows
-            ]
-        calibration_points: list[CalibrationPoint] = []
-        if "Calibration_Points" in grp:
-            rows = grp["Calibration_Points"][()]
-            calibration_points = [
-                CalibrationPoint(input_value=float(row["input_value"]), output_value=float(row["output_value"]))
-                for row in rows
-            ]
-        return SynchronousSensor(
-            enabled=self._read_bool_from_int(a, "Enabled"),
-            sensor_name=self._read_str(a, "Sensor_Name"),
-            sensor_output_range_low=self._read_float(a, "Sensor_Output_Range_Low"),
-            sensor_output_range_high=self._read_float(a, "Sensor_Output_Range_High"),
-            sensor_output_space=self._read_str(a, "Sensor_Output_Space"),
-            sensor_model=self._read_str(a, "Sensor_Model"),
-            sensor_manufacturer=self._read_str(a, "Sensor_Manufacturer"),
-            sensor_scope=self._read_str(a, "Sensor_Scope"),
-            units_derived_quantity=self._read_str(a, "Units_Derived_Quantity"),
-            port_id=self._read_int(a, "Port_ID"),
-            sensor_type=self._read_str(a, "Sensor_Type"),
-            input_type=self._read_str(a, "Input_Type"),
-            algorithm_type=self._read_str(a, "Algorithm_Type"),
-            algorithm_equation=self._read_str(a, "Algorithm_Equation"),
-            calibration_source=self._read_str(a, "Calibration_Source"),
-            calibration_verified=self._read_bool_from_int(a, "Calibration_Verified"),
-            sample_period=self._read_float(a, "Sample_Period"),
-            metadata=self._read_str(a, "Metadata"),
-            derivation_equation_constants=derivation_equation_constants,
-            calibration_points=calibration_points,
-        )
-
     def _parse_sfcf(self, ds: h5py.Dataset) -> ScanFieldCorrectionFile:
         a = ds.attrs
         return ScanFieldCorrectionFile(
@@ -679,11 +548,6 @@ class Hdf5AdapterV1_0:
             "light_source": self._light_source_to_dict(train.light_source),
             "collimator": self._collimator_to_dict(train.collimator),
             "scanner_card": self._scanner_card_to_dict(train.scanner_card),
-            "optional_components": {
-                "clearbox": self._clearbox_to_dict(
-                    train.optional_components.clearbox, include_binary=include_binary
-                ),
-            },
             "scan_field_correction_file": self._sfcf_to_dict(
                 train.scan_field_correction_file, include_binary=include_binary
             ),
@@ -836,89 +700,6 @@ class Hdf5AdapterV1_0:
             "sample_period_unit": sc.sample_period_unit,
         }
 
-    def _clearbox_to_dict(
-        self, cb: Optional[ClearBox], include_binary: bool = False
-    ) -> Optional[dict]:
-        if cb is None:
-            return None
-        d: dict = {
-            "ip_address": cb.ip_address,
-            "serial_number": cb.serial_number,
-            "data_port": cb.data_port,
-            "server_port": cb.server_port,
-            "actual_timing_offset": cb.actual_timing_offset,
-            "commanded_timing_offset": cb.commanded_timing_offset,
-            "manufacturer": cb.manufacturer,
-            "model": cb.model,
-            "output_path": cb.output_path,
-            "selected_camera": cb.selected_camera,
-            "custom_video_format": cb.custom_video_format,
-            "video_output": cb.video_output,
-            "show_console": cb.show_console,
-            "software_trigger_delay": cb.software_trigger_delay,
-            "correction_grid_domain_shape": cb.correction_grid_domain_shape,
-            "inverse_grid_domain_shape": cb.inverse_grid_domain_shape,
-        }
-        # firmware_version: v1.1 addition, no on-disk source for a v1.0 file,
-        # but the StableModel itself is version-agnostic (ClearBox.firmware_version
-        # is a real field regardless of which adapter parsed it) — include it
-        # whenever set so this dict-builder's output doesn't depend on which
-        # version's adapter happens to be constructing it, matching v1_1's
-        # _clearbox_to_dict exactly. (Found via a real cross-language hash
-        # mismatch on fixtures/reference_config_v1_1.h5 — hash.py always uses
-        # this v1_0 builder regardless of the config's actual file_version, on
-        # the assumption that v1_0's and v1_1's _config_to_dict() already
-        # produce identical output for identical content; this field was the
-        # one place that wasn't true.)
-        if cb.firmware_version is not None:
-            d["firmware_version"] = cb.firmware_version
-        if cb.power_characterization is not None:
-            d["power_characterization"] = self._power_characterization_to_dict(
-                cb.power_characterization
-            )
-        if include_binary:
-            d["correction_data"] = cb.correction_data
-            d["inverse_correction_data"] = cb.inverse_correction_data
-        # Omitted entirely when empty (unlike OpcuaConfig.triggers, which has
-        # no such gate) — keeps "no group on disk" and "no key in JSON"
-        # symmetric, and keeps every fixture that doesn't use this feature
-        # byte-identical to before it existed. Matches the same decision
-        # already made for Rust's serde output, for cross-language
-        # consistency — see SYNCHRONOUS_SENSOR_PLAN.md.
-        if cb.synchronous_sensors:
-            d["synchronous_sensors"] = {
-                name: {
-                    "enabled": s.enabled,
-                    "sensor_name": s.sensor_name,
-                    "sensor_output_range_low": s.sensor_output_range_low,
-                    "sensor_output_range_high": s.sensor_output_range_high,
-                    "sensor_output_space": s.sensor_output_space,
-                    "sensor_model": s.sensor_model,
-                    "sensor_manufacturer": s.sensor_manufacturer,
-                    "sensor_scope": s.sensor_scope,
-                    "units_derived_quantity": s.units_derived_quantity,
-                    "port_id": s.port_id,
-                    "sensor_type": s.sensor_type,
-                    "input_type": s.input_type,
-                    "algorithm_type": s.algorithm_type,
-                    "algorithm_equation": s.algorithm_equation,
-                    "calibration_source": s.calibration_source,
-                    "calibration_verified": s.calibration_verified,
-                    "sample_period": s.sample_period,
-                    "metadata": s.metadata,
-                    "derivation_equation_constants": [
-                        {"name": c.name, "value": c.value}
-                        for c in s.derivation_equation_constants
-                    ],
-                    "calibration_points": [
-                        {"input_value": p.input_value, "output_value": p.output_value}
-                        for p in s.calibration_points
-                    ],
-                }
-                for name, s in cb.synchronous_sensors.items()
-            }
-        return d
-
     def _sfcf_to_dict(
         self,
         sfcf: Optional[ScanFieldCorrectionFile],
@@ -1004,7 +785,6 @@ def _train_from_dict(t: dict) -> OpticalTrain:
     ls = t["light_source"]
     col = t["collimator"]
     sc = t["scanner_card"]
-    cb_d = (t.get("optional_components") or {}).get("clearbox")
     sfcf_d = t.get("scan_field_correction_file")
 
     def _axis_from_dict(d: Optional[dict]) -> Optional[AxisConfig]:
@@ -1100,63 +880,6 @@ def _train_from_dict(t: dict) -> OpticalTrain:
         sample_period_unit=sc.get("sample_period_unit"),
     )
 
-    clearbox: Optional[ClearBox] = None
-    if cb_d is not None:
-        synchronous_sensors: dict[str, SynchronousSensor] = {}
-        for name, sd in cb_d.get("synchronous_sensors", {}).items():
-            synchronous_sensors[name] = SynchronousSensor(
-                enabled=sd.get("enabled"),
-                sensor_name=sd.get("sensor_name"),
-                sensor_output_range_low=sd.get("sensor_output_range_low"),
-                sensor_output_range_high=sd.get("sensor_output_range_high"),
-                sensor_output_space=sd.get("sensor_output_space"),
-                sensor_model=sd.get("sensor_model"),
-                sensor_manufacturer=sd.get("sensor_manufacturer"),
-                sensor_scope=sd.get("sensor_scope"),
-                units_derived_quantity=sd.get("units_derived_quantity"),
-                port_id=sd.get("port_id"),
-                sensor_type=sd.get("sensor_type"),
-                input_type=sd.get("input_type"),
-                algorithm_type=sd.get("algorithm_type"),
-                algorithm_equation=sd.get("algorithm_equation"),
-                calibration_source=sd.get("calibration_source"),
-                calibration_verified=sd.get("calibration_verified"),
-                sample_period=sd.get("sample_period"),
-                metadata=sd.get("metadata"),
-                derivation_equation_constants=[
-                    EquationConstant(name=c["name"], value=c["value"])
-                    for c in sd.get("derivation_equation_constants", [])
-                ],
-                calibration_points=[
-                    CalibrationPoint(input_value=p["input_value"], output_value=p["output_value"])
-                    for p in sd.get("calibration_points", [])
-                ],
-            )
-        clearbox = ClearBox(
-            ip_address=cb_d.get("ip_address", ""),
-            serial_number=cb_d.get("serial_number"),
-            data_port=cb_d.get("data_port"),
-            server_port=cb_d.get("server_port"),
-            actual_timing_offset=cb_d.get("actual_timing_offset"),
-            commanded_timing_offset=cb_d.get("commanded_timing_offset"),
-            correction_data=cb_d.get("correction_data"),
-            inverse_correction_data=cb_d.get("inverse_correction_data"),
-            manufacturer=cb_d.get("manufacturer"),
-            model=cb_d.get("model"),
-            output_path=cb_d.get("output_path"),
-            selected_camera=cb_d.get("selected_camera"),
-            custom_video_format=cb_d.get("custom_video_format"),
-            video_output=cb_d.get("video_output"),
-            show_console=cb_d.get("show_console"),
-            software_trigger_delay=cb_d.get("software_trigger_delay"),
-            correction_grid_domain_shape=cb_d.get("correction_grid_domain_shape"),
-            inverse_grid_domain_shape=cb_d.get("inverse_grid_domain_shape"),
-            synchronous_sensors=synchronous_sensors,
-            power_characterization=Hdf5AdapterV1_0._power_characterization_from_dict(
-                cb_d.get("power_characterization")
-            ),
-        )
-
     sfcf: Optional[ScanFieldCorrectionFile] = None
     if sfcf_d is not None:
         raw_b64 = sfcf_d.get("raw_bytes")
@@ -1206,7 +929,6 @@ def _train_from_dict(t: dict) -> OpticalTrain:
         light_source=light_source,
         collimator=collimator,
         scanner_card=scanner_card,
-        optional_components=OptionalComponents(clearbox=clearbox),
         scan_field_correction_file=sfcf,
     )
 

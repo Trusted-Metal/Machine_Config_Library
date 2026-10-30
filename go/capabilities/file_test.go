@@ -1,7 +1,6 @@
 package capabilities_test
 
 import (
-	"math"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -12,32 +11,6 @@ import (
 	"machine-config-go/capabilities"
 	"machine-config-go/extension"
 )
-
-// correctionDataEqual compares two CorrectionData buffers treating "both NaN"
-// as equal — plain == (and reflect.DeepEqual) treat NaN != NaN, which would
-// make a straightforward comparison fail even on bit-for-bit identical
-// real correction grids (which always contain NaN cells).
-func correctionDataEqual(a, b *machineconfig.CorrectionData) bool {
-	if a.Shape != b.Shape {
-		return false
-	}
-	if len(a.Data) != len(b.Data) {
-		return false
-	}
-	for i := range a.Data {
-		x, y := a.Data[i], b.Data[i]
-		if math.IsNaN(x) || math.IsNaN(y) {
-			if !(math.IsNaN(x) && math.IsNaN(y)) {
-				return false
-			}
-			continue
-		}
-		if x != y {
-			return false
-		}
-	}
-	return true
-}
 
 func fixturesDir(t *testing.T) string {
 	t.Helper()
@@ -366,115 +339,65 @@ func TestSaveRoundTrip(t *testing.T) {
 	})
 }
 
-func TestGetCorrectionDataMatchesReader(t *testing.T) {
-	path := filepath.Join(fixturesDir(t), "reference_config.h5")
-	f, err := capabilities.OpenMachineConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
+func TestClearBoxExtensionSurvivesASessionOpenAndSave(t *testing.T) {
+	for _, name := range []string{"reference_config.h5", "reference_config_v1_1.h5"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(fixturesDir(t), name)
+			before, err := machineconfig.NewReader(path).Parse()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := extension.Digest(before.Extensions["ClearBox"])
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	expected, rdErr := machineconfig.NewReader(path).GetCorrectionData(0)
-	if rdErr != nil {
-		t.Fatal(rdErr)
-	}
-	got, capErr := f.GetCorrectionData(0)
-	if capErr != nil {
-		t.Fatal(capErr)
-	}
-	if !correctionDataEqual(got, expected) {
-		t.Fatalf("facade GetCorrectionData does not match Reader")
-	}
-
-	expectedInv, rdErr := machineconfig.NewReader(path).GetInverseCorrectionData(0)
-	if rdErr != nil {
-		t.Fatal(rdErr)
-	}
-	gotInv, capErr := f.GetInverseCorrectionData(0)
-	if capErr != nil {
-		t.Fatal(capErr)
-	}
-	if !correctionDataEqual(gotInv, expectedInv) {
-		t.Fatalf("facade GetInverseCorrectionData does not match Reader")
+			f, ferr := capabilities.OpenMachineConfig(path)
+			if ferr != nil {
+				t.Fatal(ferr)
+			}
+			defer f.Close()
+			sc, _ := f.GetScanner(0)
+			sc.WorkingDistance = machineconfig.Float64Ptr(77.5)
+			if err := f.SetScanner(0, sc, capabilities.Merge); err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(t.TempDir(), "clearbox_rt.h5")
+			if err := f.Save(out); err != nil {
+				t.Fatal(err)
+			}
+			after, err2 := machineconfig.NewReader(out).Parse()
+			if err2 != nil {
+				t.Fatal(err2)
+			}
+			got, err2 := extension.Digest(after.Extensions["ClearBox"])
+			if err2 != nil {
+				t.Fatal(err2)
+			}
+			if got != want {
+				t.Errorf("ClearBox digest changed across an open/edit/save session: %s != %s", got, want)
+			}
+		})
 	}
 }
 
-func TestGetCorrectionDataShapeAndNaNPresentThroughFacade(t *testing.T) {
-	path := filepath.Join(fixturesDir(t), "reference_config.h5")
-	f, err := capabilities.OpenMachineConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-
-	cd, capErr := f.GetCorrectionData(0)
-	if capErr != nil {
-		t.Fatal(capErr)
-	}
-	if cd.Shape != [3]int{257, 257, 2} {
-		t.Fatalf("shape = %v", cd.Shape)
-	}
-	anyNaN := false
-	for _, v := range cd.Data {
-		if math.IsNaN(v) {
-			anyNaN = true
-			break
-		}
-	}
-	if !anyNaN {
-		t.Fatal("expected at least one NaN cell in a real correction grid")
-	}
-}
-
-func TestGetCorrectionDataMissingClearboxIsNotPresent(t *testing.T) {
-	// Every stock fixture's trains have a ClearBox, so build one without:
-	// take the reference config, strip train 0's ClearBox, re-write.
-	path := filepath.Join(fixturesDir(t), "reference_config.h5")
-	cfg, err := machineconfig.NewReader(path).Parse()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.OpticalTrains[0].OptionalComponents.Clearbox = nil
-	tmp := filepath.Join(t.TempDir(), "no_clearbox.h5")
-	if err := machineconfig.NewWriter().Write(cfg, tmp); err != nil {
-		t.Fatal(err)
-	}
-
-	f, capErr := capabilities.OpenMachineConfig(tmp)
-	if capErr != nil {
-		t.Fatal(capErr)
-	}
-	defer f.Close()
-
-	if _, e := f.GetCorrectionData(0); e == nil || e.Code != capabilities.ErrNotPresent {
-		t.Fatalf("expected NotPresent, got %#v", e)
-	}
-	if _, e := f.GetInverseCorrectionData(0); e == nil || e.Code != capabilities.ErrNotPresent {
-		t.Fatalf("expected NotPresent, got %#v", e)
-	}
-}
-
-func TestGetCorrectionDataWorksOnCreateBasedInstanceWithoutTouchingDisk(t *testing.T) {
-	// The specific case that rules out delegate-to-Reader-by-reopening: a
-	// Create()-d facade has no path at all, so this must convert the
-	// already-loaded in-memory model, not re-read from anywhere.
-	//
-	// Unlike the other four languages' mock builders (which default to
-	// including a ClearBox), Go's Create() builds a train with no
-	// OptionalComponents at all — and Go's facade has no SetClearbox to add
-	// one afterward. So the no-disk-I/O behavior this test actually proves
-	// is: NotPresent comes back immediately, not a crash or a disk read.
+func TestCreateBasedInstanceHasNoClearBox(t *testing.T) {
+	// Go's Create() builds a bare train with no ClearBox; saving it must not invent one.
 	f, err := capabilities.CreateMachineConfig("1.0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-
-	if _, capErr := f.GetCorrectionData(0); capErr == nil || capErr.Code != capabilities.ErrNotPresent {
-		t.Fatalf("expected NotPresent, got %#v", capErr)
+	out := filepath.Join(t.TempDir(), "created_no_clearbox.h5")
+	if err := f.Save(out); err != nil {
+		t.Fatal(err)
 	}
-	if _, capErr := f.GetInverseCorrectionData(0); capErr == nil || capErr.Code != capabilities.ErrNotPresent {
-		t.Fatalf("expected NotPresent, got %#v", capErr)
+	cfg, rerr := machineconfig.NewReader(out).Parse()
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if _, ok := cfg.Extensions["ClearBox"]; ok {
+		t.Fatal("unexpected ClearBox extension on a Create()-based file")
 	}
 }
 
@@ -497,15 +420,6 @@ func (fakeFile) GetScanner(int) (machineconfig.Scanner, *capabilities.Error) {
 }
 func (fakeFile) SetScanner(int, machineconfig.Scanner, capabilities.SetMode) *capabilities.Error {
 	return nil
-}
-func (fakeFile) GetClearbox(int) (machineconfig.ClearBox, *capabilities.Error) {
-	return machineconfig.ClearBox{}, nil
-}
-func (fakeFile) GetCorrectionData(int) (*machineconfig.CorrectionData, *capabilities.Error) {
-	return nil, nil
-}
-func (fakeFile) GetInverseCorrectionData(int) (*machineconfig.CorrectionData, *capabilities.Error) {
-	return nil, nil
 }
 func (fakeFile) IsValid() bool                   { return false }
 func (fakeFile) Save(string) *capabilities.Error { return nil }

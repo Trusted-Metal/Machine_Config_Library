@@ -175,112 +175,51 @@ describe('capability facade (File_Version 1.0)', () => {
     }
   });
 
-  it('optionalComponents null vs clearbox present', async () => {
-    const opened = await openMachineConfig(FIXTURE);
-    expect(opened.ok).toBe(true);
-    if (!opened.ok) return;
-    const train = opened.value.opticalTrain(0);
-    expect(train.ok).toBe(true);
-    if (!train.ok) return;
-    const oc = train.value.optionalComponents();
-    expect(oc).not.toBeNull();
-    if (!oc) return;
-    const cb = oc.clearbox();
-    expect(cb.ok).toBe(true);
-    opened.value.close();
-
-    const created = createMachineConfig('1.0');
-    expect(created.ok).toBe(true);
-    if (!created.ok) return;
-    // Mock builder defaults include clearbox; strip it to assert null path.
-    const t0 = created.value.opticalTrain(0);
-    expect(t0.ok).toBe(true);
-    if (!t0.ok) return;
-    const model = t0.value.getModel();
-    (model as { optional_components: { clearbox: null } }).optional_components = {
-      clearbox: null,
-    };
-    t0.value.setModel(model, SetMode.Replace);
-    expect(t0.value.optionalComponents()).toBeNull();
-    created.value.close();
-  });
-
-  it('getCorrectionData/getInverseCorrectionData match Reader', async () => {
-    const opened = await openMachineConfig(FIXTURE);
-    expect(opened.ok).toBe(true);
-    if (!opened.ok) return;
-    const file = opened.value;
-
-    const reader = new MachineConfigReader(FIXTURE);
-    const expected = await reader.getCorrectionData(0);
-    const result = file.getCorrectionData(0);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.shape).toEqual(expected.shape);
-    expect(Array.from(result.value.data)).toEqual(Array.from(expected.data));
-
-    const expectedInv = await reader.getInverseCorrectionData(0);
-    const resultInv = file.getInverseCorrectionData(0);
-    expect(resultInv.ok).toBe(true);
-    if (!resultInv.ok) return;
-    expect(resultInv.value.shape).toEqual(expectedInv.shape);
-    expect(Array.from(resultInv.value.data)).toEqual(Array.from(expectedInv.data));
-    file.close();
-  });
-
-  it('getCorrectionData shape and NaN present through facade', async () => {
-    const opened = await openMachineConfig(FIXTURE);
-    expect(opened.ok).toBe(true);
-    if (!opened.ok) return;
-    const grid = opened.value.getCorrectionData(0);
-    expect(grid.ok).toBe(true);
-    if (!grid.ok) return;
-    expect(grid.value.shape).toEqual([257, 257, 2]);
-    expect(Array.from(grid.value.data).some((v) => Number.isNaN(v))).toBe(true);
-    opened.value.close();
-  });
-
-  it('getCorrectionData missing clearbox is NotPresent', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'mcl-cap-cd-'));
-    const out = join(dir, 'no_clearbox.h5');
+  it('the ClearBox extension survives a facade session save', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcl-cap-cb-'));
+    const out = join(dir, 'clearbox.h5');
     try {
-      // Every stock fixture's trains have a ClearBox, so build one without:
-      // take the reference config, strip train 0's ClearBox, re-write.
-      const reader = new MachineConfigReader(FIXTURE);
-      const config = await reader.parse();
-      config.optical_trains[0].optional_components.clearbox = null;
-      await new MachineConfigWriter(config).write(out);
-
-      const opened = await openMachineConfig(out);
+      const original = await new MachineConfigReader(FIXTURE).parse();
+      const opened = await openMachineConfig(FIXTURE);
       expect(opened.ok).toBe(true);
       if (!opened.ok) return;
-      const result = opened.value.getCorrectionData(0);
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error.code).toBe('NotPresent');
-      const invResult = opened.value.getInverseCorrectionData(0);
-      expect(invResult.ok).toBe(false);
-      if (!invResult.ok) expect(invResult.error.code).toBe('NotPresent');
+      expect(isOk(await opened.value.save(out))).toBe(true);
       opened.value.close();
+
+      const again = await new MachineConfigReader(out).parse();
+      expect(canonicalDigest(again.extensions!.ClearBox)).toBe(
+        canonicalDigest(original.extensions!.ClearBox),
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('getCorrectionData works on create()-based instance without touching disk', () => {
-    // The specific case that rules out delegate-to-Reader-by-reopening: a
-    // create()-d facade has no path at all, so this must convert the
-    // already-loaded in-memory model, not re-read from anywhere.
-    const created = createMachineConfig('1.0');
-    expect(created.ok).toBe(true);
-    if (!created.ok) return;
-    const file = created.value;
-    const grid = file.getCorrectionData(0);
-    expect(grid.ok).toBe(true);
-    if (grid.ok) expect(grid.value.shape).toEqual([257, 257, 2]);
-    const invGrid = file.getInverseCorrectionData(0);
-    expect(invGrid.ok).toBe(true);
-    if (invGrid.ok) expect(invGrid.value.shape).toEqual([257, 257, 2]);
-    file.close();
+  it('train handles no longer expose optionalComponents or correction accessors', async () => {
+    const opened = await openMachineConfig(FIXTURE);
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const train = opened.value.opticalTrain(0);
+    expect(train.ok).toBe(true);
+    if (train.ok) expect(train.value).not.toHaveProperty('optionalComponents');
+    expect(opened.value).not.toHaveProperty('getCorrectionData');
+    opened.value.close();
+  });
+
+  it('a create()-based instance carries the ClearBox extension without touching disk', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcl-cap-cd-'));
+    const out = join(dir, 'created_clearbox.h5');
+    try {
+      const created = createMachineConfig('1.0');
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      expect(isOk(await created.value.save(out))).toBe(true);
+      created.value.close();
+      const again = await new MachineConfigReader(out).parse();
+      expect(again.extensions).toHaveProperty('ClearBox');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('create(1.0) → set machine name → save → reopen keeps version', async () => {

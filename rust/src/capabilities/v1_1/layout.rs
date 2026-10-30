@@ -10,9 +10,6 @@ pub const FILE_VERSION: &str = "1.1";
 pub const ROOT_MACHINE: &str = "Machine";
 pub const ROOT_OPTICAL_TRAINS: &str = "Machine/Optical_Trains";
 pub const ROOT_EXTENSIONS: &str = "Extensions";
-pub const GROUP_CLEARBOX: &str = "Extensions/ClearBox";
-/// Group names under `Extensions/` that core still models and therefore never exposes as trees.
-pub const MODELLED_EXTENSION_NAMES: &[&str] = &["ClearBox"];
 
 pub const TRAIN_ID_PREFIX: &str = "Optical_Train_";
 pub const GROUP_SCANNER: &str = "Scanner";
@@ -22,8 +19,6 @@ pub const GROUP_SCANNER_CARD: &str = "Scanner_Card";
 pub const GROUP_POWER_CHARACTERIZATION: &str = "Power_Characterization";
 pub const DS_DERIVATION_EQUATION_CONSTANTS: &str = "Derivation_Equation_Constants";
 pub const DS_CHARACTERIZATION_POINTS: &str = "Characterization_Points";
-pub const DS_CORRECTION_DATA: &str = "Correction_Data";
-pub const DS_INVERSE_CORRECTION_DATA: &str = "Inverse_Correction_Data";
 pub const DS_SCAN_FIELD_CORRECTION_FILE: &str = "scan_field_correction_file";
 
 pub fn train_id(index: usize) -> String {
@@ -48,18 +43,6 @@ pub fn collimator_path_by_id(tid: &str) -> String {
 
 pub fn scanner_card_path_by_id(tid: &str) -> String {
     format!("{}/{GROUP_SCANNER_CARD}", train_path_by_id(tid))
-}
-
-pub fn clearbox_path_by_id(tid: &str) -> String {
-    format!("{GROUP_CLEARBOX}/{tid}")
-}
-
-pub fn correction_data_path_by_id(tid: &str) -> String {
-    format!("{}/{DS_CORRECTION_DATA}", clearbox_path_by_id(tid))
-}
-
-pub fn inverse_correction_data_path_by_id(tid: &str) -> String {
-    format!("{}/{DS_INVERSE_CORRECTION_DATA}", clearbox_path_by_id(tid))
 }
 
 pub fn scan_field_correction_file_path_by_id(tid: &str) -> String {

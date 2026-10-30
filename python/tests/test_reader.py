@@ -8,6 +8,15 @@ from machine_config.builder import MockConfigBuilder
 from machine_config.reader import MachineConfigReader
 from machine_config.schema import SCHEMA
 
+from clearbox_helpers import (
+    attr,
+    clearbox,
+    clearbox_root,
+    grid,
+    integer,
+    text,
+)
+
 
 # ===========================================================================
 # MachineConfigMeta
@@ -189,171 +198,114 @@ class TestScannerCard:
 
 
 # ===========================================================================
-# ClearBox
+# ClearBox — core exposes it as the opaque "ClearBox" extension tree
 # ===========================================================================
 
 class TestClearBox:
     def test_clearbox_present(self, reference_config):
-        for train in reference_config.optical_trains:
-            assert train.optional_components.clearbox is not None
-
-    def test_correction_data_shape(self, reference_config):
-        data = reference_config.optical_trains[0].optional_components.clearbox.correction_data
-        assert data is not None
-        assert len(data) == 257
-        assert len(data[0]) == 257
-        assert len(data[0][0]) == 2
-
-    def test_inverse_correction_data_shape(self, reference_config):
-        data = reference_config.optical_trains[0].optional_components.clearbox.inverse_correction_data
-        assert data is not None
-        assert len(data) == 257
-        assert len(data[0]) == 257
-        assert len(data[0][0]) == 2
-
-    def test_correction_data_values_are_float_or_none(self, reference_config):
-        data = reference_config.optical_trains[0].optional_components.clearbox.correction_data
-        # Sample a few cells to verify type contract
-        for i in range(0, 257, 64):
-            for j in range(0, 257, 64):
-                for k in range(2):
-                    v = data[i][j][k]
-                    assert v is None or isinstance(v, float), (
-                        f"Expected float or None at [{i}][{j}][{k}], got {type(v)}"
-                    )
-
-    def test_correction_data_numpy_api_unchanged(self, reference_reader):
-        """get_correction_data() still returns the raw numpy array."""
-        data = reference_reader.get_correction_data(0)
-        assert data.shape == (257, 257, 2)
-        assert data.dtype == np.float64
-
-    def test_inverse_correction_data_numpy_api_unchanged(self, reference_reader):
-        data = reference_reader.get_inverse_correction_data(0)
-        assert data.shape == (257, 257, 2)
-        assert data.dtype == np.float64
+        assert list(clearbox_root(reference_config).children) == ["Optical_Train_01", "Optical_Train_02"]
 
     def test_clearbox_ip_address(self, reference_config):
-        assert reference_config.optical_trains[0].optional_components.clearbox.ip_address != ""
+        assert text(clearbox(reference_config, 0), "Ip_Address")
 
     def test_clearbox_data_port_is_int(self, reference_config):
-        dp = reference_config.optical_trains[0].optional_components.clearbox.data_port
-        assert dp is None or isinstance(dp, int)
+        assert integer(clearbox(reference_config, 0), "Data_Port") is not None
 
-    def test_synchronous_sensors_empty_when_fixture_has_none(self, reference_config):
-        # reference_config.h5 deliberately has no Synchronous_Sensors group
-        # at all (SYNCHRONOUS_SENSOR_PLAN.md Phase 0) — must read back as an
-        # empty dict, not missing/absent, since there is no separate "absent"
-        # state.
-        cb = reference_config.optical_trains[0].optional_components.clearbox
-        assert cb.synchronous_sensors == {}
+    def test_shared_values_live_on_the_extension_root_once(self, reference_config):
+        root = clearbox_root(reference_config)
+        assert text(root, "Output_Path")
+        assert integer(root, "Software_Trigger_Delay") is not None
+        assert "Output_Path" not in clearbox(reference_config, 0).attrs
+
+    def test_v1_0_only_attributes_ride_along_on_each_train(self, reference_config):
+        assert "Show_Console" in clearbox(reference_config, 0).attrs
+        assert "Volts_To_Watts_Algorithm" not in clearbox(reference_config, 0).attrs
+
+    def test_synchronous_sensors_absent_when_fixture_has_none(self, reference_config):
+        assert "Synchronous_Sensors" not in clearbox(reference_config, 0).children
+
+
+class TestClearBoxCorrectionGrids:
+    """The grids are ordinary extension datasets; they feed the ``correction-hash`` CLI."""
+
+    def test_forward_grid_shape(self, reference_config):
+        ds = clearbox(reference_config, 0).datasets["Correction_Data"]
+        assert ds.dtype == "f64"
+        assert ds.shape == [257, 257, 2]
+        assert len(ds.data) == 257 * 257 * 2
+
+    def test_inverse_grid_shape(self, reference_config):
+        ds = clearbox(reference_config, 0).datasets["Inverse_Correction_Data"]
+        assert ds.shape == [257, 257, 2]
+
+    def test_nan_is_preserved(self, reference_config):
+        assert np.isnan(grid(reference_config, 0, "Correction_Data")).any()
+
+    def test_forward_and_inverse_differ(self, reference_config):
+        fwd = grid(reference_config, 0, "Correction_Data")
+        inv = grid(reference_config, 0, "Inverse_Correction_Data")
+        assert not np.array_equal(fwd, inv, equal_nan=True)
+
+    def test_train_1_differs_from_train_0(self, reference_config):
+        a = grid(reference_config, 0, "Correction_Data")
+        b = grid(reference_config, 1, "Correction_Data")
+        assert not np.array_equal(a, b, equal_nan=True)
 
 
 # ===========================================================================
-# SynchronousSensor
+# Synchronous sensors — reference_config_synchronous_sensors.h5, not
+# reference_config.h5, which deliberately has no sensors.
 # ===========================================================================
+
+def _sensors_of(cfg):
+    return clearbox(cfg, 0).children["Synchronous_Sensors"].children
+
 
 @pytest.fixture(scope="module")
 def sensor(sensors_reader):
-    """Module-level, not a class-instance-method fixture — avoids the
-    PytestRemovedIn10Warning already documented/avoided elsewhere in this
-    suite (see test_writer_roundtrip.py's and test_opcua_roundtrip.py's own
-    "module-level fixtures" notes).
-    """
-    cb = sensors_reader.parse().optical_trains[0].optional_components.clearbox
-    assert len(cb.synchronous_sensors) == 1
-    return cb.synchronous_sensors["Oxygen Sensor"]
+    """Module-level, not a class-instance-method fixture (avoids PytestRemovedIn10Warning)."""
+    sensors = _sensors_of(sensors_reader.parse())
+    assert list(sensors) == ["Oxygen Sensor"]
+    return sensors["Oxygen Sensor"]
 
 
 class TestSynchronousSensor:
-    """Every one of the 18 scalar fields plus both compound datasets, checked
-    against the real ZR800 example values in
-    fixtures/reference_config_synchronous_sensors.h5 — verified directly via
-    h5py before writing this test (SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
-    """
+    def test_scalar_attributes_match_the_real_zr800_example(self, sensor):
+        assert text(sensor, "Sensor_Name") == "ZR800 Oxygen Analyzer"
+        assert attr(sensor, "Sensor_Output_Range_Low") == -1.0
+        assert attr(sensor, "Sensor_Output_Range_High") == 6.0
+        assert text(sensor, "Sensor_Output_Space") == "log10(ppm)"
+        assert text(sensor, "Sensor_Model") == "ZR810"
+        assert text(sensor, "Sensor_Manufacturer") == "Industrial Physics"
+        assert text(sensor, "Sensor_Scope") == "Global"
+        assert text(sensor, "Units_Derived_Quantity") == "ppm"
+        assert integer(sensor, "Port_ID") == 5
+        assert text(sensor, "Sensor_Type") == "Oxygen Sensor"
+        assert text(sensor, "Input_Type") == "4-20 mA"
+        assert text(sensor, "Algorithm_Type") == "Log-Linear"
+        assert text(sensor, "Algorithm_Equation") == "log(ppm) = a*mA + b"
+        assert text(sensor, "Calibration_Source") == "Datasheet"
+        assert attr(sensor, "Sample_Period") == 5.0
+        assert "100KHz" in text(sensor, "Metadata")
 
-    def test_enabled(self, sensor):
-        assert sensor.enabled is True
+    def test_derivation_equation_constants_in_order(self, sensor):
+        t = sensor.tables["Derivation_Equation_Constants"]
+        assert t.columns["name"] == ["a", "b"]
+        assert t.columns["value"] == [0.4375, -2.75]
 
-    def test_sensor_name(self, sensor):
-        assert sensor.sensor_name == "ZR800 Oxygen Analyzer"
-
-    def test_sensor_output_range(self, sensor):
-        assert sensor.sensor_output_range_low == -1.0
-        assert sensor.sensor_output_range_high == 6.0
-
-    def test_sensor_output_space(self, sensor):
-        assert sensor.sensor_output_space == "log10(ppm)"
-
-    def test_sensor_model(self, sensor):
-        assert sensor.sensor_model == "ZR810"
-
-    def test_sensor_manufacturer(self, sensor):
-        assert sensor.sensor_manufacturer == "Industrial Physics"
-
-    def test_sensor_scope(self, sensor):
-        assert sensor.sensor_scope == "Global"
-
-    def test_units_derived_quantity(self, sensor):
-        assert sensor.units_derived_quantity == "ppm"
-
-    def test_port_id(self, sensor):
-        assert sensor.port_id == 5
-
-    def test_sensor_type(self, sensor):
-        assert sensor.sensor_type == "Oxygen Sensor"
-
-    def test_input_type(self, sensor):
-        assert sensor.input_type == "4-20 mA"
-
-    def test_algorithm_type(self, sensor):
-        assert sensor.algorithm_type == "Log-Linear"
-
-    def test_algorithm_equation(self, sensor):
-        assert sensor.algorithm_equation == "log(ppm) = a*mA + b"
-
-    def test_calibration_source(self, sensor):
-        assert sensor.calibration_source == "Datasheet"
-
-    def test_calibration_verified(self, sensor):
-        assert sensor.calibration_verified is False
-
-    def test_sample_period(self, sensor):
-        assert sensor.sample_period == 5.0
-
-    def test_metadata_mentions_100khz(self, sensor):
-        assert "100KHz" in sensor.metadata
-
-    def test_derivation_equation_constants_exact_values_in_order(self, sensor):
-        assert len(sensor.derivation_equation_constants) == 2
-        assert sensor.derivation_equation_constants[0].name == "a"
-        assert sensor.derivation_equation_constants[0].value == 0.4375
-        assert sensor.derivation_equation_constants[1].name == "b"
-        assert sensor.derivation_equation_constants[1].value == -2.75
-
-    def test_calibration_points_exact_values_in_order(self, sensor):
-        assert len(sensor.calibration_points) == 2
-        assert sensor.calibration_points[0].input_value == 4.0
-        assert sensor.calibration_points[0].output_value == -1.0
-        assert sensor.calibration_points[1].input_value == 20.0
-        assert sensor.calibration_points[1].output_value == 6.0
-
-    def test_calibration_points_are_in_log_space_not_linear_ppm(self, sensor):
-        """Confirms the calibration points satisfy algorithm_equation in
-        Sensor_Output_Space (log-space), not Units_Derived_Quantity (linear
-        ppm) — the exact proof from SYNCHRONOUS_SENSOR_PLAN.md's
-        unit-convention discussion.
-        """
-        a = sensor.derivation_equation_constants[0].value
-        b = sensor.derivation_equation_constants[1].value
-        for point in sensor.calibration_points:
-            assert abs(a * point.input_value + b - point.output_value) < 1e-9
+    def test_calibration_points_in_order_and_in_log_space(self, sensor):
+        points = sensor.tables["Calibration_Points"]
+        assert points.columns["input_value"] == [4.0, 20.0]
+        assert points.columns["output_value"] == [-1.0, 6.0]
+        a, b = sensor.tables["Derivation_Equation_Constants"].columns["value"]
+        for x, y in zip(points.columns["input_value"], points.columns["output_value"]):
+            assert abs(a * x + b - y) < 1e-9
 
     def test_combined_opcua_and_sensors_fixture_has_both(self, opcua_sensors_reader):
         config = opcua_sensors_reader.parse()
         assert "TM_OPCUA" in config.extensions
-        cb = config.optical_trains[0].optional_components.clearbox
-        assert cb.synchronous_sensors["Oxygen Sensor"].sensor_name == "ZR800 Oxygen Analyzer"
+        t = _sensors_of(config)["Oxygen Sensor"].tables["Derivation_Equation_Constants"]
+        assert t.columns["name"] == ["a", "b"]
 
 
 # ===========================================================================
@@ -504,12 +456,12 @@ class TestOpcua:
 # ===========================================================================
 
 class TestExtensionsModel:
-    def test_no_extensions_on_reference_config(self, reference_config):
-        assert reference_config.extensions == {}
+    def test_only_clearbox_on_reference_config(self, reference_config):
+        assert list(reference_config.extensions) == ["ClearBox"]
 
     def test_opcua_group_is_an_opaque_extension(self, opcua_reader):
         config = opcua_reader.parse()
-        assert list(config.extensions) == ["TM_OPCUA"]
+        assert sorted(config.extensions) == ["ClearBox", "TM_OPCUA"]
         tree = config.extensions["TM_OPCUA"]
         assert set(tree.children) >= {"Client", "Pipe", "Triggers"}
 
@@ -567,12 +519,12 @@ def test_unit_mismatch_raises_value_error(tmp_path):
         MachineConfigReader(out).parse()
 
 
-def test_absent_clearbox_is_none(tmp_path):
+def test_absent_clearbox_has_no_extension(tmp_path):
     builder = MockConfigBuilder(n_lasers=1, include_clearbox=False)
     out = tmp_path / "no_clearbox.h5"
     builder.save(out)
     config = MachineConfigReader(out).parse()
-    assert config.optical_trains[0].optional_components.clearbox is None
+    assert "ClearBox" not in config.extensions
 
 
 def test_unknown_file_version_does_not_use_v1_layout(tmp_path):
@@ -601,35 +553,13 @@ def test_unknown_file_version_does_not_use_v1_layout(tmp_path):
 # ===========================================================================
 
 class TestIncludeBinaryFlag:
-    """to_json() include_binary=False (default) omits correction arrays and
-    raw fc3 bytes; include_binary=True restores them."""
-
-    def test_default_excludes_correction_data(self, reference_reader):
-        output = json.loads(reference_reader.to_json())
-        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
-        assert "correction_data" not in cb
-
-    def test_default_excludes_inverse_correction_data(self, reference_reader):
-        output = json.loads(reference_reader.to_json())
-        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
-        assert "inverse_correction_data" not in cb
+    """to_json() include_binary=False (default) omits the raw fc3 bytes; True restores them.
+    ClearBox's correction grids are extension datasets and always appear in full."""
 
     def test_default_excludes_raw_bytes(self, reference_reader):
         output = json.loads(reference_reader.to_json())
         sfcf = output["optical_trains"][0]["scan_field_correction_file"]
         assert "raw_bytes" not in sfcf
-
-    def test_include_binary_adds_correction_data(self, reference_reader):
-        output = json.loads(reference_reader.to_json(include_binary=True))
-        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
-        assert "correction_data" in cb
-        assert len(cb["correction_data"]) > 0
-
-    def test_include_binary_adds_inverse_correction_data(self, reference_reader):
-        output = json.loads(reference_reader.to_json(include_binary=True))
-        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
-        assert "inverse_correction_data" in cb
-        assert len(cb["inverse_correction_data"]) > 0
 
     def test_include_binary_adds_raw_bytes(self, reference_reader):
         output = json.loads(reference_reader.to_json(include_binary=True))
@@ -637,11 +567,9 @@ class TestIncludeBinaryFlag:
         assert "raw_bytes" in sfcf
         assert sfcf["raw_bytes"]  # non-empty base64 string
 
-    def test_clearbox_scalar_fields_present_regardless_of_flag(self, reference_reader):
-        """Scalar clearbox fields appear in both modes."""
+    def test_correction_grids_present_regardless_of_flag(self, reference_reader):
         for flag in (False, True):
             output = json.loads(reference_reader.to_json(include_binary=flag))
-            cb = output["optical_trains"][0]["optional_components"]["clearbox"]
-            assert "ip_address" in cb
-            assert "data_port" in cb
-            assert "correction_grid_domain_shape" in cb
+            train = output["extensions"]["ClearBox"]["children"]["Optical_Train_01"]
+            assert train["datasets"]["Correction_Data"]["shape"] == [257, 257, 2]
+            assert len(train["datasets"]["Inverse_Correction_Data"]["data"]) == 257 * 257 * 2

@@ -233,30 +233,6 @@ func parseTrain(f *h5c.File, trainID string) (OpticalTrain, error) {
 		return OpticalTrain{}, err
 	}
 
-	var clearbox *ClearBox
-	if g.LinkExists("Optional_Components") {
-		oc, err := g.OpenGroup("Optional_Components")
-		if err != nil {
-			return OpticalTrain{}, err
-		}
-		if oc.LinkExists("ClearBox") {
-			cbg, err := oc.OpenGroup("ClearBox")
-			if err != nil {
-				oc.Close()
-				return OpticalTrain{}, err
-			}
-			cb, err := parseClearBox(cbg)
-			cbg.Close()
-			oc.Close()
-			if err != nil {
-				return OpticalTrain{}, err
-			}
-			clearbox = &cb
-		} else {
-			oc.Close()
-		}
-	}
-
 	var sfcf *ScanFieldCorrectionFile
 	if g.LinkExists("scan_field_correction_file") {
 		sfcf, err = parseSFCF(f, base+"/scan_field_correction_file")
@@ -325,7 +301,6 @@ func parseTrain(f *h5c.File, trainID string) (OpticalTrain, error) {
 		LightSource:                       light,
 		Collimator:                        collimator,
 		ScannerCard:                       card,
-		OptionalComponents:                OptionalComponents{Clearbox: clearbox},
 		ScanFieldCorrectionFile:           sfcf,
 	}, nil
 }
@@ -517,125 +492,6 @@ func parseScannerCard(g *h5c.Group) (ScannerCard, error) {
 		SamplePeriod:          sp,
 		SamplePeriodUnit:      readStrAttr(g, "Sample_Period_unit"),
 	}, nil
-}
-
-func parseClearBox(g *h5c.Group) (ClearBox, error) {
-	dp, err := readIntAttr(g, "Data_Port")
-	if err != nil {
-		return ClearBox{}, err
-	}
-	sp, err := readIntAttr(g, "Server_Port")
-	if err != nil {
-		return ClearBox{}, err
-	}
-	ato, err := readIntAttr(g, "Actual_Timing_Offset")
-	if err != nil {
-		return ClearBox{}, err
-	}
-	cto, err := readIntAttr(g, "Commanded_Timing_Offset")
-	if err != nil {
-		return ClearBox{}, err
-	}
-	sc, err := readBoolFromIntAttr(g, "Show_Console")
-	if err != nil {
-		return ClearBox{}, err
-	}
-	std, err := readIntAttr(g, "Software_Trigger_Delay")
-	if err != nil {
-		return ClearBox{}, err
-	}
-	return ClearBox{
-		IPAddress:                 readRequiredStr(g, "Ip_Address"),
-		SerialNumber:              readStrAttr(g, "Serial_Number"),
-		DataPort:                  dp,
-		ServerPort:                sp,
-		ActualTimingOffset:        ato,
-		CommandedTimingOffset:     cto,
-		Manufacturer:              readStrAttr(g, "Manufacturer"),
-		Model:                     readStrAttr(g, "Model"),
-		OutputPath:                readStrAttr(g, "Output_Path"),
-		SelectedCamera:            readStrAttr(g, "Selected_Camera"),
-		CustomVideoFormat:         readStrAttr(g, "Custom_Video_Format"),
-		VideoOutput:               readStrAttr(g, "Video_Output"),
-		ShowConsole:               sc,
-		SoftwareTriggerDelay:      std,
-		CorrectionGridDomainShape: readStrAttr(g, "Correction_Grid_Domain_Shape"),
-		InverseGridDomainShape:    readStrAttr(g, "Inverse_Grid_Domain_Shape"),
-		SynchronousSensors:        parseSynchronousSensors(g),
-	}, nil
-}
-
-// parseSynchronousSensors enumerates Synchronous_Sensors/<name> sub-groups,
-// the identical mechanism the OpcuaTrigger loop in parseOpcua uses for
-// OPCUA/Triggers/<name>. Returns an empty (non-nil) map when the group
-// doesn't exist at all.
-func parseSynchronousSensors(g *h5c.Group) map[string]SynchronousSensor {
-	sensors := map[string]SynchronousSensor{}
-	if !g.LinkExists("Synchronous_Sensors") {
-		return sensors
-	}
-	sensorsGrp, err := g.OpenGroup("Synchronous_Sensors")
-	if err != nil {
-		return sensors
-	}
-	defer sensorsGrp.Close()
-	for _, name := range sensorsGrp.SubGroupNames() {
-		sg, err := sensorsGrp.OpenGroup(name)
-		if err != nil {
-			continue
-		}
-		sensors[name] = parseSynchronousSensor(sg)
-		sg.Close()
-	}
-	return sensors
-}
-
-// parseSynchronousSensor reads one Synchronous Sensor's 18 scalar attributes
-// plus its two compound datasets, defaulting each dataset to an empty
-// (non-nil) slice if it's itself absent.
-func parseSynchronousSensor(g *h5c.Group) SynchronousSensor {
-	enabled, _ := readBoolFromIntAttr(g, "Enabled")
-	rangeLow, _ := readFloatAttr(g, "Sensor_Output_Range_Low")
-	rangeHigh, _ := readFloatAttr(g, "Sensor_Output_Range_High")
-	portID, _ := readIntAttr(g, "Port_ID")
-	calibVerified, _ := readBoolFromIntAttr(g, "Calibration_Verified")
-	samplePeriod, _ := readFloatAttr(g, "Sample_Period")
-
-	constants := []EquationConstant{}
-	if rows, err := g.ReadEquationConstantsDataset("Derivation_Equation_Constants"); err == nil {
-		for _, r := range rows {
-			constants = append(constants, EquationConstant{Name: r.Name, Value: r.Value})
-		}
-	}
-	points := []CalibrationPoint{}
-	if rows, err := g.ReadCalibrationPointsDataset("Calibration_Points"); err == nil {
-		for _, r := range rows {
-			points = append(points, CalibrationPoint{InputValue: r.InputValue, OutputValue: r.OutputValue})
-		}
-	}
-
-	return SynchronousSensor{
-		Enabled:                     enabled,
-		SensorName:                  readStrAttr(g, "Sensor_Name"),
-		SensorOutputRangeLow:        rangeLow,
-		SensorOutputRangeHigh:       rangeHigh,
-		SensorOutputSpace:           readStrAttr(g, "Sensor_Output_Space"),
-		SensorModel:                 readStrAttr(g, "Sensor_Model"),
-		SensorManufacturer:          readStrAttr(g, "Sensor_Manufacturer"),
-		SensorScope:                 readStrAttr(g, "Sensor_Scope"),
-		UnitsDerivedQuantity:        readStrAttr(g, "Units_Derived_Quantity"),
-		PortID:                      portID,
-		SensorType:                  readStrAttr(g, "Sensor_Type"),
-		InputType:                   readStrAttr(g, "Input_Type"),
-		AlgorithmType:               readStrAttr(g, "Algorithm_Type"),
-		AlgorithmEquation:           readStrAttr(g, "Algorithm_Equation"),
-		CalibrationSource:           readStrAttr(g, "Calibration_Source"),
-		CalibrationVerified:         calibVerified,
-		SamplePeriod:                samplePeriod,
-		Metadata:                    readStrAttr(g, "Metadata"),
-		DerivationEquationConstants: constants,
-		CalibrationPoints:           points,
-	}
 }
 
 func parseSFCF(f *h5c.File, path string) (*ScanFieldCorrectionFile, error) {

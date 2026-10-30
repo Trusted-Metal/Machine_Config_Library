@@ -3,6 +3,7 @@
 // Public MachineConfigReader peeks File_Version then dispatches here.
 
 #include "machine_config/adapters.hpp"
+#include "machine_config/clearbox_legacy.hpp"
 #include "machine_config/models.hpp"
 #include "machine_config/power_characterization.hpp"
 #include "machine_config/capabilities/v1_0/compound_types.hpp"
@@ -217,16 +218,6 @@ public:
         for (size_t i = 0; i < cfg.optical_trains.size(); ++i) {
             auto& ot  = cfg.optical_trains[i];
             auto  tid = trainIdAt(f, i);
-            if (ot.optional_components.clearbox) {
-                auto cd  = readCorrectionGrid(f,
-clearboxPathById(tid) + "/" +
-DS_CORRECTION_DATA);
-                auto icd = readCorrectionGrid(f,
-clearboxPathById(tid) + "/" +
-DS_INVERSE_CORRECTION_DATA);
-                ot.optional_components.clearbox->correction_data         = detail::correctionDataToGrid3D(cd);
-                ot.optional_components.clearbox->inverse_correction_data = detail::correctionDataToGrid3D(icd);
-            }
             if (ot.scan_field_correction_file) {
                 auto ds   = f.getDataSet(trainPathById(tid) + "/" +
 DS_SCAN_FIELD_CORRECTION_FILE);
@@ -256,23 +247,6 @@ DS_SCAN_FIELD_CORRECTION_FILE);
         }
     }
 
-    // §4.11 — flat (d0×d1×d2) float64 correction grid for a 0-based train index.
-    CorrectionData getCorrectionData(size_t train_index) const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
-        auto tid = trainIdAt(f, train_index);
-        return readCorrectionGrid(f,
-clearboxPathById(tid) + "/" +
-DS_CORRECTION_DATA);
-    }
-
-    CorrectionData getInverseCorrectionData(size_t train_index) const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
-        auto tid = trainIdAt(f, train_index);
-        return readCorrectionGrid(f,
-clearboxPathById(tid) + "/" +
-DS_INVERSE_CORRECTION_DATA);
-    }
-
     // §4.11 — raw .fc3 bytes embedded as a uint8 dataset.
     std::vector<uint8_t> getScanFieldCorrectionBytes(size_t train_index) const override {
         HighFive::File f(path_.string(), HighFive::File::ReadOnly);
@@ -298,15 +272,43 @@ private:
         return cfg;
     }
 
-    // File_Version 1.0 stores the one extension it can hold at the root as OPCUA/; core exposes it
-    // as the opaque "TM_OPCUA" extension tree.
+    // File_Version 1.0 stores the legacy OPCUA/ group at the root, which core exposes as the opaque
+    // "TM_OPCUA" extension tree, and ClearBox per optical train under Optional_Components/ClearBox/,
+    // which core shims into the single File_Version 1.1-layout "ClearBox" tree (see
+    // clearbox_legacy.hpp).
     std::map<std::string, extension::Tree> parseExtensions(const HighFive::File& f) const {
         std::map<std::string, extension::Tree> out;
-        if (!f.exist(ROOT_OPCUA)) return out;
-        auto g = f.getGroup(ROOT_OPCUA);
-        out[LEGACY_OPCUA_EXTENSION_NAME] =
-            extension::readExtensionTree(g.getId(), LEGACY_OPCUA_EXTENSION_NAME);
+
+        std::vector<clearbox_legacy::TrainGroup> clearbox;
+        for (const auto& id : trainIds(f)) {
+            const std::string path = clearboxPathById(id);
+            if (!f.exist(path)) continue;
+            auto g = f.getGroup(path);
+            clearbox.push_back(
+                {id, extension::readExtensionTree(g.getId(),
+                                                  std::string(clearbox_legacy::EXTENSION_NAME) + "/" + id)});
+        }
+        if (auto tree = clearbox_legacy::fromV10Trains(std::move(clearbox)))
+            out[clearbox_legacy::EXTENSION_NAME] = std::move(*tree);
+
+        if (f.exist(ROOT_OPCUA)) {
+            auto g = f.getGroup(ROOT_OPCUA);
+            out[LEGACY_OPCUA_EXTENSION_NAME] =
+                extension::readExtensionTree(g.getId(), LEGACY_OPCUA_EXTENSION_NAME);
+        }
         return out;
+    }
+
+    // Sorted Optical_Train_NN keys.
+    std::vector<std::string> trainIds(const HighFive::File& f) const {
+        auto trains_grp = f.getGroup(ROOT_OPTICAL_TRAINS);
+        std::vector<std::string> ids;
+        const std::string prefix = TRAIN_ID_PREFIX;
+        for (const auto& n : trains_grp.listObjectNames())
+            if (n.size() >= prefix.size() && n.compare(0, prefix.size(), prefix) == 0)
+                ids.push_back(n);
+        std::sort(ids.begin(), ids.end());
+        return ids;
     }
 
     MachineConfigMeta parseMeta(const HighFive::File& f) const {
@@ -400,9 +402,6 @@ private:
         ot.light_source = parseLightSource(grp.getGroup("Light_Source"));
         ot.collimator   = parseCollimator(grp.getGroup("Collimator"));
         ot.scanner_card = parseScannerCard(grp.getGroup("Scanner_Card"));
-        if (grp.exist("Optional_Components/ClearBox"))
-            ot.optional_components.clearbox = parseClearBox(
-                grp.getGroup("Optional_Components/ClearBox"));
         if (grp.exist("scan_field_correction_file"))
             ot.scan_field_correction_file = parseSfcf(
                 grp.getDataSet("scan_field_correction_file"));
@@ -505,109 +504,6 @@ private:
         return sc;
     }
 
-    // Scalar fields only; correction_data / inverse_correction_data deferred to \u00a74.11.
-    ClearBox parseClearBox(const HighFive::Group& grp) const {
-        ClearBox cb;
-        cb.ip_address              = readRequiredStr(grp, "Ip_Address");
-        cb.serial_number           = readStr(grp, "Serial_Number");
-        cb.data_port               = readInt(grp, "Data_Port");
-        cb.server_port             = readInt(grp, "Server_Port");
-        cb.actual_timing_offset    = readInt(grp, "Actual_Timing_Offset");
-        cb.commanded_timing_offset = readInt(grp, "Commanded_Timing_Offset");
-        cb.manufacturer            = readStr(grp, "Manufacturer");
-        cb.model                   = readStr(grp, "Model");
-        cb.output_path             = readStr(grp, "Output_Path");
-        cb.selected_camera         = readStr(grp, "Selected_Camera");
-        cb.custom_video_format     = readStr(grp, "Custom_Video_Format");
-        cb.video_output            = readStr(grp, "Video_Output");
-        cb.show_console            = readBoolFromInt(grp, "Show_Console");
-        cb.software_trigger_delay  = readInt(grp, "Software_Trigger_Delay");
-        auto voltsToWattsAlgorithm = readStr(grp, "Volts_To_Watts_Algorithm");
-        auto voltsToWattsParams    = readStr(grp, "Volts_To_Watts_Params");
-        cb.power_characterization = forwardPowerCharacterizationCoefficients(voltsToWattsAlgorithm, voltsToWattsParams);
-        cb.correction_grid_domain_shape = readStr(grp, "Correction_Grid_Domain_Shape");
-        cb.inverse_grid_domain_shape    = readStr(grp, "Inverse_Grid_Domain_Shape");
-        cb.synchronous_sensors          = parseSynchronousSensors(grp);
-        return cb;
-    }
-
-    // Trims a fixed-length char buffer at its first NUL byte. Unlike
-    // std::string(const char*), this never reads past `n` bytes — required
-    // here because a name that fills the full fixed-width field has no
-    // trailing NUL at all.
-    static std::string fixedBufToString(const char* buf, std::size_t n) {
-        std::size_t len = 0;
-        while (len < n && buf[len] != '\0') ++len;
-        return std::string(buf, len);
-    }
-
-    // Reads Derivation_Equation_Constants, defaulting to an empty (non-nil)
-    // vector if the dataset itself is absent — the same permissive-reader
-    // discipline already extended from attributes to datasets in the other
-    // four languages.
-    std::vector<EquationConstant> readEquationConstants(const HighFive::Group& grp) const {
-        std::vector<EquationConstant> out;
-        if (!grp.exist("Derivation_Equation_Constants")) return out;
-        std::vector<EquationConstantRow> rows;
-        grp.getDataSet("Derivation_Equation_Constants").read(rows);
-        out.reserve(rows.size());
-        for (const auto& r : rows)
-            out.push_back({fixedBufToString(r.name, EquationConstantMaxNameBytes), r.value});
-        return out;
-    }
-
-    // Reads Calibration_Points, defaulting to an empty (non-nil) vector if
-    // the dataset itself is absent.
-    std::vector<CalibrationPoint> readCalibrationPoints(const HighFive::Group& grp) const {
-        std::vector<CalibrationPoint> out;
-        if (!grp.exist("Calibration_Points")) return out;
-        std::vector<CalibrationPointRow> rows;
-        grp.getDataSet("Calibration_Points").read(rows);
-        out.reserve(rows.size());
-        for (const auto& r : rows)
-            out.push_back({r.input_value, r.output_value});
-        return out;
-    }
-
-    SynchronousSensor parseSynchronousSensor(const HighFive::Group& grp) const {
-        SynchronousSensor s;
-        s.enabled                    = readBoolFromInt(grp, "Enabled");
-        s.sensor_name                = readStr(grp, "Sensor_Name");
-        s.sensor_output_range_low    = readFloat(grp, "Sensor_Output_Range_Low");
-        s.sensor_output_range_high   = readFloat(grp, "Sensor_Output_Range_High");
-        s.sensor_output_space        = readStr(grp, "Sensor_Output_Space");
-        s.sensor_model               = readStr(grp, "Sensor_Model");
-        s.sensor_manufacturer        = readStr(grp, "Sensor_Manufacturer");
-        s.sensor_scope               = readStr(grp, "Sensor_Scope");
-        s.units_derived_quantity     = readStr(grp, "Units_Derived_Quantity");
-        s.port_id                    = readInt(grp, "Port_ID");
-        s.sensor_type                = readStr(grp, "Sensor_Type");
-        s.input_type                 = readStr(grp, "Input_Type");
-        s.algorithm_type             = readStr(grp, "Algorithm_Type");
-        s.algorithm_equation         = readStr(grp, "Algorithm_Equation");
-        s.calibration_source         = readStr(grp, "Calibration_Source");
-        s.calibration_verified       = readBoolFromInt(grp, "Calibration_Verified");
-        s.sample_period              = readFloat(grp, "Sample_Period");
-        s.metadata                   = readStr(grp, "Metadata");
-        s.derivation_equation_constants = readEquationConstants(grp);
-        s.calibration_points            = readCalibrationPoints(grp);
-        return s;
-    }
-
-    // Enumerates Synchronous_Sensors/<name> sub-groups, the identical
-    // mechanism the OpcuaTrigger loop uses for OPCUA/Triggers/<name>.
-    // Defaults to an empty map when the group doesn't exist at all — no
-    // separate "absent" state; ClearBox's to_json omits the key from
-    // output either way.
-    std::map<std::string, SynchronousSensor> parseSynchronousSensors(const HighFive::Group& grp) const {
-        std::map<std::string, SynchronousSensor> sensors;
-        if (!grp.exist("Synchronous_Sensors")) return sensors;
-        auto sensors_grp = grp.getGroup("Synchronous_Sensors");
-        for (const auto& name : sensors_grp.listObjectNames())
-            sensors[name] = parseSynchronousSensor(sensors_grp.getGroup(name));
-        return sensors;
-    }
-
     // Scalar attrs only; raw_bytes deferred to \u00a74.11.
     ScanFieldCorrectionFile parseSfcf(const HighFive::DataSet& ds) const {
         ScanFieldCorrectionFile s;
@@ -634,19 +530,6 @@ private:
                 "train_index " + std::to_string(train_index) +
                 " out of range [0, " + std::to_string(ids.size()) + ")");
         return ids[train_index];
-    }
-
-    // Read a 3-D float64 dataset into a flat CorrectionData buffer.
-    CorrectionData readCorrectionGrid(const HighFive::File& f,
-                                      const std::string& ds_path) const {
-        auto ds   = f.getDataSet(ds_path);
-        auto dims = ds.getSpace().getDimensions();
-        CorrectionData cd;
-        cd.shape = {dims[0], dims[1], dims[2]};
-        cd.data.resize(dims[0] * dims[1] * dims[2]);
-        H5Dread(ds.getId(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT,
-                cd.data.data());
-        return cd;
     }
 
 };

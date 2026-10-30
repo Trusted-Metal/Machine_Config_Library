@@ -2,6 +2,27 @@
 
 **Status**: Library ready — 60/60 Rust tests pass, full cross-check passes (schema, read parity, write interop, correction data hashes).
 
+> **ClearBox is no longer a typed model in core.** `OpticalTrain.optional_components`, `ClearBox`,
+> `CorrectionData`, the `get_correction_data` / `get_inverse_correction_data` reader methods and the
+> `get/set clearbox` facade calls were removed. ClearBox is now the `ClearBox` extension tree
+> (`config.extensions["ClearBox"]`, File_Version 1.1 layout for both file versions; see
+> [EXTENSION_CONTRACT.md](EXTENSION_CONTRACT.md#clearbox)). The sections below that mention
+> `train.optional_components.clearbox` or the correction accessors describe the previous API
+> (MCF rev `b485b817` and earlier); translate them as follows:
+>
+> | Previous | Now |
+> |---|---|
+> | `train.optional_components.clearbox` (train `i`) | `config.extensions["ClearBox"].children["Optical_Train_{i+1:02}"]` |
+> | `cb.<field>` scalar | `train.attrs["<HDF5_Attribute_Name>"]` (e.g. `Ip_Address`, `Data_Port`, `Server_Port`, `Actual_Timing_Offset`, `Commanded_Timing_Offset`), with the stored dtype |
+> | `cb.output_path`, `cb.software_trigger_delay` | `config.extensions["ClearBox"].attrs["Output_Path"]` / `["Software_Trigger_Delay"]` (shared across trains) |
+> | `cb.volts_to_watts_*` | `train.children["Power_Characterization"]` (attrs + `Derivation_Equation_Constants` and `Characterization_Points` tables) |
+> | `reader.get_correction_data(i)` | `train.datasets["Correction_Data"]` (`DatasetData::F64`, shape `[257, 257, 2]`, row-major) |
+> | `reader.get_inverse_correction_data(i)` | `train.datasets["Inverse_Correction_Data"]` |
+> | `cb.correction_data.is_some()` | `train.datasets.contains_key("Correction_Data")` |
+>
+> `parse()` now returns the grids (extension datasets are always loaded), so `parse_with_binary()`
+> is only needed for the raw `.fc3` bytes.
+
 This document describes how to replace `clearbox-tauri`'s own HDF5 reader
 (`src-tauri/src/machine_config/`) with the `machine-config` Rust library,
 and how each field in clearbox-tauri's types maps to the library's model.

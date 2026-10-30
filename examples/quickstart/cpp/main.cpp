@@ -10,8 +10,11 @@
 
 #include "machine_config/machine_config.hpp"
 
+#include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -29,6 +32,17 @@ static std::string fmtOpt(std::optional<double> v) {
     std::ostringstream ss;
     ss << *v;
     return ss.str();
+}
+
+// ClearBox is an opaque extension tree: extensions["ClearBox"] / Optical_Train_NN.
+static const machine_config::extension::Tree* clearboxTrain(const machine_config::MachineConfig& cfg,
+                                                            std::size_t i) {
+    auto root = cfg.extensions.find("ClearBox");
+    if (root == cfg.extensions.end()) return nullptr;
+    char key[32];
+    std::snprintf(key, sizeof key, "Optical_Train_%02d", static_cast<int>(i) + 1);
+    auto train = root->second.children.find(key);
+    return train == root->second.children.end() ? nullptr : &train->second;
 }
 
 int main() {
@@ -54,6 +68,9 @@ int main() {
         std::cout << "Machine name   : " << meta.machine_name << "\n";
         std::cout << "Optical trains : " << file->opticalTrainCount() << "\n";
 
+        MachineConfigReader reader{dummy.string()};
+        const auto config = reader.parse();
+
         for (std::size_t i = 0; i < file->opticalTrainCount(); ++i) {
             auto sc = file->getScanner(i);
             if (!sc.ok()) {
@@ -64,13 +81,8 @@ int main() {
                       << " " << sc.value().working_distance_unit.value_or("")
                       << "  offset x=" << fmtOpt(sc.value().scan_head_offset_x)
                       << ", y=" << fmtOpt(sc.value().scan_head_offset_y) << "\n";
-            if (file->hasOptionalComponents(i)) {
-                auto cb = file->getClearbox(i);
-                std::cout << "           clearbox: " << (cb.ok() ? "present" : cb.errorCode())
-                          << "\n";
-            } else {
-                std::cout << "           optionalComponents: none\n";
-            }
+            std::cout << "           clearbox: "
+                      << (clearboxTrain(config, i) ? "present" : "none") << "\n";
         }
 
         auto scanner = file->getScanner(0);
@@ -79,10 +91,14 @@ int main() {
             return 1;
         }
 
-        MachineConfigReader reader{dummy.string()};
-        auto cd = reader.getCorrectionData(0);
-        std::cout << "Correction grid: [" << cd.shape[0] << ", " << cd.shape[1] << ", "
-                  << cd.shape[2] << "]   (train 0)\n\n";
+        const auto* train0 = clearboxTrain(config, 0);
+        if (!train0) {
+            std::cerr << "ClearBox extension missing for train 0\n";
+            return 1;
+        }
+        const auto& shape = train0->datasets.at("Correction_Data").shape;
+        std::cout << "Correction grid: [" << shape[0] << ", " << shape[1] << ", "
+                  << shape[2] << "]   (train 0)\n\n";
 
         auto tmp = std::filesystem::temp_directory_path() / "mc_quickstart_tmp.h5";
         auto setR = file->setScanner(0, scanner.value(), SetMode::Merge);

@@ -6,13 +6,13 @@
 
 use std::path::Path;
 
+use mcf_extension_contract::{Attr, Dataset, DatasetData, ExtensionTree, Scalar};
 use ndarray::Array3;
 
+use crate::clearbox_legacy;
 use crate::error::Result;
 use crate::models::*;
-use crate::power_characterization::{
-    forward_power_characterization_coefficients, forward_power_characterization_points,
-};
+use crate::power_characterization::forward_power_characterization_points;
 use crate::writer::MachineConfigWriter;
 
 const SCHEMA_VERSION: &str = "v1";
@@ -89,11 +89,25 @@ impl MockConfigBuilder {
             .map(|i| self.build_train(i))
             .collect();
 
+        let mut extensions = std::collections::BTreeMap::new();
+        if self.include_clearbox {
+            // The mock authors each train's ClearBox exactly as a File_Version 1.0 file stores
+            // it, then lets the core read shim turn that into the extension tree.
+            let groups = (0..self.laser_count)
+                .map(|i| (format!("Optical_Train_{:02}", i + 1), mock_clearbox(i)))
+                .collect();
+            if let Some(tree) = clearbox_legacy::from_v1_0_trains(groups)
+                .expect("mock ClearBox literals are always valid")
+            {
+                extensions.insert(clearbox_legacy::EXTENSION_NAME.to_owned(), tree);
+            }
+        }
+
         MachineConfig {
             meta,
             machine,
             optical_trains,
-            extensions: Default::default(),
+            extensions,
         }
     }
 
@@ -219,9 +233,6 @@ impl MockConfigBuilder {
             light_source,
             collimator,
             scanner_card,
-            optional_components: OptionalComponents {
-                clearbox: if self.include_clearbox { Some(mock_clearbox(index)) } else { None },
-            },
             scan_field_correction_file: if self.include_clearbox { Some(mock_sfcf(index)) } else { None },
         }
     }
@@ -247,44 +258,37 @@ fn mock_axis() -> AxisConfig {
     }
 }
 
-fn mock_clearbox(index: usize) -> ClearBox {
+/// One train's ClearBox group, authored the way a File_Version 1.0 file stores it.
+fn mock_clearbox(index: usize) -> ExtensionTree {
     let grid = gaussian_correction_grid();
     let mut inv = grid.clone();
     inv.mapv_inplace(|v| v * 0.9);
-    ClearBox {
-        ip_address: format!("192.168.1.{}", 10 + index),
-        serial_number: Some(format!("{:03}", index + 1)),
-        data_port: Some(5001),
-        server_port: Some(20101),
-        actual_timing_offset: Some(-8),
-        commanded_timing_offset: Some(50),
-        correction_data: Some(array3_to_nested(&grid)),
-        inverse_correction_data: Some(array3_to_nested(&inv)),
-        manufacturer: None,
-        model: None,
-        output_path: Some("/recordings/".to_owned()),
-        selected_camera: Some("Default".to_owned()),
-        custom_video_format: Some("MP4".to_owned()),
-        video_output: Some("HDMI".to_owned()),
-        show_console: Some(false),
-        software_trigger_delay: Some(3000),
-        correction_grid_domain_shape: None,
-        inverse_grid_domain_shape: None,
-        // Not populated by MockConfigBuilder, same as OPCUA — only the real
-        // fixtures (reference_config_synchronous_sensors.h5 and the combined
-        // OPCUA+sensors fixture) exercise this field today.
-        synchronous_sensors: indexmap::IndexMap::new(),
-        // Not populated by MockConfigBuilder, same reasoning as
-        // synchronous_sensors above; only real v1.1 fixtures exercise this.
-        firmware_version: None,
-        // Derived via the same function a real v1.0 read would use — see
-        // mock_train's LightSource for the identical reasoning.
-        power_characterization: forward_power_characterization_coefficients(
-            Some("LINEAR"),
-            Some("50.0,100.0"),
-        )
-        .expect("mock power characterization literals are always valid"),
-    }
+    let dataset = |g: &Array3<f64>| Dataset {
+        shape: g.shape().to_vec(),
+        data: DatasetData::F64(g.iter().copied().collect()),
+        attrs: Default::default(),
+    };
+    let mut tree = ExtensionTree::default();
+    let mut put = |name: &str, value: Scalar| {
+        tree.attrs.insert(name.to_owned(), Attr::scalar(value));
+    };
+    put("Ip_Address", Scalar::Utf8(format!("192.168.1.{}", 10 + index)));
+    put("Serial_Number", Scalar::Utf8(format!("{:03}", index + 1)));
+    put("Data_Port", Scalar::I64(5001));
+    put("Server_Port", Scalar::I64(20101));
+    put("Actual_Timing_Offset", Scalar::I64(-8));
+    put("Commanded_Timing_Offset", Scalar::I64(50));
+    put("Output_Path", Scalar::Utf8("/recordings/".to_owned()));
+    put("Selected_Camera", Scalar::Utf8("Default".to_owned()));
+    put("Custom_Video_Format", Scalar::Utf8("MP4".to_owned()));
+    put("Video_Output", Scalar::Utf8("HDMI".to_owned()));
+    put("Show_Console", Scalar::I64(0));
+    put("Software_Trigger_Delay", Scalar::I64(3000));
+    put("Volts_To_Watts_Algorithm", Scalar::Utf8("LINEAR".to_owned()));
+    put("Volts_To_Watts_Params", Scalar::Utf8("50.0,100.0".to_owned()));
+    tree.datasets.insert("Correction_Data".to_owned(), dataset(&grid));
+    tree.datasets.insert("Inverse_Correction_Data".to_owned(), dataset(&inv));
+    tree
 }
 
 fn mock_sfcf(index: usize) -> ScanFieldCorrectionFile {
@@ -317,29 +321,19 @@ fn gaussian_correction_grid() -> Array3<f64> {
     grid
 }
 
-/// Convert a `(D0, D1, D2)` array to a nested `Vec` with NaN mapped to `None`.
-fn array3_to_nested(arr: &Array3<f64>) -> Vec<Vec<Vec<Option<f64>>>> {
-    let shape = arr.shape();
-    (0..shape[0])
-        .map(|i| {
-            (0..shape[1])
-                .map(|j| {
-                    (0..shape[2])
-                        .map(|k| {
-                            let v = arr[[i, j, k]];
-                            if v.is_nan() { None } else { Some(v) }
-                        })
-                        .collect()
-                })
-                .collect()
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::reader::MachineConfigReader;
+
+    fn grid(config: &MachineConfig) -> Vec<f64> {
+        match &config.extensions["ClearBox"].children["Optical_Train_01"].datasets["Correction_Data"]
+            .data
+        {
+            DatasetData::F64(v) => v.clone(),
+            _ => panic!("grid is not float64"),
+        }
+    }
 
     #[test]
     fn builder_1_laser_roundtrip() {
@@ -372,20 +366,22 @@ mod tests {
     fn builder_correction_grid_shape() {
         let tmp = tempfile();
         MockConfigBuilder::new(1).save(&tmp).unwrap();
-        let cd = MachineConfigReader::open(&tmp).unwrap().get_correction_data(0).unwrap();
-        assert_eq!(cd.shape, [257, 257, 2]);
+        let config = MachineConfigReader::open(&tmp).unwrap().parse().unwrap();
+        let ds = &config.extensions["ClearBox"].children["Optical_Train_01"].datasets["Correction_Data"];
+        assert_eq!(ds.shape, [257, 257, 2]);
     }
 
     #[test]
     fn builder_correction_grid_nonzero() {
         let tmp = tempfile();
         MockConfigBuilder::new(1).save(&tmp).unwrap();
-        let cd = MachineConfigReader::open(&tmp).unwrap().get_correction_data(0).unwrap();
+        let config = MachineConfigReader::open(&tmp).unwrap().parse().unwrap();
+        let data = grid(&config);
         // Centre cell (128, 128, 0) must be the Gaussian peak (warp ≈ 2.0 for r=0).
         // Row-major index: i * d1 * d2 + j * d2 + k  where shape = [257, 257, 2].
-        let centre = cd.data[128 * 257 * 2 + 128 * 2];
+        let centre = data[128 * 257 * 2 + 128 * 2];
         assert!(centre > 1.9 && centre < 2.1, "centre={centre}");
-        assert!(cd.data.iter().any(|v| v.abs() > 0.0), "all zeros");
+        assert!(data.iter().any(|v| v.abs() > 0.0), "all zeros");
     }
 
     #[test]
@@ -395,7 +391,7 @@ mod tests {
         b.include_clearbox = false;
         b.save(&tmp).unwrap();
         let config = MachineConfigReader::open(&tmp).unwrap().parse().unwrap();
-        assert!(config.optical_trains[0].optional_components.clearbox.is_none());
+        assert!(config.extensions.is_empty());
     }
 
     // Minimal temp-file helper for inline tests — avoids a `tempfile` crate

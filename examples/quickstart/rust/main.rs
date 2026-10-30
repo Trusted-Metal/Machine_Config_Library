@@ -46,6 +46,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let n = file.optical_train_count().map_err(|e| e.to_string())?;
     println!("Optical trains : {n}");
 
+    // ClearBox is an opaque extension tree: extensions["ClearBox"] / Optical_Train_NN.
+    let config = MachineConfigReader::open(&dummy)?.parse()?;
+    let clearbox = config.extensions.get("ClearBox");
+
     for i in 0..n {
         let scanner = file.get_scanner(i).map_err(|e| e.to_string())?;
         println!(
@@ -55,15 +59,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             scanner.scan_head_offset_x,
             scanner.scan_head_offset_y,
         );
-        match file.get_clearbox(i) {
-            Ok(Some(_)) => println!("           clearbox: present"),
-            Ok(None) => println!("           optionalComponents: none"),
-            Err(e) => println!("           clearbox: {e}"),
-        }
+        let train = clearbox.and_then(|c| c.children.get(&format!("Optical_Train_{:02}", i + 1)));
+        println!(
+            "           clearbox: {}",
+            if train.is_some() { "present" } else { "none" }
+        );
     }
 
     let scanner0 = file.get_scanner(0).map_err(|e| e.to_string())?;
-    let correction = MachineConfigReader::open(&dummy)?.get_correction_data(0)?;
+    let correction = clearbox
+        .and_then(|c| c.children.get("Optical_Train_01"))
+        .and_then(|t| t.datasets.get("Correction_Data"))
+        .ok_or("ClearBox correction data missing for train 0")?;
     println!("Correction grid: {:?}   (train 0)", correction.shape);
 
     println!();

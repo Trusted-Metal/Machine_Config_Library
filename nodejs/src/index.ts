@@ -1,5 +1,5 @@
 export { MachineConfigReader } from './reader.js';
-export type { ReadOptions, ToJsonOptions, CorrectionData } from './reader.js';
+export type { ReadOptions, ToJsonOptions } from './reader.js';
 
 export { MachineConfigWriter } from './writer.js';
 
@@ -23,11 +23,13 @@ export type {
   ExtensionDtype,
   ExtensionNumericArray,
   ExtensionScalar,
+  ExtensionTable,
+  ExtensionTableField,
   ExtensionTree,
 } from './extensions/contract.js';
 export { canonicalDigest } from './extensions/digest.js';
 export { extensionTreeToJson, extensionTreeFromJson } from './extensions/json.js';
-export type { ExtensionTreeJson } from './extensions/json.js';
+export type { ExtensionTableJson, ExtensionTreeJson } from './extensions/json.js';
 
 export {
   openMachineConfig,
@@ -54,8 +56,6 @@ export type {
   MachineHandle,
   TrainHandle,
   TrainCollection,
-  ClearBoxHandle,
-  OptionalComponentsHandle,
   MetaModel,
   MachineModel,
   ScannerModel,

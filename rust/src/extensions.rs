@@ -15,6 +15,32 @@ use mcf_extension_contract::{
 
 use crate::error::{MachineConfigError, Result};
 
+mod table;
+
+/// Test helper: drops the `data` array of every extension dataset in a serialized
+/// `MachineConfig`, keeping `dtype`, `shape` and attributes. The golden file does this so it stays
+/// small; the grids themselves are covered by the bit-exact round-trip and `correction-hash`
+/// checks.
+#[cfg(test)]
+pub(crate) fn strip_dataset_data(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::Object(datasets)) = map.get_mut("datasets") {
+                for ds in datasets.values_mut() {
+                    if let Some(obj) = ds.as_object_mut() {
+                        obj.remove("data");
+                    }
+                }
+            }
+            for v in map.values_mut() {
+                strip_dataset_data(v);
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_dataset_data),
+        _ => {}
+    }
+}
+
 fn join(path: &str, name: &str) -> String {
     if path.is_empty() {
         name.to_string()
@@ -129,7 +155,14 @@ pub fn read_extension_tree(group: &Group, path: &str) -> Result<ExtensionTree> {
         if let Ok(child) = group.group(&name) {
             tree.children.insert(name, read_extension_tree(&child, &child_path)?);
         } else if let Ok(ds) = group.dataset(&name) {
-            tree.datasets.insert(name, read_dataset(&ds, &child_path)?);
+            match ds.dtype()?.to_descriptor()? {
+                TypeDescriptor::Compound(compound) => {
+                    tree.tables.insert(name, table::read_table(&ds, &compound, &child_path)?);
+                }
+                _ => {
+                    tree.datasets.insert(name, read_dataset(&ds, &child_path)?);
+                }
+            }
         } else {
             return Err(unsupported(&child_path, "only groups and datasets are supported"));
         }
@@ -233,6 +266,9 @@ fn write_group(group: &Group, tree: &ExtensionTree) -> Result<()> {
     write_attrs(group, &tree.attrs)?;
     for (name, ds) in &tree.datasets {
         write_dataset(group, name, ds)?;
+    }
+    for (name, t) in &tree.tables {
+        table::write_table(group, name, t)?;
     }
     for (name, child) in &tree.children {
         write_group(&group.create_group(name)?, child)?;

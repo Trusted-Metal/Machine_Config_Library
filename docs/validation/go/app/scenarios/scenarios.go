@@ -17,6 +17,29 @@ import (
 	"machine-config-go/extension"
 )
 
+// clearboxGrid reads one train's ClearBox grid. ClearBox is an opaque extension tree:
+// Extensions["ClearBox"].Children["Optical_Train_NN"].Datasets[name].
+func clearboxGrid(cfg *mc.MachineConfig, index int, name string) ([]float64, []uint64, error) {
+	root := cfg.Extensions["ClearBox"]
+	if root == nil {
+		return nil, nil, fmt.Errorf("config has no ClearBox extension")
+	}
+	key := fmt.Sprintf("Optical_Train_%02d", index+1)
+	train := root.Children[key]
+	if train == nil {
+		return nil, nil, fmt.Errorf("ClearBox has no %s", key)
+	}
+	ds := train.Datasets[name]
+	if ds == nil {
+		return nil, nil, fmt.Errorf("ClearBox/%s has no %s", key, name)
+	}
+	data, ok := ds.Data.([]float64)
+	if !ok {
+		return nil, nil, fmt.Errorf("%s is not float64", name)
+	}
+	return data, ds.Shape, nil
+}
+
 // S-01: Read reference fixture, all scalar fields
 //
 // ID:       S-01
@@ -44,19 +67,23 @@ func RunS01ReadScalars(fixturesDir, _ string) (bool, string) {
 // S-02: Read correction grids, shape and finite values
 //
 // ID:       S-02
-// Action:   GetCorrectionData(0) on reference_config.h5.
+// Action:   Read the ClearBox extension's Correction_Data for train 0 of reference_config.h5.
 // Expected: shape == [257,257,2]; grid contains NaNs (out-of-field cells).
 func RunS02ReadBinary(fixturesDir, _ string) (bool, string) {
 	path := filepath.Join(fixturesDir, "reference_config.h5")
-	cd, err := mc.NewReader(path).GetCorrectionData(0)
+	cfg, err := mc.NewReader(path).Parse()
 	if err != nil {
-		return false, fmt.Sprintf("GetCorrectionData failed: %v", err)
+		return false, fmt.Sprintf("read failed: %v", err)
 	}
-	if cd.Shape != [3]int{257, 257, 2} {
-		return false, fmt.Sprintf("shape = %v", cd.Shape)
+	data, shape, err := clearboxGrid(cfg, 0, "Correction_Data")
+	if err != nil {
+		return false, err.Error()
+	}
+	if len(shape) != 3 || shape[0] != 257 || shape[1] != 257 || shape[2] != 2 {
+		return false, fmt.Sprintf("shape = %v", shape)
 	}
 	nan := 0
-	for _, v := range cd.Data {
+	for _, v := range data {
 		if math.IsNaN(v) {
 			nan++
 		}
@@ -64,7 +91,7 @@ func RunS02ReadBinary(fixturesDir, _ string) (bool, string) {
 	if nan == 0 {
 		return false, "expected NaNs in correction grid"
 	}
-	return true, fmt.Sprintf("shape=%v nan_count=%d total=%d", cd.Shape, nan, len(cd.Data))
+	return true, fmt.Sprintf("shape=%v nan_count=%d total=%d", shape, nan, len(data))
 }
 
 // S-03: Read real AconityMIDI fixture file
@@ -157,13 +184,13 @@ func RunS05BinaryRoundtrip(fixturesDir, _ string) (bool, string) {
 		return false, fmt.Sprintf("ParseWithOptions failed: %v", err)
 	}
 
-	cdBefore, err := reader.GetCorrectionData(0)
+	cdBefore, _, err := clearboxGrid(cfg, 0, "Correction_Data")
 	if err != nil {
-		return false, fmt.Sprintf("GetCorrectionData failed: %v", err)
+		return false, err.Error()
 	}
-	icdBefore, err := reader.GetInverseCorrectionData(0)
+	icdBefore, _, err := clearboxGrid(cfg, 0, "Inverse_Correction_Data")
 	if err != nil {
-		return false, fmt.Sprintf("GetInverseCorrectionData failed: %v", err)
+		return false, err.Error()
 	}
 
 	tmpPath, err := tempH5("mcl_go_s05")
@@ -176,25 +203,28 @@ func RunS05BinaryRoundtrip(fixturesDir, _ string) (bool, string) {
 		return false, fmt.Sprintf("write failed: %v", err)
 	}
 
-	reader2 := mc.NewReader(tmpPath)
-	cdAfter, err := reader2.GetCorrectionData(0)
+	cfgAfter, err := mc.NewReader(tmpPath).ParseWithOptions(mc.ParseOptions{IncludeBinary: true})
 	if err != nil {
-		return false, fmt.Sprintf("readback GetCorrectionData failed: %v", err)
+		return false, fmt.Sprintf("readback failed: %v", err)
 	}
-	icdAfter, err := reader2.GetInverseCorrectionData(0)
+	cdAfter, _, err := clearboxGrid(cfgAfter, 0, "Correction_Data")
 	if err != nil {
-		return false, fmt.Sprintf("readback GetInverseCorrectionData failed: %v", err)
+		return false, fmt.Sprintf("readback %v", err)
+	}
+	icdAfter, _, err := clearboxGrid(cfgAfter, 0, "Inverse_Correction_Data")
+	if err != nil {
+		return false, fmt.Sprintf("readback %v", err)
 	}
 
-	if !bitwiseEqual(cdBefore.Data, cdAfter.Data) {
+	if !bitwiseEqual(cdBefore, cdAfter) {
 		return false, fmt.Sprintf("correction_data mismatch: %s... -> %s...",
-			sha256Hex(cdBefore.Data)[:16], sha256Hex(cdAfter.Data)[:16])
+			sha256Hex(cdBefore)[:16], sha256Hex(cdAfter)[:16])
 	}
-	if !bitwiseEqual(icdBefore.Data, icdAfter.Data) {
+	if !bitwiseEqual(icdBefore, icdAfter) {
 		return false, "inverse_correction_data mismatch after roundtrip"
 	}
 
-	return true, fmt.Sprintf("correction_data preserved: SHA-256=%s", sha256Hex(cdBefore.Data))
+	return true, fmt.Sprintf("correction_data preserved: SHA-256=%s", sha256Hex(cdBefore))
 }
 
 // S-06: Build synthetic config with MockConfigBuilder and verify fields
@@ -223,14 +253,14 @@ func RunS06Builder(_, _ string) (bool, string) {
 		return false, "machine_name is empty"
 	}
 
-	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	if cb == nil || cb.CorrectionData == nil {
-		return false, "clearbox or correction_data is nil"
+	grid, _, err := clearboxGrid(cfg, 0, "Correction_Data")
+	if err != nil {
+		return false, err.Error()
 	}
-	grid := *cb.CorrectionData
-	center := grid[128][128][0]
-	if center == nil || math.Abs(*center-2.0) > 0.01 {
-		return false, fmt.Sprintf("correction_data center: expected ~2.0, got %s", fmtF64Ptr(center))
+	// Row-major [257, 257, 2]: centre cell, first component.
+	center := grid[(128*257+128)*2]
+	if math.IsNaN(center) || math.Abs(center-2.0) > 0.01 {
+		return false, fmt.Sprintf("correction_data center: expected ~2.0, got %v", center)
 	}
 
 	tmpPath, err := tempH5("mcl_go_s06")
@@ -326,7 +356,7 @@ func RunS07Opcua(fixturesDir, _ string) (bool, string) {
 // Action:       1. Add a third optical train (clone train 1, change train_id)
 //  2. Change build_plate_x from 250.0 to 350.0
 //  3. Set scan_head_rotation on new train to 90.0
-//  4. Clear all correction data on the new train (clearbox = nil)
+//  4. The new train carries no ClearBox (its extension subtree is absent)
 //  5. Change machine_name to "MODIFIED_ACONITY_VALIDATION"
 //
 // Expected:     All five changes persist after write -> read; file_version
@@ -349,7 +379,6 @@ func RunS08DrasticChange(_ string, realDir string) (bool, string) {
 	newTrain := cfg.OpticalTrains[1]
 	newTrain.TrainID = "Optical_Train_03"
 	newTrain.Scanner.ScanHeadRotation = mc.Float64Ptr(90.0)
-	newTrain.OptionalComponents.Clearbox = nil
 	cfg.OpticalTrains = append(cfg.OpticalTrains, newTrain)
 
 	tmpPath, err := tempH5("mcl_go_s08")
@@ -376,8 +405,13 @@ func RunS08DrasticChange(_ string, realDir string) (bool, string) {
 	if rot == nil || math.Abs(*rot-90.0) > 0.001 {
 		return false, fmt.Sprintf("train[2].scan_head_rotation: got %s", fmtF64Ptr(rot))
 	}
-	if rb.OpticalTrains[2].OptionalComponents.Clearbox != nil {
-		return false, "train[2].clearbox should be nil"
+	cbRoot := rb.Extensions["ClearBox"]
+	if cbRoot == nil {
+		return false, "ClearBox extension missing after roundtrip"
+	}
+	if cbRoot.Children["Optical_Train_03"] != nil ||
+		cbRoot.Children["Optical_Train_01"] == nil || cbRoot.Children["Optical_Train_02"] == nil {
+		return false, fmt.Sprintf("ClearBox train groups after roundtrip: %v", childNames(cbRoot))
 	}
 	if rb.Meta.MachineName != "MODIFIED_ACONITY_VALIDATION" {
 		return false, fmt.Sprintf("machine_name: got %q", rb.Meta.MachineName)
@@ -386,7 +420,7 @@ func RunS08DrasticChange(_ string, realDir string) (bool, string) {
 		return false, fmt.Sprintf("file_version changed: %q", rb.Meta.FileVersion)
 	}
 
-	return true, "3 trains, build_plate_x=350.0, rotation=90.0, clearbox cleared, machine_name OK"
+	return true, "3 trains, build_plate_x=350.0, rotation=90.0, new train has no ClearBox, machine_name OK"
 }
 
 // S-09: Public type export surface
@@ -421,14 +455,11 @@ func RunS09TypeExports(_, _ string) (bool, string) {
 	var lightSource mc.LightSource = train.LightSource
 	var collimator mc.Collimator = train.Collimator
 	var scannerCard mc.ScannerCard = train.ScannerCard
-	var optionalComponents mc.OptionalComponents = train.OptionalComponents
 	var axis mc.AxisConfig = scanner.XAxis
 
-	clearboxPtr := optionalComponents.Clearbox
-	if clearboxPtr == nil {
-		return false, "expected builder to include a clearbox by default"
+	if cfg.Extensions["ClearBox"] == nil {
+		return false, "expected builder to include a ClearBox extension by default"
 	}
-	var clearbox mc.ClearBox = *clearboxPtr
 
 	sfcfPtr := train.ScanFieldCorrectionFile
 	if sfcfPtr == nil {
@@ -436,7 +467,6 @@ func RunS09TypeExports(_, _ string) (bool, string) {
 	}
 	var sfcf mc.ScanFieldCorrectionFile = *sfcfPtr
 
-	var correctionData mc.CorrectionData
 	var buildPlate mc.BuildPlate
 
 	var reader *mc.MachineConfigReader = mc.NewReader("unused-path-for-type-check-only")
@@ -451,12 +481,11 @@ func RunS09TypeExports(_, _ string) (bool, string) {
 
 	if meta.MachineName == "" || machine.Manufacturer == "" || scanner.Manufacturer == "" ||
 		lightSource.Manufacturer == "" || collimator.Manufacturer == "" || scannerCard.Manufacturer == "" ||
-		clearbox.IPAddress == "" || sfcf.DocumentName == "" || *name == "" || *num == 0 || *n == 0 || !*flag {
+		sfcf.DocumentName == "" || *name == "" || *num == 0 || *n == 0 || !*flag {
 		return false, "one or more constructed fields were unexpectedly empty"
 	}
 
 	_ = axis
-	_ = correctionData
 	_ = buildPlate
 	_ = reader
 	_ = writer

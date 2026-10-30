@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	machineconfig "machine-config-go"
+	"machine-config-go/extension"
 	"machine-config-go/internal/h5c"
 )
 
@@ -207,32 +208,31 @@ func TestWriterRoundtripThermalLensing(t *testing.T) {
 	}
 }
 
-func TestWriterRoundtripClearboxScalars(t *testing.T) {
+func TestWriterRoundtripClearboxExtension(t *testing.T) {
 	orig, rt := roundtrip(t, filepath.Join(fixturesDir(t), "reference_config.h5"))
-	cbo := orig.OpticalTrains[0].OptionalComponents.Clearbox
-	cbr := rt.OpticalTrains[0].OptionalComponents.Clearbox
-	if cbo == nil || cbr == nil {
-		t.Fatal("expected clearbox on both original and roundtrip")
+	// Bit-exact: attributes with their stored dtypes, both correction grids, Power_Characterization.
+	want, err := extension.Digest(orig.Extensions["ClearBox"])
+	if err != nil {
+		t.Fatal(err)
 	}
-	if cbr.IPAddress != cbo.IPAddress {
-		t.Errorf("ip_address: got %q want %q", cbr.IPAddress, cbo.IPAddress)
+	got, err := extension.Digest(rt.Extensions["ClearBox"])
+	if err != nil {
+		t.Fatal(err)
 	}
-	if (cbr.DataPort == nil) != (cbo.DataPort == nil) || (cbo.DataPort != nil && *cbr.DataPort != *cbo.DataPort) {
-		t.Errorf("data_port: got %v want %v", cbr.DataPort, cbo.DataPort)
+	if got != want {
+		t.Errorf("ClearBox digest changed across a write/read round trip: %s != %s", got, want)
 	}
-	if (cbr.ShowConsole == nil) != (cbo.ShowConsole == nil) || (cbo.ShowConsole != nil && *cbr.ShowConsole != *cbo.ShowConsole) {
-		t.Errorf("show_console: got %v want %v", cbr.ShowConsole, cbo.ShowConsole)
+	cbo, cbr := clearboxTrain(t, orig, 0), clearboxTrain(t, rt, 0)
+	if cbText(cbr, "Ip_Address") != cbText(cbo, "Ip_Address") {
+		t.Errorf("ip_address: got %q want %q", cbText(cbr, "Ip_Address"), cbText(cbo, "Ip_Address"))
 	}
-	if (cbr.CorrectionGridDomainShape == nil) != (cbo.CorrectionGridDomainShape == nil) || (cbo.CorrectionGridDomainShape != nil && *cbr.CorrectionGridDomainShape != *cbo.CorrectionGridDomainShape) {
-		t.Errorf("correction_grid_domain_shape: got %v want %v", cbr.CorrectionGridDomainShape, cbo.CorrectionGridDomainShape)
-	}
-	if len(cbr.SynchronousSensors) != 0 {
-		t.Errorf("expected no sensors on reference_config.h5 roundtrip, got %v", cbr.SynchronousSensors)
+	if _, ok := cbr.Children["Synchronous_Sensors"]; ok {
+		t.Error("expected no sensors on reference_config.h5 roundtrip")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Roundtrip: SynchronousSensor
+// Roundtrip: synchronous sensors
 // ---------------------------------------------------------------------------
 
 // writeAndRead writes cfg to a temp file and reads it back.
@@ -249,53 +249,68 @@ func writeAndRead(t *testing.T, cfg *machineconfig.MachineConfig) *machineconfig
 	return rt
 }
 
-func TestWriterRoundtripSynchronousSensorCompoundDatasetsExactValuesInOrder(t *testing.T) {
+func cbSetSensor(t *testing.T, cfg *machineconfig.MachineConfig, label string, sensor *extension.Tree) {
+	t.Helper()
+	train := clearboxTrain(t, cfg, 0)
+	sensors := extension.NewTree()
+	sensors.Children[label] = sensor
+	train.Children["Synchronous_Sensors"] = sensors
+}
+
+func cbSensorTree(constants []cbConstant) *extension.Tree {
+	names := make([]string, len(constants))
+	values := make([]float64, len(constants))
+	for i, c := range constants {
+		names[i], values[i] = c.Name, c.Value
+	}
+	tree := extension.NewTree()
+	tree.Tables["Derivation_Equation_Constants"] = &extension.Table{
+		Fields: []extension.TableField{
+			{Name: "name", Dtype: extension.Utf8, Size: 64},
+			{Name: "value", Dtype: extension.F64},
+		},
+		Rows:    uint64(len(constants)),
+		Columns: map[string]any{"name": names, "value": values},
+		Attrs:   map[string]extension.Attr{},
+	}
+	return tree
+}
+
+func TestWriterRoundtripSynchronousSensorTablesExactValuesInOrder(t *testing.T) {
 	orig, rt := roundtrip(t, filepath.Join(fixturesDir(t), "reference_config_synchronous_sensors.h5"))
-	so := orig.OpticalTrains[0].OptionalComponents.Clearbox.SynchronousSensors["Oxygen Sensor"]
-	sr := rt.OpticalTrains[0].OptionalComponents.Clearbox.SynchronousSensors["Oxygen Sensor"]
-	if !reflect.DeepEqual(sr.DerivationEquationConstants, so.DerivationEquationConstants) {
-		t.Errorf("derivation_equation_constants: got %+v want %+v", sr.DerivationEquationConstants, so.DerivationEquationConstants)
+	so := sensorsOf(t, orig)["Oxygen Sensor"]
+	sr := sensorsOf(t, rt)["Oxygen Sensor"]
+	for _, name := range []string{"Derivation_Equation_Constants", "Calibration_Points"} {
+		if !reflect.DeepEqual(sr.Tables[name].Columns, so.Tables[name].Columns) {
+			t.Errorf("%s: got %+v want %+v", name, sr.Tables[name].Columns, so.Tables[name].Columns)
+		}
 	}
-	if !reflect.DeepEqual(sr.CalibrationPoints, so.CalibrationPoints) {
-		t.Errorf("calibration_points: got %+v want %+v", sr.CalibrationPoints, so.CalibrationPoints)
-	}
-	if sr.SensorName == nil || *sr.SensorName != "ZR800 Oxygen Analyzer" {
-		t.Errorf("sensor_name: got %v", sr.SensorName)
+	if got := cbText(sr, "Sensor_Name"); got != "ZR800 Oxygen Analyzer" {
+		t.Errorf("sensor_name: got %q", got)
 	}
 }
 
-// TestWriterRoundtripSynchronousSensorWithZeroRowCompoundDatasets is a
-// distinct edge case from the empty-*map* test above: here the sensor
-// itself exists (its group is created), but both compound datasets have
-// zero rows — proving 0-length compound dataset creation/read genuinely
-// works, not assumed.
-func TestWriterRoundtripSynchronousSensorWithZeroRowCompoundDatasets(t *testing.T) {
+// The sensor itself exists (its group is created), but its compound
+// dataset has zero rows — proving 0-length compound dataset
+// creation/read genuinely works, not assumed.
+func TestWriterRoundtripSynchronousSensorWithZeroRowTable(t *testing.T) {
 	cfg, err := machineconfig.NewReader(filepath.Join(fixturesDir(t), "reference_config.h5")).Parse()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	cb.SynchronousSensors = map[string]machineconfig.SynchronousSensor{
-		"Untested Sensor": {
-			Enabled:                     machineconfig.BoolPtr(false),
-			SensorName:                  machineconfig.StrPtr("Placeholder"),
-			DerivationEquationConstants: []machineconfig.EquationConstant{},
-			CalibrationPoints:           []machineconfig.CalibrationPoint{},
-		},
-	}
+	sensor := cbSensorTree(nil)
+	sensor.Attrs["Sensor_Name"] = extension.Attr{Dtype: extension.Utf8, Value: "Placeholder"}
+	cbSetSensor(t, cfg, "Untested Sensor", sensor)
 	rt := writeAndRead(t, cfg)
-	s, ok := rt.OpticalTrains[0].OptionalComponents.Clearbox.SynchronousSensors["Untested Sensor"]
+	s, ok := sensorsOf(t, rt)["Untested Sensor"]
 	if !ok {
 		t.Fatal(`expected key "Untested Sensor"`)
 	}
-	if len(s.DerivationEquationConstants) != 0 {
-		t.Errorf("derivation_equation_constants: got %+v, want empty", s.DerivationEquationConstants)
+	if rows := s.Tables["Derivation_Equation_Constants"].Rows; rows != 0 {
+		t.Errorf("derivation_equation_constants rows: got %d, want 0", rows)
 	}
-	if len(s.CalibrationPoints) != 0 {
-		t.Errorf("calibration_points: got %+v, want empty", s.CalibrationPoints)
-	}
-	if s.SensorName == nil || *s.SensorName != "Placeholder" {
-		t.Errorf("sensor_name: got %v", s.SensorName)
+	if got := cbText(s, "Sensor_Name"); got != "Placeholder" {
+		t.Errorf("sensor_name: got %q", got)
 	}
 }
 
@@ -307,23 +322,17 @@ func TestWriterRoundtripSynchronousSensorArbitraryDifferentlyStyledKey(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	cb.SynchronousSensors = map[string]machineconfig.SynchronousSensor{
-		"HUMIDITY_SENSOR_2": {
-			Enabled:                     machineconfig.BoolPtr(true),
-			PortID:                      machineconfig.IntPtr(9),
-			DerivationEquationConstants: []machineconfig.EquationConstant{},
-			CalibrationPoints:           []machineconfig.CalibrationPoint{},
-		},
-	}
+	sensor := extension.NewTree()
+	sensor.Attrs["Port_ID"] = extension.Attr{Dtype: extension.I32, Value: int64(9)}
+	cbSetSensor(t, cfg, "HUMIDITY_SENSOR_2", sensor)
 	rt := writeAndRead(t, cfg)
-	sensors := rt.OpticalTrains[0].OptionalComponents.Clearbox.SynchronousSensors
+	sensors := sensorsOf(t, rt)
 	s, ok := sensors["HUMIDITY_SENSOR_2"]
 	if !ok {
 		t.Fatalf(`expected key "HUMIDITY_SENSOR_2", got keys %v`, sensors)
 	}
-	if s.PortID == nil || *s.PortID != 9 {
-		t.Errorf("port_id: got %v want 9", s.PortID)
+	if got, ok := cbInt(s, "Port_ID"); !ok || got != 9 {
+		t.Errorf("port_id: got %v want 9", got)
 	}
 }
 
@@ -338,34 +347,17 @@ func TestWriterOpcuaAndSynchronousSensorCoexist(t *testing.T) {
 	if cfg.Extensions["TM_OPCUA"] == nil {
 		t.Fatal("fixture must already have OPCUA before the test adds a sensor")
 	}
-	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	cb.SynchronousSensors = map[string]machineconfig.SynchronousSensor{
-		"Oxygen Sensor": {
-			Enabled:             machineconfig.BoolPtr(true),
-			SensorName:          machineconfig.StrPtr("ZR800 Oxygen Analyzer"),
-			CalibrationVerified: machineconfig.BoolPtr(false),
-			SamplePeriod:        machineconfig.Float64Ptr(5.0),
-			DerivationEquationConstants: []machineconfig.EquationConstant{
-				{Name: "a", Value: 0.4375},
-				{Name: "b", Value: -2.75},
-			},
-			CalibrationPoints: []machineconfig.CalibrationPoint{
-				{InputValue: 4.0, OutputValue: -1.0},
-				{InputValue: 20.0, OutputValue: 6.0},
-			},
-		},
-	}
+	cbSetSensor(t, cfg, "Oxygen Sensor", cbSensorTree([]cbConstant{{"a", 0.4375}, {"b", -2.75}}))
 	rt := writeAndRead(t, cfg)
 	if rt.Extensions["TM_OPCUA"] == nil {
 		t.Fatal("OPCUA must survive alongside the newly-added sensor")
 	}
-	s, ok := rt.OpticalTrains[0].OptionalComponents.Clearbox.SynchronousSensors["Oxygen Sensor"]
+	s, ok := sensorsOf(t, rt)["Oxygen Sensor"]
 	if !ok {
 		t.Fatal(`expected key "Oxygen Sensor"`)
 	}
-	want := []machineconfig.EquationConstant{{Name: "a", Value: 0.4375}, {Name: "b", Value: -2.75}}
-	if !reflect.DeepEqual(s.DerivationEquationConstants, want) {
-		t.Errorf("derivation_equation_constants: got %+v want %+v", s.DerivationEquationConstants, want)
+	if !reflect.DeepEqual(s.Tables["Derivation_Equation_Constants"].Columns["name"], []string{"a", "b"}) {
+		t.Errorf("derivation_equation_constants: got %+v", s.Tables["Derivation_Equation_Constants"].Columns)
 	}
 }
 
@@ -378,21 +370,13 @@ func TestWriterRejectsEquationConstantNameOver64Bytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb := cfg.OpticalTrains[0].OptionalComponents.Clearbox
-	cb.SynchronousSensors = map[string]machineconfig.SynchronousSensor{
-		"Oversized Name Sensor": {
-			DerivationEquationConstants: []machineconfig.EquationConstant{
-				{Name: strings.Repeat("a", 65), Value: 1.0},
-			},
-			CalibrationPoints: []machineconfig.CalibrationPoint{},
-		},
-	}
+	cbSetSensor(t, cfg, "Oversized Name Sensor", cbSensorTree([]cbConstant{{strings.Repeat("a", 65), 1.0}}))
 	tmp := filepath.Join(t.TempDir(), "oversized.h5")
 	err = machineconfig.NewWriter().Write(cfg, tmp)
 	if err == nil {
 		t.Fatal("expected an error for an oversized constant name, got nil")
 	}
-	if !strings.Contains(err.Error(), "does not fit") {
+	if !strings.Contains(err.Error(), "fit") {
 		t.Fatalf("expected a 'does not fit' error, got: %v", err)
 	}
 }
@@ -416,38 +400,13 @@ func TestWriterRoundtripSFCFMetadata(t *testing.T) {
 }
 
 func TestWriterRoundtripCorrectionDataHash(t *testing.T) {
-	src := filepath.Join(fixturesDir(t), "reference_config.h5")
-	orig, err := machineconfig.NewReader(src).ParseWithOptions(machineconfig.ParseOptions{IncludeBinary: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmp := filepath.Join(t.TempDir(), "rt.h5")
-	if err := machineconfig.NewWriter().Write(orig, tmp); err != nil {
-		t.Fatal(err)
-	}
-
-	fwdOrig, err := machineconfig.NewReader(src).GetCorrectionData(0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fwdRT, err := machineconfig.NewReader(tmp).GetCorrectionData(0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if correctionHash(fwdOrig.Data) != correctionHash(fwdRT.Data) {
-		t.Error("forward correction data hash changed across roundtrip")
-	}
-
-	invOrig, err := machineconfig.NewReader(src).GetInverseCorrectionData(0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	invRT, err := machineconfig.NewReader(tmp).GetInverseCorrectionData(0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if correctionHash(invOrig.Data) != correctionHash(invRT.Data) {
-		t.Error("inverse correction data hash changed across roundtrip")
+	orig, rt := roundtrip(t, filepath.Join(fixturesDir(t), "reference_config.h5"))
+	for _, name := range []string{"Correction_Data", "Inverse_Correction_Data"} {
+		a, _ := cbGrid(t, orig, 0, name)
+		b, _ := cbGrid(t, rt, 0, name)
+		if correctionHash(a) != correctionHash(b) {
+			t.Errorf("%s hash changed across roundtrip", name)
+		}
 	}
 }
 

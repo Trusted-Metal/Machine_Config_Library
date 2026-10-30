@@ -192,11 +192,14 @@ TEST_CASE("ExtensionHdf5HandlesAllDtypesAndShapes") {
 
 TEST_CASE("ExtensionOpcuaGroupIsAnOpaqueExtension") {
     MachineConfigReader plain{FIXTURES + "/reference_config.h5"};
-    REQUIRE(plain.parse().extensions.empty());
+    auto plainExt = plain.parse().extensions;
+    REQUIRE(plainExt.size() == 1);
+    REQUIRE(plainExt.count("ClearBox") == 1);
 
     MachineConfigReader reader{FIXTURES + "/reference_config_opcua.h5"};
     auto cfg = reader.parse();
-    REQUIRE(cfg.extensions.size() == 1);
+    REQUIRE(cfg.extensions.size() == 2);
+    REQUIRE(cfg.extensions.count("ClearBox") == 1);
     const auto& tree = cfg.extensions.at("TM_OPCUA");
     REQUIRE(tree.children.count("Client") == 1);
     REQUIRE(tree.children.count("Pipe") == 1);
@@ -229,7 +232,7 @@ TEST_CASE("ExtensionReadsFixturesWrittenByOtherLanguages") {
 
 TEST_CASE("ExtensionV1_1RoundTripPreservesDigest") {
     auto cfg = readV1_1Fixture();
-    REQUIRE(cfg.extensions.count("ClearBox") == 0);
+    REQUIRE(cfg.extensions.count("ClearBox") == 1);
     cfg.extensions["Private_Ext"] = sampleTree();
     auto path = tmp("v11");
     capabilities::v1_1::Hdf5WriterV1_1(cfg).write(path);
@@ -250,13 +253,16 @@ TEST_CASE("ExtensionWriterRejectsInvalidTreeBeforeCreatingTheFile") {
     REQUIRE_FALSE(std::filesystem::exists(path));
 }
 
-TEST_CASE("ExtensionWriterRejectsCoreModelledExtensionName") {
+TEST_CASE("ExtensionWriterAcceptsAClearBoxExtensionTree") {
     auto cfg = readV1_1Fixture();
-    cfg.extensions["ClearBox"] = ext::Tree{};
-    auto path = tmp("never_cb");
+    ext::Tree tree;
+    tree.attrs["Output_Path"] = {"utf8", std::string("x")};
+    cfg.extensions["ClearBox"] = tree;
+    auto path = tmp("clearbox_ext");
+    capabilities::v1_1::Hdf5WriterV1_1(cfg).write(path);
+    auto back = capabilities::v1_1::Hdf5AdapterV1_1(path).parse();
+    REQUIRE(std::get<std::string>(back.extensions.at("ClearBox").attrs.at("Output_Path").value) == "x");
     std::filesystem::remove(path);
-    REQUIRE_THROWS(capabilities::v1_1::Hdf5WriterV1_1(cfg).write(path));
-    REQUIRE_FALSE(std::filesystem::exists(path));
 }
 
 TEST_CASE("ExtensionV1_0OpcuaGroupRoundTripsAsTmOpcua") {

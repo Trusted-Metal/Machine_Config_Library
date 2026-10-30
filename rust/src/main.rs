@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::{Parser, Subcommand};
+use machine_config::extension_contract::DatasetData;
 use machine_config::models::MachineConfig;
 use machine_config::reader::MachineConfigReader;
 use machine_config::writer::MachineConfigWriter;
@@ -109,14 +110,21 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::CorrectionHash { path, train, inverse } => {
             let reader = MachineConfigReader::open(&path)?;
-            let cd = if inverse {
-                reader.get_inverse_correction_data(train)?
-            } else {
-                reader.get_correction_data(train)?
+            let config = reader.parse()?;
+            let dataset = if inverse { "Inverse_Correction_Data" } else { "Correction_Data" };
+            let train_id = format!("Optical_Train_{:02}", train + 1);
+            let grid = config
+                .extensions
+                .get("ClearBox")
+                .and_then(|t| t.children.get(&train_id))
+                .and_then(|t| t.datasets.get(dataset))
+                .ok_or_else(|| format!("no ClearBox {dataset} for {train_id}"))?;
+            let DatasetData::F64(values) = &grid.data else {
+                return Err(format!("ClearBox {dataset} for {train_id} is not float64").into());
             };
             // Hash as flat little-endian f64 bytes — explicit endianness for
             // cross-platform and cross-language determinism.
-            let bytes: Vec<u8> = cd.data.iter().flat_map(|&v| v.to_le_bytes()).collect();
+            let bytes: Vec<u8> = values.iter().flat_map(|&v| v.to_le_bytes()).collect();
             let digest = Sha256::digest(&bytes);
             println!("{digest:x}");
         }

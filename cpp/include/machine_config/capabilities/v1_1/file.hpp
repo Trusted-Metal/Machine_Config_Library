@@ -171,54 +171,6 @@ class MachineConfigFileV1_1 : public IMachineConfigFile {
     return Result<void>::Ok();
   }
 
-  bool hasOptionalComponents(std::size_t index) const override {
-    assertOpen();
-    if (index >= config_.optical_trains.size()) return false;
-    return config_.optical_trains[index].optional_components.clearbox.has_value();
-  }
-
-  Result<ClearBox> getClearbox(std::size_t index) const override {
-    auto t = getTrain(index);
-    if (!t.ok()) return Result<ClearBox>::Err(t.errorCode(), t.errorMessage());
-    if (!t.value().optional_components.clearbox.has_value()) {
-      return Result<ClearBox>::Err("NotPresent", "clearbox is not present");
-    }
-    return Result<ClearBox>::Ok(*t.value().optional_components.clearbox);
-  }
-
-  Result<void> setClearbox(std::size_t index, const ClearBox& model,
-                           SetMode mode = SetMode::Merge) override {
-    assertOpen();
-    if (index >= config_.optical_trains.size()) {
-      return Result<void>::Err("InvalidIndex", "optical train index out of range");
-    }
-    auto& slot = config_.optical_trains[index].optional_components.clearbox;
-    if (!slot.has_value()) {
-      return Result<void>::Err("NotPresent", "clearbox is not present");
-    }
-    slot = applySetModeT(*slot, model, mode);
-    return Result<void>::Ok();
-  }
-
-  // Converts the already-loaded in-memory ClearBox model rather than
-  // re-reading the file, so this works for both open()- and create()-based
-  // instances alike.
-  Result<CorrectionData> getCorrectionData(std::size_t index) const override {
-    auto cb = getClearbox(index);
-    if (!cb.ok()) return Result<CorrectionData>::Err(cb.errorCode(), cb.errorMessage());
-    CorrectionData cd;
-    cd.data = detail::gridToFlat(cb.value().correction_data, cd.shape);
-    return Result<CorrectionData>::Ok(std::move(cd));
-  }
-
-  Result<CorrectionData> getInverseCorrectionData(std::size_t index) const override {
-    auto cb = getClearbox(index);
-    if (!cb.ok()) return Result<CorrectionData>::Err(cb.errorCode(), cb.errorMessage());
-    CorrectionData cd;
-    cd.data = detail::gridToFlat(cb.value().inverse_correction_data, cd.shape);
-    return Result<CorrectionData>::Ok(std::move(cd));
-  }
-
   // Recomputes the configuration hash from the session's *current* content
   // and compares it to the session's current meta.configuration_hash --
   // fresh, every call. Deliberately live, not cached at open() time: this

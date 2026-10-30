@@ -10,8 +10,8 @@ use crate::capabilities::merge::apply_set_mode;
 use crate::capabilities::result::Result;
 use crate::hash::compute_configuration_hash;
 use crate::models::{
-    nested_to_array3, ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfig,
-    MachineConfigMeta, OpticalTrain, Scanner, ScannerCard,
+    Collimator, LightSource, Machine, MachineConfig, MachineConfigMeta, OpticalTrain, Scanner,
+    ScannerCard,
 };
 use crate::writer::MachineConfigWriter;
 use std::path::{Path, PathBuf};
@@ -215,50 +215,6 @@ impl MachineConfigFileV1_1 {
         Ok(())
     }
 
-    /// Returns Ok(None) when no ClearBox is installed on the train.
-    pub fn get_clearbox(&self, index: usize) -> Result<Option<ClearBox>, CapabilityError> {
-        Ok(self.get_train(index)?.optional_components.clearbox)
-    }
-
-    pub fn set_clearbox(
-        &mut self,
-        index: usize,
-        model: ClearBox,
-        mode: SetMode,
-    ) -> Result<(), CapabilityError> {
-        self.assert_open()?;
-        let n = self.config.optical_trains.len();
-        if index >= n {
-            return Err(CapabilityError::InvalidIndex(format!(
-                "optical train index {index} out of range [0, {n})"
-            )));
-        }
-        let current = self.config.optical_trains[index]
-            .optional_components
-            .clearbox
-            .clone()
-            .ok_or_else(|| CapabilityError::NotPresent("clearbox is not present".into()))?;
-        self.config.optical_trains[index].optional_components.clearbox =
-            Some(apply_set_mode(&current, &model, mode)?);
-        Ok(())
-    }
-
-    pub fn get_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError> {
-        let cb = self
-            .get_clearbox(index)?
-            .ok_or_else(|| CapabilityError::NotPresent("clearbox is not present".into()))?;
-        Ok(grid_to_correction_data(&cb.correction_data))
-    }
-
-    pub fn get_inverse_correction_data(
-        &self,
-        index: usize,
-    ) -> Result<CorrectionData, CapabilityError> {
-        let cb = self
-            .get_clearbox(index)?
-            .ok_or_else(|| CapabilityError::NotPresent("clearbox is not present".into()))?;
-        Ok(grid_to_correction_data(&cb.inverse_correction_data))
-    }
     /// Recomputes the configuration hash from the session's *current*
     /// content and compares it to the session's current
     /// `meta.configuration_hash` — fresh, every call. Deliberately live, not
@@ -380,23 +336,6 @@ impl crate::capabilities::generated::MachineConfigFile for MachineConfigFileV1_1
     ) -> Result<(), CapabilityError> {
         self.set_scanner_card(index, model, mode)
     }
-    fn get_clearbox(&self, index: usize) -> Result<Option<ClearBox>, CapabilityError> {
-        self.get_clearbox(index)
-    }
-    fn set_clearbox(
-        &mut self,
-        index: usize,
-        model: ClearBox,
-        mode: SetMode,
-    ) -> Result<(), CapabilityError> {
-        self.set_clearbox(index, model, mode)
-    }
-    fn get_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError> {
-        self.get_correction_data(index)
-    }
-    fn get_inverse_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError> {
-        self.get_inverse_correction_data(index)
-    }
     fn is_valid(&self) -> bool {
         self.is_valid()
     }
@@ -406,12 +345,4 @@ impl crate::capabilities::generated::MachineConfigFile for MachineConfigFileV1_1
     fn close(&mut self) {
         self.close()
     }
-}
-
-/// Converts a `ClearBox` grid field to a flat [`CorrectionData`] buffer.
-fn grid_to_correction_data(data: &Option<Vec<Vec<Vec<Option<f64>>>>>) -> CorrectionData {
-    let arr = nested_to_array3(data);
-    let shape = arr.shape();
-    let shape = [shape[0], shape[1], shape[2]];
-    CorrectionData { data: arr.into_raw_vec_and_offset().0, shape }
 }

@@ -40,8 +40,6 @@ def render_ts(api: dict, models: dict) -> str:
         "  LightSource,",
         "  Collimator,",
         "  ScannerCard,",
-        "  ClearBox,",
-        "  CorrectionData,",
         '} from "../models.js";',
         "",
         "/** Write mode for set* model APIs. Default is Merge. */",
@@ -56,7 +54,6 @@ def render_ts(api: dict, models: dict) -> str:
         "export type LightSourceModel = LightSource & { extra?: Record<string, unknown> };",
         "export type CollimatorModel = Collimator & { extra?: Record<string, unknown> };",
         "export type ScannerCardModel = ScannerCard & { extra?: Record<string, unknown> };",
-        "export type ClearBoxModel = ClearBox & { extra?: Record<string, unknown> };",
         "export type OpticalTrainModel = OpticalTrain & { extra?: Record<string, unknown> };",
         "",
         "export interface MetaHandle {",
@@ -66,13 +63,6 @@ def render_ts(api: dict, models: dict) -> str:
         "export interface MachineHandle {",
         "  getModel(): MachineModel;",
         "  setModel(model: MachineModel, mode?: SetMode): Result<void, CapabilityError>;",
-        "}",
-        "export interface ClearBoxHandle {",
-        "  getModel(): ClearBoxModel;",
-        "  setModel(model: ClearBoxModel, mode?: SetMode): Result<void, CapabilityError>;",
-        "}",
-        "export interface OptionalComponentsHandle {",
-        "  clearbox(): Result<ClearBoxHandle, CapabilityError>;",
         "}",
         "export interface TrainHandle {",
         "  getModel(): OpticalTrainModel;",
@@ -85,7 +75,6 @@ def render_ts(api: dict, models: dict) -> str:
         "  setCollimator(model: CollimatorModel, mode?: SetMode): Result<void, CapabilityError>;",
         "  getScannerCard(): ScannerCardModel;",
         "  setScannerCard(model: ScannerCardModel, mode?: SetMode): Result<void, CapabilityError>;",
-        "  optionalComponents(): OptionalComponentsHandle | null;",
         "}",
         "export interface TrainCollection {",
         "  readonly length: number;",
@@ -98,8 +87,6 @@ def render_ts(api: dict, models: dict) -> str:
         "  machine(): MachineHandle;",
         "  opticalTrains(): TrainCollection;",
         "  opticalTrain(index: number): Result<TrainHandle, CapabilityError>;",
-        "  getCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;",
-        "  getInverseCorrectionData(trainIndex: number): Result<CorrectionData, CapabilityError>;",
         "  isValid(): boolean;",
         "  save(path?: string): Promise<Result<void, CapabilityError>>;",
         "  close(): void;",
@@ -129,11 +116,6 @@ def render_py(api: dict, models: dict) -> str:
         + "class MachineHandle(Protocol):\n"
         + "    def get_model(self) -> dict[str, Any]: ...\n"
         + "    def set_model(self, model: dict[str, Any], mode: SetMode = SetMode.MERGE) -> Result[None, CapabilityError]: ...\n\n\n"
-        + "class ClearBoxHandle(Protocol):\n"
-        + "    def get_model(self) -> dict[str, Any]: ...\n"
-        + "    def set_model(self, model: dict[str, Any], mode: SetMode = SetMode.MERGE) -> Result[None, CapabilityError]: ...\n\n\n"
-        + "class OptionalComponentsHandle(Protocol):\n"
-        + "    def clearbox(self) -> Result[ClearBoxHandle, CapabilityError]: ...\n\n\n"
         + "class TrainHandle(Protocol):\n"
         + "    def get_model(self) -> dict[str, Any]: ...\n"
         + "    def set_model(self, model: dict[str, Any], mode: SetMode = SetMode.MERGE) -> Result[None, CapabilityError]: ...\n"
@@ -144,8 +126,7 @@ def render_py(api: dict, models: dict) -> str:
         + "    def get_collimator(self) -> dict[str, Any]: ...\n"
         + "    def set_collimator(self, model: dict[str, Any], mode: SetMode = SetMode.MERGE) -> Result[None, CapabilityError]: ...\n"
         + "    def get_scanner_card(self) -> dict[str, Any]: ...\n"
-        + "    def set_scanner_card(self, model: dict[str, Any], mode: SetMode = SetMode.MERGE) -> Result[None, CapabilityError]: ...\n"
-        + "    def optional_components(self) -> OptionalComponentsHandle | None: ...\n\n\n"
+        + "    def set_scanner_card(self, model: dict[str, Any], mode: SetMode = SetMode.MERGE) -> Result[None, CapabilityError]: ...\n\n\n"
         + "class TrainCollection(Protocol):\n"
         + "    def __len__(self) -> int: ...\n"
         + "    def get(self, index: int) -> Result[TrainHandle, CapabilityError]: ...\n"
@@ -166,18 +147,16 @@ def render_rs(api: dict, models: dict) -> str:
     _ = api, models
     # MachineConfigFile mirrors MachineConfigFileV1_0's full public surface
     # (capabilities/v1_0/file.rs) exactly — including where it differs from
-    # C++'s IMachineConfigFile (get_clearbox returns Option<ClearBox> inside
-    # Ok, not a separate has_optional_components + Err(NotPresent); set_train
-    # exists here but not in C++). Never a narrower interface, and never a
-    # copy of another language's shape — see DISPATCH_REGISTRY_PLAN.md.
+    # C++'s IMachineConfigFile (set_train exists here but not in C++). Never a
+    # narrower interface, and never a copy of another language's shape — see
+    # DISPATCH_REGISTRY_PLAN.md.
     return (
         HDR_RS
         + "//! Generated SetMode and facade trait.\n\n"
         + "use crate::capabilities::errors::CapabilityError;\n"
         + "use crate::capabilities::result::Result;\n"
         + "use crate::models::{\n"
-        + "    ClearBox, Collimator, CorrectionData, LightSource, Machine, MachineConfigMeta,\n"
-        + "    OpticalTrain, Scanner, ScannerCard,\n"
+        + "    Collimator, LightSource, Machine, MachineConfigMeta, OpticalTrain, Scanner, ScannerCard,\n"
         + "};\n"
         + "use std::path::Path;\n\n"
         + "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\n"
@@ -214,12 +193,6 @@ def render_rs(api: dict, models: dict) -> str:
         + "\n"
         + "    fn get_scanner_card(&self, index: usize) -> Result<ScannerCard, CapabilityError>;\n"
         + "    fn set_scanner_card(&mut self, index: usize, model: ScannerCard, mode: SetMode) -> Result<(), CapabilityError>;\n"
-        + "\n"
-        + "    fn get_clearbox(&self, index: usize) -> Result<Option<ClearBox>, CapabilityError>;\n"
-        + "    fn set_clearbox(&mut self, index: usize, model: ClearBox, mode: SetMode) -> Result<(), CapabilityError>;\n"
-        + "\n"
-        + "    fn get_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError>;\n"
-        + "    fn get_inverse_correction_data(&self, index: usize) -> Result<CorrectionData, CapabilityError>;\n"
         + "\n"
         + "    fn is_valid(&self) -> bool;\n"
         + "\n"
@@ -273,13 +246,6 @@ def render_hpp(api: dict, models: dict) -> str:
         + "\n"
         + "  virtual Result<ScannerCard> getScannerCard(std::size_t index) const = 0;\n"
         + "  virtual Result<void> setScannerCard(std::size_t index, const ScannerCard& model, SetMode mode = SetMode::Merge) = 0;\n"
-        + "\n"
-        + "  virtual bool hasOptionalComponents(std::size_t index) const = 0;\n"
-        + "  virtual Result<ClearBox> getClearbox(std::size_t index) const = 0;\n"
-        + "  virtual Result<void> setClearbox(std::size_t index, const ClearBox& model, SetMode mode = SetMode::Merge) = 0;\n"
-        + "\n"
-        + "  virtual Result<CorrectionData> getCorrectionData(std::size_t index) const = 0;\n"
-        + "  virtual Result<CorrectionData> getInverseCorrectionData(std::size_t index) const = 0;\n"
         + "\n"
         + "\n"
         + "  virtual bool isValid() const = 0;\n"

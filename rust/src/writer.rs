@@ -230,28 +230,17 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_clearbox_scalar_fields() {
+    fn roundtrip_clearbox_extension_tree() {
         // reference_config_synchronous_sensors.h5, not reference_config.h5,
-        // which deliberately has no sensors — the two fixtures are
-        // byte-identical outside the new group, so every pre-existing
-        // assertion below still holds.
+        // which deliberately has no sensors.
         let orig = MachineConfigReader::open(REFERENCE_SENSORS).unwrap().parse().unwrap();
         let rt = roundtrip(REFERENCE_SENSORS);
-        let cb_orig = orig.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        assert_eq!(cb_orig.ip_address, cb_rt.ip_address);
-        assert_eq!(cb_orig.data_port, cb_rt.data_port);
-        assert_eq!(cb_orig.show_console, cb_rt.show_console);
-        assert_eq!(cb_orig.correction_grid_domain_shape, cb_rt.correction_grid_domain_shape);
-
-        let sensor_orig = &cb_orig.synchronous_sensors["Oxygen Sensor"];
-        let sensor_rt = &cb_rt.synchronous_sensors["Oxygen Sensor"];
-        assert_eq!(sensor_orig.sensor_name, sensor_rt.sensor_name);
         assert_eq!(
-            sensor_orig.derivation_equation_constants,
-            sensor_rt.derivation_equation_constants
+            crate::canonical_digest(&rt.extensions["ClearBox"]).unwrap(),
+            crate::canonical_digest(&orig.extensions["ClearBox"]).unwrap()
         );
-        assert_eq!(sensor_orig.calibration_points, sensor_rt.calibration_points);
+        let cb = &rt.extensions["ClearBox"].children["Optical_Train_01"];
+        assert!(cb.children["Synchronous_Sensors"].children.contains_key("Oxygen Sensor"));
     }
 
     #[test]
@@ -281,40 +270,21 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_correction_data_sha256() {
-        use crate::models::CorrectionData;
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        fn cd_hash(cd: &CorrectionData) -> u64 {
-            let mut h = DefaultHasher::new();
-            for v in &cd.data {
-                v.to_bits().hash(&mut h);
-            }
-            h.finish()
+    fn roundtrip_correction_grids_are_bit_identical() {
+        use crate::extension_contract::DatasetData;
+        let orig = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let rt = roundtrip(REFERENCE);
+        for name in ["Correction_Data", "Inverse_Correction_Data"] {
+            let grid = |c: &crate::models::MachineConfig| match &c.extensions["ClearBox"].children
+                ["Optical_Train_01"]
+                .datasets[name]
+                .data
+            {
+                DatasetData::F64(v) => v.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                _ => panic!("{name} is not float64"),
+            };
+            assert_eq!(grid(&orig), grid(&rt), "{name} changed across write roundtrip");
         }
-
-        let reader = MachineConfigReader::open(REFERENCE).unwrap();
-        let original_corr = reader.get_correction_data(0).unwrap();
-        let original_inv = reader.get_inverse_correction_data(0).unwrap();
-
-        let config = reader.parse_with_binary().unwrap();
-        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
-        MachineConfigWriter::new(&config).write(tmp.path()).unwrap();
-        let rt_reader = MachineConfigReader::open(tmp.path()).unwrap();
-        let rt_corr = rt_reader.get_correction_data(0).unwrap();
-        let rt_inv = rt_reader.get_inverse_correction_data(0).unwrap();
-
-        assert_eq!(
-            cd_hash(&original_corr),
-            cd_hash(&rt_corr),
-            "Correction_Data hash changed across write roundtrip"
-        );
-        assert_eq!(
-            cd_hash(&original_inv),
-            cd_hash(&rt_inv),
-            "Inverse_Correction_Data hash changed across write roundtrip"
-        );
     }
 
     #[test]

@@ -40,11 +40,10 @@ _DICT_BUILDER = Hdf5AdapterV1_0(Path("."))
 def compute_configuration_hash(config: MachineConfig) -> str:
     """Return the SHA-256 hex digest of *config*'s canonical, hash-relevant content.
 
-    Excludes ``meta.configuration_hash`` and ``meta.export_date``; excludes
-    binary correction-grid data (``correction_data``/``inverse_correction_data``/
-    ``raw_bytes``) since a separate, dedicated mechanism (``correction-hash``)
-    already exists for binary-grid integrity. Recursively sorts all object
-    keys; arrays keep their existing element order.
+    Excludes ``meta.configuration_hash`` and ``meta.export_date``; excludes the
+    ``.fc3`` bytes (``raw_bytes``). Extension trees (ClearBox's correction grids
+    included) are hashed in full through their canonical digest. Recursively sorts
+    all object keys; arrays keep their existing element order.
     """
     d = _DICT_BUILDER._config_to_dict(config, include_binary=False)
     # Extension content enters the hash as one canonical digest per extension; configs without

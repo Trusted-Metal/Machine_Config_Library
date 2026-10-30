@@ -68,7 +68,9 @@ class TestInspect:
 
     def test_verbose_shows_clearbox(self, runner):
         result = runner.invoke(main, ["inspect", REFERENCE_H5, "--verbose"])
-        assert "optional_components:" in result.output
+        assert "ClearBox:" in result.output
+        assert "Correction_Data:" in result.output
+        assert "shape:" in result.output
 
     def test_verbose_shows_correction_file(self, runner):
         result = runner.invoke(main, ["inspect", REFERENCE_H5, "--verbose"])
@@ -166,19 +168,18 @@ class TestExportJson:
         # 4-space indent produces wider output than 2-space
         assert len(result_4.output) > len(result_2.output)
 
-    def test_default_excludes_correction_data(self, runner):
+    def test_extension_grids_present_in_full_by_default(self, runner):
         result = runner.invoke(main, ["export-json", REFERENCE_H5])
         parsed = json.loads(result.output)
-        cb = parsed["optical_trains"][0]["optional_components"]["clearbox"]
-        assert "correction_data" not in cb
+        train = parsed["extensions"]["ClearBox"]["children"]["Optical_Train_01"]
+        assert train["datasets"]["Correction_Data"]["shape"] == [257, 257, 2]
+        assert len(train["datasets"]["Correction_Data"]["data"]) == 257 * 257 * 2
 
-    def test_include_binary_flag_adds_correction_data(self, runner):
+    def test_include_binary_flag_adds_raw_bytes(self, runner):
         result = runner.invoke(main, ["export-json", REFERENCE_H5, "--include-binary"])
         assert result.exit_code == 0
         parsed = json.loads(result.output)
-        cb = parsed["optical_trains"][0]["optional_components"]["clearbox"]
-        assert "correction_data" in cb
-        assert len(cb["correction_data"]) > 0
+        assert parsed["optical_trains"][0]["scan_field_correction_file"]["raw_bytes"]
 
 
 # ===========================================================================

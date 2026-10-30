@@ -2,8 +2,6 @@ package models
 
 import "machine-config-go/extension"
 
-import "math"
-
 // StrPtr returns a pointer to s.
 func StrPtr(s string) *string { return &s }
 
@@ -16,91 +14,14 @@ func IntPtr(i int) *int { return &i }
 // BoolPtr returns a pointer to b.
 func BoolPtr(b bool) *bool { return &b }
 
-// CorrectionData holds a raw flat float64 correction grid and its shape.
-// NaN values represent out-of-field cells (identical convention to Python/Rust/Node.js/C++).
-// This type is not part of canonical JSON output; grids are read via dedicated reader APIs.
-type CorrectionData struct {
-	Data  []float64
-	Shape [3]int
-}
-
-// NestedGridFromFlat converts a flat, row-major float64 buffer (as read from
-// an HDF5 dataset) into a nested [][][]*float64, mapping IEEE 754 NaN cells
-// to nil (Rule: NaN in float64 dataset -> JSON null).
-//
-// Lives at the model layer rather than in a version-specific adapter: the
-// NaN<->nil convention is part of ClearBox's own field shape
-// (*[][][]*float64), not an on-disk detail of any particular File_Version,
-// so every adapter can share it.
-func NestedGridFromFlat(flat []float64, shape [3]int) [][][]*float64 {
-	d0, d1, d2 := shape[0], shape[1], shape[2]
-	out := make([][][]*float64, d0)
-	idx := 0
-	for i := range out {
-		out[i] = make([][]*float64, d1)
-		for j := range out[i] {
-			out[i][j] = make([]*float64, d2)
-			for k := range out[i][j] {
-				v := flat[idx]
-				idx++
-				if math.IsNaN(v) {
-					out[i][j][k] = nil
-				} else {
-					vv := v
-					out[i][j][k] = &vv
-				}
-			}
-		}
-	}
-	return out
-}
-
-// FlatFromNestedGrid converts *[][][]*float64 to a row-major flat []float64
-// of length 257*257*2. A nil outer pointer produces all zeros; nil cell
-// pointers become NaN. Mirrors NestedGridFromFlat above. Uses the canonical
-// IEEE 754 quiet NaN (0x7FF8000000000000), matching the Python/Rust/C++
-// convention.
-func FlatFromNestedGrid(data *[][][]*float64) []float64 {
-	const (
-		d0    = 257
-		d1    = 257
-		d2    = 2
-		total = d0 * d1 * d2
-	)
-	qNaN := math.Float64frombits(0x7FF8000000000000)
-	flat := make([]float64, total)
-	if data == nil {
-		return flat
-	}
-	outer := *data
-	for i := 0; i < d0; i++ {
-		for j := 0; j < d1; j++ {
-			for k := 0; k < d2; k++ {
-				idx := i*d1*d2 + j*d2 + k
-				if i < len(outer) && j < len(outer[i]) && k < len(outer[i][j]) {
-					cell := outer[i][j][k]
-					if cell == nil {
-						flat[idx] = qNaN
-					} else {
-						flat[idx] = *cell
-					}
-				} else {
-					flat[idx] = qNaN
-				}
-			}
-		}
-	}
-	return flat
-}
-
 // MachineConfig is the top-level configuration document.
 type MachineConfig struct {
 	Meta          MachineConfigMeta `json:"meta"`
 	Machine       Machine           `json:"machine"`
 	OpticalTrains []OpticalTrain    `json:"optical_trains"`
 	// Extensions holds opaque extension trees keyed by group name under Extensions/. Core reads and
-	// writes them verbatim (see docs/EXTENSION_CONTRACT.md); ClearBox is modelled by core and never
-	// listed here.
+	// writes them verbatim (see docs/EXTENSION_CONTRACT.md). ClearBox is one of them: core carries it
+	// as an opaque tree in the File_Version 1.1 layout for both file versions (clearbox_legacy.go).
 	Extensions map[string]*extension.Tree `json:"extensions,omitempty"`
 }
 
@@ -203,7 +124,6 @@ type OpticalTrain struct {
 	LightSource                       LightSource              `json:"light_source"`
 	Collimator                        Collimator               `json:"collimator"`
 	ScannerCard                       ScannerCard              `json:"scanner_card"`
-	OptionalComponents                OptionalComponents       `json:"optional_components"`
 	ScanFieldCorrectionFile           *ScanFieldCorrectionFile `json:"scan_field_correction_file"`
 }
 
@@ -304,48 +224,6 @@ type ScannerCard struct {
 	SamplePeriodUnit      *string  `json:"sample_period_unit"`
 }
 
-// OptionalComponents holds optional add-on hardware on an optical train.
-type OptionalComponents struct {
-	Clearbox *ClearBox `json:"clearbox"`
-}
-
-// ClearBox holds ClearBox add-on component configuration.
-type ClearBox struct {
-	IPAddress                 string          `json:"ip_address"`
-	SerialNumber              *string         `json:"serial_number"`
-	DataPort                  *int            `json:"data_port"`
-	ServerPort                *int            `json:"server_port"`
-	ActualTimingOffset        *int            `json:"actual_timing_offset"`
-	CommandedTimingOffset     *int            `json:"commanded_timing_offset"`
-	CorrectionData            *[][][]*float64 `json:"correction_data,omitempty"`
-	InverseCorrectionData     *[][][]*float64 `json:"inverse_correction_data,omitempty"`
-	Manufacturer              *string         `json:"manufacturer"`
-	Model                     *string         `json:"model"`
-	OutputPath                *string         `json:"output_path"`
-	SelectedCamera            *string         `json:"selected_camera"`
-	CustomVideoFormat         *string         `json:"custom_video_format"`
-	VideoOutput               *string         `json:"video_output"`
-	ShowConsole               *bool           `json:"show_console"`
-	SoftwareTriggerDelay      *int            `json:"software_trigger_delay"`
-	CorrectionGridDomainShape *string         `json:"correction_grid_domain_shape"`
-	InverseGridDomainShape    *string         `json:"inverse_grid_domain_shape"`
-	// omitempty: omitted entirely (not "{}") when there are no sensors —
-	// matches Rust's skip_serializing_if and Python's _clearbox_to_dict
-	// choice to omit the key when empty, so every fixture that doesn't use
-	// this feature stays byte-for-byte identical in JSON shape to before it
-	// existed. Same optional-whole-feature shape as MachineConfig.Opcua,
-	// not OpcuaConfig.Triggers (which is always present, even as {}) —
-	// deliberately different from that precedent.
-	SynchronousSensors map[string]SynchronousSensor `json:"synchronous_sensors,omitempty"`
-	// FirmwareVersion: v1.1 addition (Change 1); nil for v1.0 files, no
-	// on-disk source there. omitempty for the same byte-identical-output
-	// reasoning as SynchronousSensors above.
-	FirmwareVersion *string `json:"firmware_version,omitempty"`
-	// PowerCharacterization is the only representation of the
-	// volts<->watts conversion concept, for files of either version.
-	PowerCharacterization *PowerCharacterization `json:"power_characterization,omitempty"`
-}
-
 // EquationConstant is one named constant used to derive an equation (e.g.
 // `a`/`b` for a Log-Linear fit, `c0`..`cN` for a polynomial fit). Stored
 // on disk as a 64-byte fixed-length UTF-8 string (see
@@ -358,8 +236,8 @@ type EquationConstant struct {
 }
 
 // CalibrationPoint is one raw calibration pair. InputValue is in whatever
-// unit SynchronousSensor.InputType implies; OutputValue is in whatever unit
-// SynchronousSensor.SensorOutputSpace implies (no per-row unit tag) — see
+// unit the owning extension's input type implies; OutputValue is in whatever unit
+// the owning extension's output space implies (no per-row unit tag) — see
 // SYNCHRONOUS_SENSOR_PLAN.md's "Why compound datasets" for the convention.
 type CalibrationPoint struct {
 	InputValue  float64 `json:"input_value"`
@@ -383,33 +261,6 @@ type PowerCharacterization struct {
 	UnitsDerivedQuantity        *string            `json:"units_derived_quantity"`
 	DerivationEquationConstants []EquationConstant `json:"derivation_equation_constants"`
 	CharacterizationPoints      []CalibrationPoint `json:"characterization_points"`
-}
-
-// SynchronousSensor holds one Synchronous Sensor record. The map key (on
-// ClearBox.SynchronousSensors) is a free-form label chosen by the file's
-// author — not required to equal any attribute value inside the sensor's
-// own group (same convention as OpcuaConfig.Triggers's keys).
-type SynchronousSensor struct {
-	Enabled                     *bool              `json:"enabled"`
-	SensorName                  *string            `json:"sensor_name"`
-	SensorOutputRangeLow        *float64           `json:"sensor_output_range_low"`
-	SensorOutputRangeHigh       *float64           `json:"sensor_output_range_high"`
-	SensorOutputSpace           *string            `json:"sensor_output_space"`
-	SensorModel                 *string            `json:"sensor_model"`
-	SensorManufacturer          *string            `json:"sensor_manufacturer"`
-	SensorScope                 *string            `json:"sensor_scope"`
-	UnitsDerivedQuantity        *string            `json:"units_derived_quantity"`
-	PortID                      *int               `json:"port_id"`
-	SensorType                  *string            `json:"sensor_type"`
-	InputType                   *string            `json:"input_type"`
-	AlgorithmType               *string            `json:"algorithm_type"`
-	AlgorithmEquation           *string            `json:"algorithm_equation"`
-	CalibrationSource           *string            `json:"calibration_source"`
-	CalibrationVerified         *bool              `json:"calibration_verified"`
-	SamplePeriod                *float64           `json:"sample_period"`
-	Metadata                    *string            `json:"metadata"`
-	DerivationEquationConstants []EquationConstant `json:"derivation_equation_constants"`
-	CalibrationPoints           []CalibrationPoint `json:"calibration_points"`
 }
 
 // ScanFieldCorrectionFile holds metadata for the embedded .fc3 scan-field correction file.

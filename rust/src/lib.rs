@@ -3,6 +3,7 @@
 
 pub mod builder;
 pub mod capabilities;
+mod clearbox_legacy;
 pub mod error;
 pub mod extensions;
 pub mod hash;

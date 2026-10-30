@@ -141,8 +141,9 @@ def test_reads_fixtures_written_by_other_languages(name):
     assert canonical_digest(config.extensions["Private_Ext"]) == PINNED_DIGEST
 
 
-def test_core_does_not_expose_clearbox_as_an_extension():
-    assert "ClearBox" not in Hdf5AdapterV1_1(str(FIXTURES / "reference_config_v1_1.h5")).parse().extensions
+def test_clearbox_is_an_ordinary_extension_in_v1_1():
+    config = Hdf5AdapterV1_1(str(FIXTURES / "reference_config_v1_1.h5")).parse()
+    assert "ClearBox" in config.extensions
 
 
 def test_writer_rejects_invalid_tree_before_creating_the_file(tmp_path):
@@ -154,11 +155,13 @@ def test_writer_rejects_invalid_tree_before_creating_the_file(tmp_path):
     assert not out.exists()
 
 
-def test_writer_rejects_core_modelled_extension_name(tmp_path):
+def test_writer_accepts_a_clearbox_extension_tree(tmp_path):
     config = v1_1_config()
-    config.extensions["ClearBox"] = ExtensionTree()
-    with pytest.raises(ValueError):
-        Hdf5WriterV1_1(config).write(str(tmp_path / "never.h5"))
+    config.extensions["ClearBox"] = ExtensionTree(attrs={"Output_Path": Attr("utf8", "x")})
+    out = tmp_path / "clearbox.h5"
+    Hdf5WriterV1_1(config).write(str(out))
+    back = Hdf5AdapterV1_1(str(out)).parse()
+    assert back.extensions["ClearBox"].attrs["Output_Path"].value == "x"
 
 
 # --------------------------------------------------------------------------- legacy 1.0

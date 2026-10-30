@@ -17,6 +17,7 @@ mod validate;
 pub use digest::canonical_digest;
 pub use json::{tree_from_json, tree_to_json};
 pub use tree::{
-    Attr, AttrValue, Dataset, DatasetData, Dtype, ExtensionTree, Scalar, EXTENSION_CONTRACT_VERSION,
+    Attr, AttrValue, ColumnData, Dataset, DatasetData, Dtype, ExtensionTree, Scalar, Table, TableField,
+    EXTENSION_CONTRACT_VERSION,
 };
 pub use validate::{validate_node_name, validate_tree, ContractError};

@@ -15,6 +15,8 @@ from machine_config.extension_contract import (
     Dataset,
     ExtensionContractError,
     ExtensionTree,
+    Table,
+    TableField,
     validate_tree,
 )
 
@@ -65,6 +67,36 @@ def _read_attrs(obj, path: str) -> dict:
     return {name: _read_attr(obj, name, _join(path, f"@{name}")) for name in obj.attrs.keys()}
 
 
+def _member_field(name: str, dt: np.dtype, path: str) -> TableField:
+    if dt.names is not None or dt.subdtype is not None:
+        raise ExtensionContractError(path, "nested compound and array members are not supported")
+    if h5py.check_string_dtype(dt) is not None:
+        info = h5py.check_string_dtype(dt)
+        if info.length is None:
+            raise ExtensionContractError(
+                path, "variable-length strings are not supported in a compound type"
+            )
+        return TableField(name, "utf8", dt.itemsize)
+    if dt.kind == "S":
+        return TableField(name, "utf8", dt.itemsize)
+    if dt.byteorder == ">":
+        raise ExtensionContractError(path, "big-endian compound members are not supported")
+    return TableField(name, _dtype_name(dt, path))
+
+
+def _read_table(obj: h5py.Dataset, path: str) -> Table:
+    if len(obj.shape) != 1:
+        raise ExtensionContractError(path, f"compound datasets must be 1-D, got rank {len(obj.shape)}")
+    fields = [_member_field(n, obj.dtype.fields[n][0], _join(path, n)) for n in obj.dtype.names]
+    rows = int(obj.shape[0])
+    data = obj[()]
+    columns = {}
+    for f in fields:
+        col = data[f.name]
+        columns[f.name] = [_text(x) for x in col] if f.dtype == "utf8" else col.tolist()
+    return Table(fields, rows, columns, _read_attrs(obj, path))
+
+
 def read_extension_tree(group: h5py.Group, path: str = "") -> ExtensionTree:
     """Read a group and everything below it verbatim; unsupported HDF5 types fail with their path."""
     tree = ExtensionTree(attrs=_read_attrs(group, path))
@@ -74,6 +106,9 @@ def read_extension_tree(group: h5py.Group, path: str = "") -> ExtensionTree:
         if isinstance(obj, h5py.Group):
             tree.children[name] = read_extension_tree(obj, child_path)
         elif isinstance(obj, h5py.Dataset):
+            if obj.dtype.names is not None:
+                tree.tables[name] = _read_table(obj, child_path)
+                continue
             dtype = _dtype_name(obj.dtype, child_path)
             if dtype == "utf8":
                 raise ExtensionContractError(child_path, "string datasets are not supported")
@@ -105,8 +140,28 @@ def _write_group(group: h5py.Group, tree: ExtensionTree) -> None:
         arr = np.array(ds.data, dtype=_NP_DTYPE[ds.dtype]).reshape(tuple(ds.shape))
         dset = group.create_dataset(name, data=arr)
         _write_attrs(dset, ds.attrs)
+    for name, table in tree.tables.items():
+        _write_table(group, name, table)
     for name, child in tree.children.items():
         _write_group(group.create_group(name), child)
+
+
+def _write_table(group: h5py.Group, name: str, table: Table) -> None:
+    members = []
+    for f in table.fields:
+        if f.dtype == "utf8":
+            members.append((f.name, h5py.string_dtype("utf-8", f.size)))
+        else:
+            members.append((f.name, _NP_DTYPE[f.dtype]))
+    data = np.zeros(table.rows, dtype=np.dtype(members))
+    for f in table.fields:
+        column = table.columns[f.name]
+        if f.dtype == "utf8":
+            data[f.name] = [s.encode("utf-8") for s in column]
+        else:
+            data[f.name] = column
+    dset = group.create_dataset(name, data=data)
+    _write_attrs(dset, table.attrs)
 
 
 def write_extension_tree(parent: h5py.Group, name: str, tree: ExtensionTree) -> None:

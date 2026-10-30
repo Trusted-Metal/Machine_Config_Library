@@ -38,8 +38,8 @@ reader = MachineConfigReader(DUMMY)
 for i, train in enumerate(file.optical_trains()):
     s = train.get_scanner()
     print(f"  Train {i + 1}  offset x={s.get('scan_head_offset_x')}, y={s.get('scan_head_offset_y')}")
-    cd = reader.get_correction_data(i)
-    print(f"           correction grid {cd.shape}")
+    cd = reader.parse().extensions["ClearBox"].children[f"Optical_Train_{i + 1:02d}"].datasets["Correction_Data"]
+    print(f"           correction grid {tuple(cd.shape)}")
 print()
 
 NEW_OFFSETS = [(-91.5, 24.0), (91.5, -24.0)]
@@ -80,9 +80,9 @@ for i, (ex, ey) in enumerate(NEW_OFFSETS):
         failures.append(f"  train{i + 1} offset_x: expected {ex}, got {s.get('scan_head_offset_x')}")
     if s.get("scan_head_offset_y") != ey:
         failures.append(f"  train{i + 1} offset_y: expected {ey}, got {s.get('scan_head_offset_y')}")
-    cd = reader2.get_correction_data(i)
+    cd = reader2.parse().extensions["ClearBox"].children[f"Optical_Train_{i + 1:02d}"].datasets["Correction_Data"]
     if tuple(cd.shape) != (257, 257, 2):
-        failures.append(f"  train{i + 1} correction shape: expected (257, 257, 2), got {cd.shape}")
+        failures.append(f"  train{i + 1} correction shape: expected (257, 257, 2), got {tuple(cd.shape)}")
 
 print("After calibration:")
 for i, train in enumerate(updated.optical_trains()):

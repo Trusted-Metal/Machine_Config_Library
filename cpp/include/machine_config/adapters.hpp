@@ -23,8 +23,6 @@ public:
     virtual MachineConfig parseWithBinary() const = 0;
     virtual std::string toJson(int indent, bool include_binary) const = 0;
     virtual nlohmann::json getRawGroup(const std::string& hdf5_path) const = 0;
-    virtual CorrectionData getCorrectionData(size_t train_index) const = 0;
-    virtual CorrectionData getInverseCorrectionData(size_t train_index) const = 0;
     virtual std::vector<uint8_t> getScanFieldCorrectionBytes(size_t train_index) const = 0;
 };
 

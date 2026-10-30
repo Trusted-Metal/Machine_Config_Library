@@ -2,38 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-import numpy as np
-
 from machine_config.extension_contract import ExtensionTree
-
-
-def nan_array_to_nested(arr: np.ndarray) -> list:
-    """Convert a float64 ndarray to a nested Python list, mapping NaN -> None.
-
-    Lives at the model layer rather than in a version-specific adapter: the
-    NaN<->None convention is part of ClearBox's own field shape
-    (``list[list[list[float | None]]] | None``), not an on-disk detail of any
-    particular File_Version, so every adapter can share it.
-    """
-    obj = arr.astype(object)
-    obj[np.isnan(arr)] = None
-    return obj.tolist()
-
-
-def nested_to_array(data: Optional[list], shape: tuple = (257, 257, 2)) -> np.ndarray:
-    """Convert a nested Python list (None = NaN) back to a float64 ndarray.
-
-    Mirrors :func:`nan_array_to_nested` above; a ``None`` (or absent) grid
-    produces a zero-filled array of ``shape``.
-    """
-    if data is None:
-        return np.zeros(shape, dtype=np.float64)
-    obj = np.array(data, dtype=object)
-    result = np.empty(obj.shape, dtype=np.float64)
-    result.flat[:] = [
-        float("nan") if v is None else float(v) for v in obj.flat
-    ]
-    return result
 
 
 @dataclass
@@ -79,16 +48,10 @@ class CalibrationPoint:
 
 @dataclass
 class PowerCharacterization:
-    """v1.1 addition (Changes 3/4): a structured algorithm + equation +
-    constants + characterization points describing a power conversion.
-    Shared, identical dataclass for both ``ClearBox.power_characterization``
-    (ClearBox's Volts->Watts fit; migrated data has real
-    ``derivation_equation_constants`` but zero ``characterization_points``)
-    and ``LightSource.power_characterization`` (Light_Source's Volts->Watts
-    fit; migrated data is the inverse — zero ``derivation_equation_constants``,
-    real ``characterization_points``) — same *kind* of thing at two different
-    HDF5 paths, not the same instance. See ``docs/migrations/v1_0_to_v1_1.md``
-    Changes 3/4 for the full derivation rules.
+    """A structured algorithm + equation + constants + characterization points describing a power
+    conversion. ``LightSource.power_characterization`` uses it; ClearBox's own
+    Power_Characterization is an opaque extension tree and is not modelled here. See
+    ``docs/migrations/v1_0_to_v1_1.md`` Changes 3/4 for the derivation rules.
     """
     algorithm_type: Optional[str]
     algorithm_equation: Optional[str]
@@ -96,82 +59,6 @@ class PowerCharacterization:
     units_derived_quantity: Optional[str]
     derivation_equation_constants: list[EquationConstant]
     characterization_points: list[CalibrationPoint]
-
-
-@dataclass
-class SynchronousSensor:
-    """A synchronous sensor attached to a ClearBox. HDF5 source: one
-    sub-group under .../ClearBox/Synchronous_Sensors/<key>/ — see
-    ClearBox.synchronous_sensors for what <key> means.
-    """
-    enabled: Optional[bool]                              # HDF5 int 0/1
-    sensor_name: Optional[str]
-    sensor_output_range_low: Optional[float]
-    sensor_output_range_high: Optional[float]
-    sensor_output_space: Optional[str]
-    sensor_model: Optional[str]
-    sensor_manufacturer: Optional[str]
-    sensor_scope: Optional[str]
-    units_derived_quantity: Optional[str]
-    port_id: Optional[int]
-    sensor_type: Optional[str]
-    input_type: Optional[str]
-    algorithm_type: Optional[str]
-    algorithm_equation: Optional[str]
-    calibration_source: Optional[str]
-    calibration_verified: Optional[bool]                 # HDF5 int 0/1
-    sample_period: Optional[float]
-    metadata: Optional[str]
-    derivation_equation_constants: list[EquationConstant]
-    calibration_points: list[CalibrationPoint]
-
-
-@dataclass
-class ClearBox:
-    ip_address: str
-    serial_number: Optional[str]
-    data_port: Optional[int]
-    server_port: Optional[int]
-    actual_timing_offset: Optional[int]
-    commanded_timing_offset: Optional[int]
-    correction_data: list[list[list[float | None]]] | None
-    inverse_correction_data: list[list[list[float | None]]] | None
-    manufacturer: Optional[str]
-    model: Optional[str]
-    output_path: Optional[str]
-    selected_camera: Optional[str]
-    custom_video_format: Optional[str]
-    video_output: Optional[str]
-    show_console: Optional[bool]                         # HDF5 int 0/1
-    software_trigger_delay: Optional[int]
-    correction_grid_domain_shape: Optional[str]
-    inverse_grid_domain_shape: Optional[str]
-    # Key = free-form sensor label (HDF5 sub-group name under
-    # ClearBox/Synchronous_Sensors/) — an arbitrary value chosen by the
-    # file's author, not required to match any attribute inside that
-    # sensor's own group (e.g. "Oxygen Sensor", "O2_Port5", anything). No
-    # Synchronous_Sensors group on disk is represented identically to an
-    # empty dict here — there is no separate "absent" state to track.
-    synchronous_sensors: dict[str, SynchronousSensor]
-    # v1.1 addition (Change 1); None for v1.0 files, no on-disk source there.
-    firmware_version: Optional[str] = None
-    # The only representation of this concept, for files of either version.
-    # v1.0's Volts_To_Watts_Algorithm/Params is a lossless flat encoding of
-    # the same data (see power_characterization.py's forward/backward
-    # functions) — the StableModel no longer carries that flat shape as a
-    # separate field (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md).
-    power_characterization: Optional[PowerCharacterization] = None
-
-
-@dataclass
-class OptionalComponents:
-    """Optional add-on hardware that may or may not be installed on an optical train.
-
-    Maps to the ``Optional_Components`` HDF5 group under each ``Optical_Train_NN``.
-    Fields are ``None`` when the corresponding hardware is not present.
-    New optional components are added here as the schema grows.
-    """
-    clearbox: Optional[ClearBox] = None
 
 
 @dataclass
@@ -286,8 +173,8 @@ class LightSource:
     power_min_nominal_unit: Optional[str]
     power_bit_resolution: Optional[float]                # HDF5 stores as string; parsed via _read_float
     power_bit_resolution_unit: Optional[str]
-    # The only representation of this concept, for files of either version —
-    # see ClearBox.power_characterization's comment.
+    # The only representation of this concept, for files of either version
+    # (v1.0's flat Watts_To_Volts_Algorithm/Params is a lossless encoding of it).
     power_characterization: Optional[PowerCharacterization] = None
 
 
@@ -327,7 +214,6 @@ class OpticalTrain:
     light_source: LightSource
     collimator: Collimator                                        # required; see Rule 7
     scanner_card: ScannerCard                                     # required; see Rule 7
-    optional_components: OptionalComponents                       # always present; contents vary
     scan_field_correction_file: Optional[ScanFieldCorrectionFile]
 
 

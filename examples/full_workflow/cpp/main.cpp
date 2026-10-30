@@ -11,6 +11,8 @@
 #include "machine_config/machine_config.hpp"
 
 #include <array>
+#include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -31,6 +33,14 @@ static std::string fmtOpt(std::optional<double> v) {
     std::ostringstream ss;
     ss << *v;
     return ss.str();
+}
+
+// ClearBox is an opaque extension tree; the correction grid lives under
+// extensions["ClearBox"] / Optical_Train_NN / Correction_Data.
+static std::vector<std::uint64_t> correctionShape(MachineConfigReader& reader, std::size_t i) {
+    char key[32];
+    std::snprintf(key, sizeof key, "Optical_Train_%02d", static_cast<int>(i) + 1);
+    return reader.parse().extensions.at("ClearBox").children.at(key).datasets.at("Correction_Data").shape;
 }
 
 int main() {
@@ -65,9 +75,9 @@ int main() {
             std::cout << "  Train " << (i + 1)
                       << "  offset x=" << fmtOpt(s.value().scan_head_offset_x)
                       << ", y=" << fmtOpt(s.value().scan_head_offset_y) << "\n";
-            auto cd = reader.getCorrectionData(i);
-            std::cout << "           correction grid " << cd.shape[0] << "x"
-                      << cd.shape[1] << "x" << cd.shape[2] << "\n";
+            auto shape = correctionShape(reader, i);
+            std::cout << "           correction grid " << shape[0] << "x"
+                      << shape[1] << "x" << shape[2] << "\n";
         }
         std::cout << "\n";
 
@@ -125,8 +135,8 @@ int main() {
                                    " offset_y: expected " + std::to_string(ey) +
                                    ", got " + fmtOpt(got_y));
             try {
-                auto cd = reader2.getCorrectionData(i);
-                if (cd.shape[0] != 257 || cd.shape[1] != 257 || cd.shape[2] != 2)
+                auto shape = correctionShape(reader2, i);
+                if (shape[0] != 257 || shape[1] != 257 || shape[2] != 2)
                     failures.push_back("  train" + std::to_string(i + 1) +
                                        " correction shape mismatch");
             } catch (const std::exception& e) {

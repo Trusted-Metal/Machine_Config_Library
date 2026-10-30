@@ -18,6 +18,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -25,7 +26,7 @@
 
 namespace machine_config::extension {
 
-inline constexpr const char* CONTRACT_VERSION = "0.1.0";
+inline constexpr const char* CONTRACT_VERSION = "0.1.1";
 
 // Fixed-width storage types; each maps 1:1 to an HDF5 type. Value shapes by dtype:
 // utf8 -> string / vector<string>, i8..i64 -> int64_t / vector<int64_t>,
@@ -66,11 +67,34 @@ struct Dataset {
     std::map<std::string, Attr> attrs;
 };
 
-/// One group. Order is not significant; the canonical form sorts by UTF-8 bytes.
+/// One column of a Table. `size` is the fixed byte length of a utf8 column and 0 for numeric ones.
+struct TableField {
+    std::string name;
+    std::string dtype;
+    std::uint64_t size = 0;
+};
+
+/// The values of one table column, in the dtype's C++ shape.
+using ColumnData = std::variant<std::vector<std::string>, std::vector<std::int64_t>,
+                                std::vector<std::uint64_t>, std::vector<double>>;
+
+/// 1-D compound dataset (HDF5 compound type): one row per record, one named column per field.
+/// `fields` order is the compound member order and is significant; `columns[name]` holds `rows`
+/// values.
+struct Table {
+    std::vector<TableField> fields;
+    std::uint64_t rows = 0;
+    std::map<std::string, ColumnData> columns;
+    std::map<std::string, Attr> attrs;
+};
+
+/// One group. Order is not significant; the canonical form sorts by UTF-8 bytes. `tables` is empty
+/// unless used, so a tree without compound data is encoded and hashed exactly as in contract 0.1.0.
 struct Tree {
     std::map<std::string, Attr> attrs;
     std::map<std::string, Tree> children;
     std::map<std::string, Dataset> datasets;
+    std::map<std::string, Table> tables;
 };
 
 namespace detail {
@@ -172,6 +196,55 @@ inline std::string shapeText(const std::vector<std::uint64_t>& shape) {
     return s + "]";
 }
 
+inline std::size_t columnLen(const ColumnData& c) {
+    return std::visit([](const auto& v) { return v.size(); }, c);
+}
+
+inline void validateTable(const Table& table, const std::string& path) {
+    if (table.fields.empty()) throw ContractError(path, "a table needs at least one field");
+    std::set<std::string> names;
+    for (const TableField& f : table.fields) {
+        std::string fieldPath = joinPath(path, f.name);
+        validateNodeName(f.name, fieldPath);
+        if (!names.insert(f.name).second) throw ContractError(fieldPath, "duplicate field name");
+        if (dtypeTags().find(f.dtype) == dtypeTags().end())
+            throw ContractError(fieldPath, "unknown dtype \"" + f.dtype + "\"");
+        auto it = table.columns.find(f.name);
+        if (it == table.columns.end()) throw ContractError(fieldPath, "missing column");
+        const ColumnData& column = it->second;
+        if (f.dtype == "utf8") {
+            if (f.size < 1) throw ContractError(fieldPath, "a utf8 field needs a positive integer size");
+        } else if (f.size != 0) {
+            throw ContractError(fieldPath, "size is only valid for utf8 fields");
+        }
+        if (columnLen(column) != table.rows)
+            throw ContractError(fieldPath, "column length " + std::to_string(columnLen(column)) +
+                                              " does not match " + std::to_string(table.rows) + " rows");
+        const bool typeOk = (f.dtype == "utf8" && std::holds_alternative<std::vector<std::string>>(column)) ||
+                            (isSigned(f.dtype) && std::holds_alternative<std::vector<std::int64_t>>(column)) ||
+                            (isUnsigned(f.dtype) && std::holds_alternative<std::vector<std::uint64_t>>(column)) ||
+                            (isFloat(f.dtype) && std::holds_alternative<std::vector<double>>(column));
+        if (!typeOk)
+            throw ContractError(fieldPath, "column element type does not match the field dtype " + f.dtype);
+        std::visit(
+            [&](const auto& v) {
+                using V = std::decay_t<decltype(v)>;
+                checkValue(f.dtype, AttrValue{V(v)}, fieldPath);
+            },
+            column);
+        if (const auto* strs = std::get_if<std::vector<std::string>>(&column)) {
+            for (std::size_t i = 0; i < strs->size(); ++i)
+                if ((*strs)[i].size() > f.size)
+                    throw ContractError(fieldPath + "[" + std::to_string(i) + "]",
+                                        std::to_string((*strs)[i].size()) + " UTF-8 bytes do not fit the " +
+                                            std::to_string(f.size) + "-byte field");
+        }
+    }
+    for (const auto& entry : table.columns)
+        if (!names.count(entry.first)) throw ContractError(joinPath(path, entry.first), "column has no matching field");
+    validateAttrs(table.attrs, path);
+}
+
 }  // namespace detail
 
 /// Throws ContractError naming the first invalid node. `path` prefixes every reported location
@@ -211,6 +284,13 @@ inline void validate(const Tree& t, const std::string& path = "") {
             ds.data);
         detail::validateAttrs(ds.attrs, dsPath);
     }
+    for (const auto& [name, table] : t.tables) {
+        std::string tablePath = detail::joinPath(path, name);
+        detail::validateNodeName(name, tablePath);
+        if (t.children.count(name) || t.datasets.count(name))
+            throw ContractError(tablePath, "a table cannot share a name with a dataset or child group");
+        detail::validateTable(table, tablePath);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -223,6 +303,14 @@ inline void validate(const Tree& t, const std::string& path = "") {
 //   attr    = name, u8 dtypeTag, u8 kind (0 scalar, 1 array), [u32 count], value*
 //   dataset = u8 dtypeTag, u32 rank, u64 dim*, u64 count, value*, attr map (as in tree)
 //   value   = utf8: u32 byteLength + bytes; ints: fixed width; f32/f64: IEEE bits
+//
+// Appended after the datasets only when a tree has tables (so trees without them hash as in 0.1.0):
+//
+//   tables  = u32 0xFFFFFFFF, u32 tableCount, (name table)*
+//   table   = u32 fieldCount, (name, u8 dtypeTag, u32 size)*, u64 rows, column values*, attr map
+//
+// Table fields keep their declared order (it is the compound member order); each column's values
+// follow in that order, row by row within a column.
 //
 // Entries are sorted by the UTF-8 bytes of their names (std::map<std::string> already compares
 // bytewise). NaN is the quiet NaN and -0 is +0.
@@ -307,6 +395,24 @@ inline void putTree(std::string& out, const Tree& t) {
         putLE(out, dataLen(ds.data), 8);
         std::visit([&](const auto& v) { for (const auto& e : v) putElement(out, ds.dtype, e); }, ds.data);
         putAttrs(out, ds.attrs);
+    }
+    if (!t.tables.empty()) {
+        putLE(out, 0xFFFFFFFFu, 4);
+        putLE(out, t.tables.size(), 4);
+        for (const auto& [name, table] : t.tables) {
+            putName(out, name);
+            putLE(out, table.fields.size(), 4);
+            for (const TableField& f : table.fields) {
+                putName(out, f.name);
+                out.push_back(static_cast<char>(dtypeTags().at(f.dtype)));
+                putLE(out, f.size, 4);
+            }
+            putLE(out, table.rows, 8);
+            for (const TableField& f : table.fields)
+                std::visit([&](const auto& v) { for (const auto& e : v) putElement(out, f.dtype, e); },
+                           table.columns.at(f.name));
+            putAttrs(out, table.attrs);
+        }
     }
 }
 
@@ -470,6 +576,35 @@ inline std::map<std::string, Attr> attrsFromJson(const nlohmann::json& j, const 
     return out;
 }
 
+inline Table tableFromJson(const nlohmann::json& j, const std::string& path) {
+    Table table;
+    if (!j.contains("rows") || !j.at("rows").is_number_unsigned())
+        throw ContractError(path, "missing rows");
+    table.rows = j.at("rows").get<std::uint64_t>();
+    const nlohmann::json columns = j.contains("columns") ? j.at("columns") : nlohmann::json::object();
+    if (j.contains("fields")) {
+        for (const auto& fj : j.at("fields")) {
+            TableField f;
+            f.name = fj.value("name", std::string());
+            f.dtype = fj.value("dtype", std::string());
+            f.size = fj.value("size", std::uint64_t{0});
+            std::string fieldPath = joinPath(path, f.name);
+            if (dtypeTags().find(f.dtype) == dtypeTags().end())
+                throw ContractError(fieldPath, "unknown dtype \"" + f.dtype + "\"");
+            if (!columns.contains(f.name) || !columns.at(f.name).is_array())
+                throw ContractError(fieldPath, "missing column");
+            const nlohmann::json& raw = columns.at(f.name);
+            if (f.dtype == "utf8") table.columns[f.name] = vectorFromJson<std::string>(f.dtype, raw, fieldPath);
+            else if (isSigned(f.dtype)) table.columns[f.name] = vectorFromJson<std::int64_t>(f.dtype, raw, fieldPath);
+            else if (isUnsigned(f.dtype)) table.columns[f.name] = vectorFromJson<std::uint64_t>(f.dtype, raw, fieldPath);
+            else table.columns[f.name] = vectorFromJson<double>(f.dtype, raw, fieldPath);
+            table.fields.push_back(std::move(f));
+        }
+    }
+    if (j.contains("attrs")) table.attrs = attrsFromJson(j.at("attrs"), path);
+    return table;
+}
+
 inline Tree treeFromJsonImpl(const nlohmann::json& j, const std::string& path) {
     Tree t;
     if (j.contains("attrs")) t.attrs = attrsFromJson(j.at("attrs"), path);
@@ -493,6 +628,9 @@ inline Tree treeFromJsonImpl(const nlohmann::json& j, const std::string& path) {
             t.datasets[name] = std::move(ds);
         }
     }
+    if (j.contains("tables") && j.at("tables").is_object())
+        for (const auto& [name, tj] : j.at("tables").items())
+            t.tables[name] = tableFromJson(tj, joinPath(path, name));
     return t;
 }
 
@@ -509,8 +647,26 @@ inline nlohmann::json treeToJson(const Tree& t) {
         datasets[name] = {{"dtype", ds.dtype}, {"shape", ds.shape}, {"data", std::move(data)},
                           {"attrs", detail::attrsToJson(ds.attrs)}};
     }
-    return {{"attrs", detail::attrsToJson(t.attrs)}, {"children", std::move(children)},
-            {"datasets", std::move(datasets)}};
+    nlohmann::json out = {{"attrs", detail::attrsToJson(t.attrs)}, {"children", std::move(children)},
+                          {"datasets", std::move(datasets)}};
+    if (!t.tables.empty()) {
+        nlohmann::json tables = nlohmann::json::object();
+        for (const auto& [name, table] : t.tables) {
+            nlohmann::json fields = nlohmann::json::array();
+            nlohmann::json columns = nlohmann::json::object();
+            for (const TableField& f : table.fields) {
+                nlohmann::json field = {{"name", f.name}, {"dtype", f.dtype}};
+                if (f.size > 0) field["size"] = f.size;
+                fields.push_back(std::move(field));
+                columns[f.name] = std::visit(
+                    [&](const auto& v) { return detail::vectorToJson(f.dtype, v); }, table.columns.at(f.name));
+            }
+            tables[name] = {{"fields", std::move(fields)}, {"rows", table.rows},
+                            {"columns", std::move(columns)}, {"attrs", detail::attrsToJson(table.attrs)}};
+        }
+        out["tables"] = std::move(tables);
+    }
+    return out;
 }
 
 /// Inverse of treeToJson; the result is validated.

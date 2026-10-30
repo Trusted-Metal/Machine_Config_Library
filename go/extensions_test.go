@@ -45,12 +45,12 @@ func parseFixture(t *testing.T, name string) *machineconfig.MachineConfig {
 }
 
 func TestOpcuaGroupIsAnOpaqueExtension(t *testing.T) {
-	if got := parseFixture(t, "reference_config.h5").Extensions; len(got) != 0 {
-		t.Fatalf("reference config must have no extensions, got %d", len(got))
+	if got := parseFixture(t, "reference_config.h5").Extensions; len(got) != 1 || got["ClearBox"] == nil {
+		t.Fatalf("reference config must carry exactly the ClearBox extension, got %v", got)
 	}
 	cfg := parseFixture(t, "reference_config_opcua.h5")
-	if len(cfg.Extensions) != 1 {
-		t.Fatalf("expected exactly TM_OPCUA, got %v", cfg.Extensions)
+	if len(cfg.Extensions) != 2 || cfg.Extensions["ClearBox"] == nil || cfg.Extensions["TM_OPCUA"] == nil {
+		t.Fatalf("expected exactly ClearBox and TM_OPCUA, got %v", cfg.Extensions)
 	}
 	tree := cfg.Extensions["TM_OPCUA"]
 	for _, child := range []string{"Client", "Pipe", "Triggers"} {
@@ -86,8 +86,8 @@ func TestReadsExtensionFixturesWrittenByOtherLanguages(t *testing.T) {
 
 func TestV1_1ExtensionRoundTripPreservesDigest(t *testing.T) {
 	cfg := parseFixture(t, "reference_config_v1_1.h5")
-	if _, ok := cfg.Extensions["ClearBox"]; ok {
-		t.Fatal("ClearBox is modelled by core and must never appear as an extension")
+	if _, ok := cfg.Extensions["ClearBox"]; !ok {
+		t.Fatal("ClearBox is an ordinary extension in File_Version 1.1")
 	}
 	cfg.Extensions = map[string]*extension.Tree{"Private_Ext": extSampleTree(t)}
 
@@ -112,11 +112,14 @@ func TestWriterRejectsInvalidExtensionBeforeCreatingTheFile(t *testing.T) {
 	}
 }
 
-func TestWriterRejectsCoreModelledExtensionName(t *testing.T) {
+func TestWriterAcceptsAClearBoxExtensionTree(t *testing.T) {
 	cfg := parseFixture(t, "reference_config_v1_1.h5")
-	cfg.Extensions = map[string]*extension.Tree{"ClearBox": extension.NewTree()}
-	if err := machineconfig.NewWriter().Write(cfg, filepath.Join(t.TempDir(), "never.h5")); err == nil {
-		t.Fatal("expected an error for a core-modelled extension name")
+	tree := extension.NewTree()
+	tree.Attrs["Output_Path"] = extension.Attr{Dtype: extension.Utf8, Value: "x"}
+	cfg.Extensions = map[string]*extension.Tree{"ClearBox": tree}
+	rt := writeAndRead(t, cfg)
+	if got := cbText(rt.Extensions["ClearBox"], "Output_Path"); got != "x" {
+		t.Fatalf("Output_Path = %q, want x", got)
 	}
 }
 

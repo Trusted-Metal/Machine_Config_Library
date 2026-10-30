@@ -12,6 +12,7 @@ import {
 import { validate } from '../src/schema.js';
 import { withExtensionsAsJson } from '../src/extensions/json.js';
 import type { MachineConfig } from '../src/models.js';
+import { clearbox, clearboxRoot, grid, int, text, attr } from './clearboxHelpers.js';
 
 // ---------------------------------------------------------------------------
 // Fixture paths (absolute — resolved relative to this test file)
@@ -125,18 +126,14 @@ describe('MachineConfigReader — optical trains', () => {
     }
   });
 
-  it('optional_components object is always present (synthetic)', () => {
+  it('optional_components no longer exists on a train (synthetic)', () => {
     for (const train of synthetic.optical_trains) {
-      expect(train.optional_components).toBeDefined();
-      expect(train.optional_components).not.toBeNull();
+      expect(train).not.toHaveProperty('optional_components');
     }
   });
 
-  it('optional_components object is always present (reference)', () => {
-    for (const train of reference.optical_trains) {
-      expect(train.optional_components).toBeDefined();
-      expect(train.optional_components).not.toBeNull();
-    }
+  it('ClearBox is exposed as an extension with one child per train (reference)', () => {
+    expect(Object.keys(clearboxRoot(reference).children)).toEqual(['Optical_Train_01', 'Optical_Train_02']);
   });
 });
 
@@ -275,28 +272,31 @@ describe('MachineConfigReader — thermal lensing', () => {
 
 describe('MachineConfigReader — ClearBox', () => {
   it('clearbox is present on reference fixture', () => {
-    expect(reference.optical_trains[0].optional_components.clearbox).not.toBeNull();
+    expect(clearbox(reference, 0)).toBeDefined();
   });
 
-  it('clearbox.ip_address is non-empty (reference)', () => {
-    expect(reference.optical_trains[0].optional_components.clearbox?.ip_address).toBeTruthy();
+  it('clearbox Ip_Address is non-empty (reference)', () => {
+    expect(text(clearbox(reference, 0), 'Ip_Address')).toBeTruthy();
   });
 
-  it('clearbox.data_port is an integer or null (reference)', () => {
-    const dp = reference.optical_trains[0].optional_components.clearbox?.data_port;
-    expect(dp === null || Number.isInteger(dp)).toBe(true);
+  it('clearbox Data_Port is an integer (reference)', () => {
+    expect(Number.isInteger(int(clearbox(reference, 0), 'Data_Port'))).toBe(true);
   });
 
-  it('correction_data is absent by default (parse without includeBinary)', () => {
-    const cd = reference.optical_trains[0].optional_components.clearbox?.correction_data;
-    expect(cd).toBeUndefined();
+  it('the two shared values live on the extension root, once', () => {
+    const root = clearboxRoot(reference);
+    expect(text(root, 'Output_Path')).toBeTruthy();
+    expect(int(root, 'Software_Trigger_Delay')).not.toBeNull();
+    expect(clearbox(reference, 0).attrs).not.toHaveProperty('Output_Path');
   });
 
-  it('synchronous_sensors is omitted (undefined) on the reference fixture, not {}', () => {
-    // Matches Rust's/Python's decision to omit the key entirely from JSON
-    // when there are no sensors — see ClearBox.synchronous_sensors's doc
-    // comment in models.ts.
-    expect(reference.optical_trains[0].optional_components.clearbox?.synchronous_sensors).toBeUndefined();
+  it('v1.0-only attributes ride along on each train', () => {
+    expect(clearbox(reference, 0).attrs).toHaveProperty('Show_Console');
+    expect(clearbox(reference, 0).attrs).not.toHaveProperty('Volts_To_Watts_Algorithm');
+  });
+
+  it('Synchronous_Sensors is absent on the reference fixture', () => {
+    expect(clearbox(reference, 0).children).not.toHaveProperty('Synchronous_Sensors');
   });
 });
 
@@ -306,64 +306,55 @@ describe('MachineConfigReader — ClearBox', () => {
 // SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
 // ===========================================================================
 
+const sensorsOf = (cfg: MachineConfig) => clearbox(cfg, 0).children['Synchronous_Sensors'].children;
+
 describe('MachineConfigReader — SynchronousSensor', () => {
   it('the "Oxygen Sensor" entry is present under train 0', () => {
-    const sensors = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!;
-    expect(Object.keys(sensors)).toEqual(['Oxygen Sensor']);
+    expect(Object.keys(sensorsOf(referenceSensors))).toEqual(['Oxygen Sensor']);
   });
 
-  it('all 18 scalar fields match the real ZR800 example', () => {
-    const s = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
-    expect(s.enabled).toBe(true);
-    expect(s.sensor_name).toBe('ZR800 Oxygen Analyzer');
-    expect(s.sensor_output_range_low).toBe(-1.0);
-    expect(s.sensor_output_range_high).toBe(6.0);
-    expect(s.sensor_output_space).toBe('log10(ppm)');
-    expect(s.sensor_model).toBe('ZR810');
-    expect(s.sensor_manufacturer).toBe('Industrial Physics');
-    expect(s.sensor_scope).toBe('Global');
-    expect(s.units_derived_quantity).toBe('ppm');
-    expect(s.port_id).toBe(5);
-    expect(s.sensor_type).toBe('Oxygen Sensor');
-    expect(s.input_type).toBe('4-20 mA');
-    expect(s.algorithm_type).toBe('Log-Linear');
-    expect(s.algorithm_equation).toBe('log(ppm) = a*mA + b');
-    expect(s.calibration_source).toBe('Datasheet');
-    expect(s.calibration_verified).toBe(false);
-    expect(s.sample_period).toBe(5.0);
-    expect(s.metadata).toContain('Synchronous Sensor because Clearbox is responsible');
+  it('the scalar attributes match the real ZR800 example', () => {
+    const s = sensorsOf(referenceSensors)['Oxygen Sensor'];
+    expect(text(s, 'Sensor_Name')).toBe('ZR800 Oxygen Analyzer');
+    expect(attr(s, 'Sensor_Output_Range_Low')).toBe(-1.0);
+    expect(attr(s, 'Sensor_Output_Range_High')).toBe(6.0);
+    expect(text(s, 'Sensor_Output_Space')).toBe('log10(ppm)');
+    expect(text(s, 'Sensor_Model')).toBe('ZR810');
+    expect(text(s, 'Sensor_Manufacturer')).toBe('Industrial Physics');
+    expect(text(s, 'Sensor_Scope')).toBe('Global');
+    expect(text(s, 'Units_Derived_Quantity')).toBe('ppm');
+    expect(int(s, 'Port_ID')).toBe(5);
+    expect(text(s, 'Sensor_Type')).toBe('Oxygen Sensor');
+    expect(text(s, 'Input_Type')).toBe('4-20 mA');
+    expect(text(s, 'Algorithm_Type')).toBe('Log-Linear');
+    expect(text(s, 'Algorithm_Equation')).toBe('log(ppm) = a*mA + b');
+    expect(text(s, 'Calibration_Source')).toBe('Datasheet');
+    expect(attr(s, 'Sample_Period')).toBe(5.0);
+    expect(text(s, 'Metadata')).toContain('Synchronous Sensor because Clearbox is responsible');
   });
 
-  it('derivation_equation_constants has both rows in order, matching the log-space fit', () => {
-    const s = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
-    expect(s.derivation_equation_constants).toEqual([
-      { name: 'a', value: 0.4375 },
-      { name: 'b', value: -2.75 },
-    ]);
+  it('Derivation_Equation_Constants is a table with both rows in order', () => {
+    const t = sensorsOf(referenceSensors)['Oxygen Sensor'].tables!['Derivation_Equation_Constants'];
+    expect(t.columns['name']).toEqual(['a', 'b']);
+    expect(Array.from(t.columns['value'] as Float64Array)).toEqual([0.4375, -2.75]);
   });
 
-  it('calibration_points has both rows in order, both satisfying the log-space algorithm equation', () => {
-    const s = referenceSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!['Oxygen Sensor'];
-    expect(s.calibration_points).toEqual([
-      { input_value: 4.0, output_value: -1.0 },
-      { input_value: 20.0, output_value: 6.0 },
-    ]);
-    // log(ppm) = a*mA + b, per algorithm_equation — proves the points are
-    // recorded in Sensor_Output_Space (log10(ppm)) units, not the linear
-    // Units_Derived_Quantity (ppm) units of the same underlying quantity.
-    const [a, b] = s.derivation_equation_constants.map((c) => c.value);
-    for (const p of s.calibration_points) {
-      expect(a * p.input_value + b).toBeCloseTo(p.output_value, 10);
-    }
+  it('Calibration_Points has both rows in order, satisfying the log-space algorithm equation', () => {
+    const s = sensorsOf(referenceSensors)['Oxygen Sensor'];
+    const points = s.tables!['Calibration_Points'];
+    const inputs = Array.from(points.columns['input_value'] as Float64Array);
+    const outputs = Array.from(points.columns['output_value'] as Float64Array);
+    expect(inputs).toEqual([4.0, 20.0]);
+    expect(outputs).toEqual([-1.0, 6.0]);
+    // log(ppm) = a*mA + b: the points are recorded in Sensor_Output_Space (log10(ppm)) units.
+    const [a, b] = Array.from(s.tables!['Derivation_Equation_Constants'].columns['value'] as Float64Array);
+    inputs.forEach((x, i) => expect(a * x + b).toBeCloseTo(outputs[i], 10));
   });
 
   it('the combined OPCUA+sensors fixture has both features present at once', () => {
     expect(referenceOpcuaSensors.extensions?.TM_OPCUA).toBeDefined();
-    const sensors = referenceOpcuaSensors.optical_trains[0].optional_components.clearbox!.synchronous_sensors!;
-    expect(sensors['Oxygen Sensor'].derivation_equation_constants).toEqual([
-      { name: 'a', value: 0.4375 },
-      { name: 'b', value: -2.75 },
-    ]);
+    const t = sensorsOf(referenceOpcuaSensors)['Oxygen Sensor'].tables!['Derivation_Equation_Constants'];
+    expect(t.columns['name']).toEqual(['a', 'b']);
   });
 });
 
@@ -397,111 +388,65 @@ describe('MachineConfigReader — scan_field_correction_file', () => {
 // Correction data arrays (requires includeBinary: true)
 // ===========================================================================
 
-describe('MachineConfigReader — correction data (includeBinary: true)', () => {
+describe('MachineConfigReader — includeBinary: true', () => {
   let refBinary: MachineConfig;
 
   beforeAll(async () => {
     refBinary = await new MachineConfigReader(REFERENCE).parse({ includeBinary: true });
   }, 60_000);
 
-  it('correction_data is present when includeBinary=true', () => {
-    const cd = refBinary.optical_trains[0].optional_components.clearbox?.correction_data;
-    expect(cd).toBeDefined();
-    expect(cd).not.toBeNull();
+  it('raw_bytes is present when includeBinary=true', () => {
+    const sfcf = refBinary.optical_trains[0].scan_field_correction_file!;
+    expect(sfcf.raw_bytes).toBeTruthy();
   });
 
-  it('correction_data shape is [257][257][2]', () => {
-    const cd = refBinary.optical_trains[0].optional_components.clearbox!.correction_data!;
-    expect(cd).toHaveLength(257);
-    expect(cd[0]).toHaveLength(257);
-    expect(cd[0][0]).toHaveLength(2);
-  });
-
-  it('correction_data contains null values (border NaN cells)', () => {
-    const cd = refBinary.optical_trains[0].optional_components.clearbox!.correction_data!;
-    const hasNull = cd.some(row => row.some(cell => cell.some(v => v === null)));
-    expect(hasNull).toBe(true);
-  });
-
-  it('inverse_correction_data shape is [257][257][2]', () => {
-    const icd = refBinary.optical_trains[0].optional_components.clearbox!.inverse_correction_data!;
-    expect(icd).toBeDefined();
-    expect(icd).toHaveLength(257);
-    expect(icd[0]).toHaveLength(257);
-    expect(icd[0][0]).toHaveLength(2);
-  });
-
-  it('correction_data is absent when parsed without includeBinary', () => {
-    const cd = reference.optical_trains[0].optional_components.clearbox?.correction_data;
-    expect(cd).toBeUndefined();
+  it('the correction grids are always complete, with or without includeBinary', () => {
+    expect(grid(reference, 0, 'Correction_Data').data).toHaveLength(257 * 257 * 2);
+    expect(grid(refBinary, 0, 'Correction_Data').data).toHaveLength(257 * 257 * 2);
   });
 });
 
 // ===========================================================================
-// Raw correction data accessors (getCorrectionData / getInverseCorrectionData)
-// — bypass the null-converted JSON representation; feed the correction-hash CLI.
+// ClearBox correction grids — ordinary extension datasets; they feed the correction-hash CLI.
 // ===========================================================================
 
-describe('MachineConfigReader — getCorrectionData / getInverseCorrectionData', () => {
-  const reader = new MachineConfigReader(REFERENCE);
+describe('MachineConfigReader — ClearBox correction grids', () => {
+  const cd0 = () => grid(reference, 0, 'Correction_Data');
+  const icd0 = () => grid(reference, 0, 'Inverse_Correction_Data');
 
   /** Byte view of a Float64Array's own data (respects byteOffset/byteLength). */
   const bytesOf = (a: Float64Array) => Buffer.from(a.buffer, a.byteOffset, a.byteLength);
 
-  // Read all three large datasets once in parallel so individual tests are
-  // synchronous and don't accumulate per-test h5wasm open/read/close overhead.
-  let cd0: Awaited<ReturnType<typeof reader.getCorrectionData>>;
-  let icd0: Awaited<ReturnType<typeof reader.getCorrectionData>>;
-  let cd1: Awaited<ReturnType<typeof reader.getCorrectionData>>;
-
-  beforeAll(async () => {
-    [cd0, icd0, cd1] = await Promise.all([
-      reader.getCorrectionData(0),
-      reader.getInverseCorrectionData(0),
-      reader.getCorrectionData(1),
-    ]);
-  }, 15_000);
-
-  it('getCorrectionData returns a flat Float64Array of shape [257, 257, 2]', () => {
-    expect(cd0.data).toBeInstanceOf(Float64Array);
-    expect(cd0.shape).toEqual([257, 257, 2]);
-    expect(cd0.data.length).toBe(257 * 257 * 2);
+  it('the forward grid is a Float64Array of shape [257, 257, 2]', () => {
+    expect(cd0().data).toBeInstanceOf(Float64Array);
+    expect(cd0().shape).toEqual([257, 257, 2]);
+    expect(cd0().data.length).toBe(257 * 257 * 2);
   });
 
-  it('getCorrectionData preserves NaN (border cells are not converted to null/0)', () => {
-    let sawNaN = false;
-    for (let i = 0; i < cd0.data.length; i++) {
-      if (Number.isNaN(cd0.data[i])) { sawNaN = true; break; }
-    }
-    expect(sawNaN).toBe(true);
+  it('preserves NaN (border cells are not converted to null/0)', () => {
+    expect(Array.from(cd0().data).some((v) => Number.isNaN(v))).toBe(true);
   });
 
-  it('getInverseCorrectionData returns a flat Float64Array of shape [257, 257, 2]', () => {
-    expect(icd0.data).toBeInstanceOf(Float64Array);
-    expect(icd0.shape).toEqual([257, 257, 2]);
+  it('the inverse grid is a Float64Array of shape [257, 257, 2]', () => {
+    expect(icd0().data).toBeInstanceOf(Float64Array);
+    expect(icd0().shape).toEqual([257, 257, 2]);
   });
 
   it('forward and inverse correction grids are not identical', () => {
-    expect(bytesOf(cd0.data)).not.toEqual(bytesOf(icd0.data));
+    expect(bytesOf(cd0().data)).not.toEqual(bytesOf(icd0().data));
   });
 
-  it('getInverseCorrectionData first finite value differs from getCorrectionData', () => {
-    const firstFiniteFwd = Array.from(cd0.data).find(v => isFinite(v));
-    const firstFiniteInv = Array.from(icd0.data).find(v => isFinite(v));
-    expect(firstFiniteFwd).toBeDefined();
-    expect(firstFiniteInv).toBeDefined();
-    expect(Math.abs(firstFiniteInv! - firstFiniteFwd!)).toBeGreaterThan(0.0001);
+  it('the first finite inverse value differs from the forward one', () => {
+    const firstFwd = Array.from(cd0().data).find((v) => isFinite(v));
+    const firstInv = Array.from(icd0().data).find((v) => isFinite(v));
+    expect(firstFwd).toBeDefined();
+    expect(firstInv).toBeDefined();
+    expect(Math.abs(firstInv! - firstFwd!)).toBeGreaterThan(0.0001);
   });
 
   it('train 1 correction grid differs from train 0', () => {
-    expect(bytesOf(cd0.data)).not.toEqual(bytesOf(cd1.data));
+    expect(bytesOf(cd0().data)).not.toEqual(bytesOf(grid(reference, 1, 'Correction_Data').data));
   });
-
-  it('reading the same train twice is deterministic (byte-identical)', async () => {
-    // One additional independent read — verifies the cached result is reproducible.
-    const again = await reader.getCorrectionData(0);
-    expect(bytesOf(again.data)).toEqual(bytesOf(cd0.data));
-  }, 10_000);
 });
 
 // ===========================================================================
@@ -512,8 +457,8 @@ describe('MachineConfigReader — OPCUA group as an extension tree', () => {
   const tree = () => referenceOpcua.extensions!.TM_OPCUA;
   const val = (t: { attrs: Record<string, { value: unknown }> }, name: string) => t.attrs[name]?.value;
 
-  it('has no extensions for the reference fixture (no OPCUA group)', () => {
-    expect(reference.extensions).toBeUndefined();
+  it('carries only the ClearBox extension for the reference fixture (no OPCUA group)', () => {
+    expect(Object.keys(reference.extensions!)).toEqual(['ClearBox']);
   });
 
   it('core has no typed opcua model', () => {
@@ -521,7 +466,7 @@ describe('MachineConfigReader — OPCUA group as an extension tree', () => {
   });
 
   it('exposes the legacy OPCUA/ group as extensions.TM_OPCUA', () => {
-    expect(Object.keys(referenceOpcua.extensions!)).toEqual(['TM_OPCUA']);
+    expect(Object.keys(referenceOpcua.extensions!).sort()).toEqual(['ClearBox', 'TM_OPCUA']);
     expect(Object.keys(tree().children).sort()).toEqual(['Client', 'Pipe', 'Triggers']);
   });
 
@@ -583,9 +528,9 @@ describe('MachineConfigReader — toJson()', () => {
     expect(parsed).toHaveProperty('optical_trains');
   });
 
-  it('extensions key is absent from reference fixture JSON', async () => {
+  it('only the ClearBox extension appears in reference fixture JSON', async () => {
     const json = await new MachineConfigReader(REFERENCE).toJson();
-    expect(JSON.parse(json)).not.toHaveProperty('extensions');
+    expect(Object.keys(JSON.parse(json).extensions)).toEqual(['ClearBox']);
   });
 
   it('the OPCUA group appears under extensions.TM_OPCUA in reference_opcua fixture JSON', async () => {
@@ -593,11 +538,10 @@ describe('MachineConfigReader — toJson()', () => {
     expect(JSON.parse(json).extensions).toHaveProperty('TM_OPCUA');
   });
 
-  it('correction_data is absent from JSON by default', async () => {
+  it('optional_components is absent from JSON', async () => {
     const json = await new MachineConfigReader(REFERENCE).toJson();
     const parsed = JSON.parse(json);
-    const cb = parsed.optical_trains?.[0]?.optional_components?.clearbox;
-    expect(cb?.correction_data).toBeUndefined();
+    expect(parsed.optical_trains?.[0]).not.toHaveProperty('optional_components');
   });
 
   it('produces compact single-line JSON when indent=0', async () => {
@@ -678,11 +622,11 @@ describe('MachineConfigReader — unknown File_Version', () => {
 
 describe('MachineConfigReader — schema validation', () => {
   it('synthetic fixture output passes schema validation', () => {
-    expect(validate(synthetic)).toEqual([]);
+    expect(validate(withExtensionsAsJson(synthetic))).toEqual([]);
   });
 
   it('reference fixture output passes schema validation', () => {
-    expect(validate(reference)).toEqual([]);
+    expect(validate(withExtensionsAsJson(reference))).toEqual([]);
   });
 
   it('reference_opcua fixture output passes schema validation', () => {

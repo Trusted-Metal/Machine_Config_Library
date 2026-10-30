@@ -100,119 +100,77 @@ fn opcua_extension_tree_survives_a_session_save() {
 }
 
 #[test]
-fn clearbox_optional() {
-    let file = open_machine_config(REFERENCE).unwrap();
-    assert!(file.get_clearbox(0).unwrap().is_some());
+fn clearbox_extension_present_through_the_facade_session_save() {
+    let mut file = open_machine_config(REFERENCE).unwrap();
+    let out = NamedTempFile::with_suffix(".h5").unwrap();
+    file.save(Some(out.path())).unwrap();
+
+    let before = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+    let after = MachineConfigReader::open(out.path()).unwrap().parse().unwrap();
+    assert_eq!(
+        machine_config::canonical_digest(&after.extensions["ClearBox"]).unwrap(),
+        machine_config::canonical_digest(&before.extensions["ClearBox"]).unwrap()
+    );
 }
 
 #[test]
-fn clearbox_synchronous_sensors_empty_when_fixture_has_none() {
-    // reference_config.h5 deliberately has no Synchronous_Sensors group at
-    // all (see SYNCHRONOUS_SENSOR_PLAN.md Phase 0) — the map must read back
-    // empty, not missing/absent, since there is no separate "absent" state.
-    let file = open_machine_config(REFERENCE).unwrap();
-    let cb = file.get_clearbox(0).unwrap().unwrap();
-    assert!(cb.synchronous_sensors.is_empty());
+fn clearbox_synchronous_sensors_absent_when_fixture_has_none() {
+    // reference_config.h5 deliberately has no Synchronous_Sensors group at all.
+    let config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+    let cb = &config.extensions["ClearBox"].children["Optical_Train_01"];
+    assert!(!cb.children.contains_key("Synchronous_Sensors"));
 }
 
 #[test]
 fn clearbox_synchronous_sensors_present_and_named_on_dedicated_fixture() {
-    let file = open_machine_config(REFERENCE_SENSORS).unwrap();
-    let cb = file.get_clearbox(0).unwrap().unwrap();
-    assert_eq!(cb.synchronous_sensors.len(), 1);
-    let sensor = cb.synchronous_sensors.get("Oxygen Sensor")
+    let config = MachineConfigReader::open(REFERENCE_SENSORS).unwrap().parse().unwrap();
+    let sensors = &config.extensions["ClearBox"].children["Optical_Train_01"].children
+        ["Synchronous_Sensors"];
+    assert_eq!(sensors.children.len(), 1);
+    let sensor = sensors
+        .children
+        .get("Oxygen Sensor")
         .expect("key is this fixture's arbitrary label, not a schema-significant name");
-    assert_eq!(sensor.sensor_name, Some("ZR800 Oxygen Analyzer".to_string()));
-    assert_eq!(sensor.port_id, Some(5));
+    assert_eq!(sensor.attrs["Sensor_Name"].as_str(), Some("ZR800 Oxygen Analyzer"));
+    assert_eq!(sensor.attrs["Port_ID"].as_i64(), Some(5));
 }
 
 #[test]
 fn combined_fixture_has_opcua_and_synchronous_sensors_through_facade() {
-    // Third-layer check for the combined fixture: hdf5.rs's own test module
-    // proves the internal adapter, reader.rs proves the plain public
-    // MachineConfigReader, this proves the capabilities facade too.
-    let file = open_machine_config(REFERENCE_OPCUA_SENSORS).unwrap();
-    let config = MachineConfigReader::open(REFERENCE_OPCUA_SENSORS).unwrap().parse().unwrap();
-    assert!(config.extensions.contains_key("TM_OPCUA"), "OPCUA must be present on the combined fixture");
-    let cb = file.get_clearbox(0).unwrap().unwrap();
+    // The facade opens the combined fixture, and the extension trees reach a session save intact.
+    let mut file = open_machine_config(REFERENCE_OPCUA_SENSORS).unwrap();
+    let out = NamedTempFile::with_suffix(".h5").unwrap();
+    file.save(Some(out.path())).unwrap();
+    let config = MachineConfigReader::open(out.path()).unwrap().parse().unwrap();
+    assert!(config.extensions.contains_key("TM_OPCUA"), "OPCUA must be present");
+    let sensors = &config.extensions["ClearBox"].children["Optical_Train_01"].children
+        ["Synchronous_Sensors"];
     assert_eq!(
-        cb.synchronous_sensors["Oxygen Sensor"].sensor_name,
-        Some("ZR800 Oxygen Analyzer".to_string())
-    );
-}
-
-/// `CorrectionData` derives `PartialEq`, but IEEE 754 `NaN != NaN`, so a
-/// direct `assert_eq!` on real grid data (which always contains NaN cells)
-/// fails even when the two buffers are bit-for-bit identical. Compare shape
-/// plus element-wise, treating "both NaN" as equal.
-fn assert_correction_data_eq(
-    a: &machine_config::models::CorrectionData,
-    b: &machine_config::models::CorrectionData,
-) {
-    assert_eq!(a.shape, b.shape);
-    assert_eq!(a.data.len(), b.data.len());
-    for (x, y) in a.data.iter().zip(b.data.iter()) {
-        if x.is_nan() || y.is_nan() {
-            assert!(x.is_nan() && y.is_nan(), "NaN mismatch: {x} vs {y}");
-        } else {
-            assert_eq!(x, y);
-        }
-    }
-}
-
-#[test]
-fn get_correction_data_matches_reader() {
-    let file = open_machine_config(REFERENCE).unwrap();
-    let reader = MachineConfigReader::open(REFERENCE).unwrap();
-    assert_correction_data_eq(
-        &file.get_correction_data(0).unwrap(),
-        &reader.get_correction_data(0).unwrap(),
-    );
-    assert_correction_data_eq(
-        &file.get_inverse_correction_data(0).unwrap(),
-        &reader.get_inverse_correction_data(0).unwrap(),
+        sensors.children["Oxygen Sensor"].attrs["Sensor_Name"].as_str(),
+        Some("ZR800 Oxygen Analyzer")
     );
 }
 
 #[test]
-fn get_correction_data_shape_and_nan_present_through_facade() {
-    let file = open_machine_config(REFERENCE).unwrap();
-    let cd = file.get_correction_data(0).unwrap();
-    assert_eq!(cd.shape, [257, 257, 2]);
-    assert!(cd.data.iter().any(|v| v.is_nan()));
-}
-
-#[test]
-fn get_correction_data_missing_clearbox_is_not_present() {
-    // Every stock fixture's trains have a ClearBox, so build one without: take
-    // the reference config, strip train 0's ClearBox, re-write to a temp file.
+fn clearbox_absent_when_the_extension_is_removed() {
+    // Every stock fixture has a ClearBox, so strip it and re-write.
     let mut config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
-    config.optical_trains[0].optional_components.clearbox = None;
+    config.extensions.remove("ClearBox");
     let tmp = NamedTempFile::with_suffix(".h5").unwrap();
     MachineConfigWriter::new(&config).write(tmp.path()).unwrap();
 
-    let file = open_machine_config(tmp.path()).unwrap();
-    assert!(file.get_clearbox(0).unwrap().is_none());
-    assert!(matches!(
-        file.get_correction_data(0).unwrap_err(),
-        CapabilityError::NotPresent(_)
-    ));
-    assert!(matches!(
-        file.get_inverse_correction_data(0).unwrap_err(),
-        CapabilityError::NotPresent(_)
-    ));
+    let again = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
+    assert!(!again.extensions.contains_key("ClearBox"));
 }
 
 #[test]
-fn get_correction_data_works_on_create_based_instance_without_touching_disk() {
-    // The specific case that rules out delegate-to-Reader-by-reopening: a
-    // create()-d facade has no path at all, so this must convert the
-    // already-loaded in-memory model, not re-read from anywhere.
-    let file = create_machine_config("1.0").unwrap();
-    let cd = file.get_correction_data(0).unwrap();
-    assert_eq!(cd.shape, [257, 257, 2]);
-    let icd = file.get_inverse_correction_data(0).unwrap();
-    assert_eq!(icd.shape, [257, 257, 2]);
+fn create_based_instance_carries_the_clearbox_extension() {
+    // A create()-d facade has no path at all, so the extension must come from the in-memory model.
+    let mut file = create_machine_config("1.0").unwrap();
+    let out = NamedTempFile::with_suffix(".h5").unwrap();
+    file.save(Some(out.path())).unwrap();
+    let config = MachineConfigReader::open(out.path()).unwrap().parse().unwrap();
+    assert!(config.extensions.contains_key("ClearBox"));
 }
 
 #[test]

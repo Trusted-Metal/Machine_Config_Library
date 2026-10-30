@@ -39,22 +39,15 @@ from machine_config.writer import WriterAdapter
 from machine_config.models import (
     AxisConfig,
     BuildPlate,
-    CalibrationPoint,
-    ClearBox,
     Collimator,
-    EquationConstant,
     LightSource,
     Machine,
     MachineConfig,
     MachineConfigMeta,
     OpticalTrain,
-    OptionalComponents,
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
-    SynchronousSensor,
-    nan_array_to_nested,
-    nested_to_array,
 )
 from machine_config.schema import SCHEMA_VERSION
 
@@ -70,16 +63,6 @@ _REFERENCE_H5 = _REPO_ROOT / "fixtures" / "reference_config.h5"
 # never change or be removed without checking every mock (and, by the same
 # logic, every later real version) that quietly leaned on it.
 # ---------------------------------------------------------------------------
-
-EQUATION_CONSTANT_NAME_MAX_BYTES = 64
-_EQUATION_CONSTANT_DTYPE = np.dtype(
-    [
-        ("name", h5py.string_dtype(encoding="utf-8", length=EQUATION_CONSTANT_NAME_MAX_BYTES)),
-        ("value", "f8"),
-    ]
-)
-_CALIBRATION_POINT_DTYPE = np.dtype([("input_value", "f8"), ("output_value", "f8")])
-
 
 def _read_str(attrs, key: str):
     val = attrs.get(key)
@@ -272,8 +255,6 @@ class MockV1_1Reader:
         scanner_card = self._parse_scanner_card(f[f"{base}/{L.GROUP_SCANNER_CARD}"])
         scanner      = self._parse_scanner(f[f"{base}/{L.GROUP_SCANNER}"])
 
-        cb_path   = f"{base}/{L.GROUP_OPTIONAL_COMPONENTS}/{L.GROUP_CLEARBOX}"
-        clearbox  = self._parse_clearbox(f[cb_path]) if cb_path in f else None
         sfcf_path = f"{base}/{L.DS_SCAN_FIELD_CORRECTION_FILE}"
         sfcf      = self._parse_sfcf(f[sfcf_path]) if sfcf_path in f else None
 
@@ -312,7 +293,6 @@ class MockV1_1Reader:
             light_source=light_source,
             collimator=collimator,
             scanner_card=scanner_card,
-            optional_components=OptionalComponents(clearbox=clearbox),
             scan_field_correction_file=sfcf,
         )
 
@@ -407,76 +387,6 @@ class MockV1_1Reader:
             sample_period_unit=_read_str_locked(a, "Sample_Period_unit", "μs"),
         )
 
-    def _parse_clearbox(self, grp: h5py.Group) -> ClearBox:
-        a = grp.attrs
-        corr_data = nan_array_to_nested(grp["Correction_Data"][:])
-        inv_data  = nan_array_to_nested(grp["Inverse_Correction_Data"][:])
-        synchronous_sensors: dict[str, SynchronousSensor] = {}
-        if "Synchronous_Sensors" in grp:
-            sensors_grp = grp["Synchronous_Sensors"]
-            for name in sensors_grp.keys():
-                synchronous_sensors[name] = self._parse_synchronous_sensor(sensors_grp[name])
-        return ClearBox(
-            ip_address=str(a.get("Ip_Address", "")),
-            serial_number=_read_str(a, "Serial_Number"),
-            data_port=_read_int(a, "Data_Port"),
-            server_port=_read_int(a, "Server_Port"),
-            actual_timing_offset=_read_int(a, "Actual_Timing_Offset"),
-            commanded_timing_offset=_read_int(a, "Commanded_Timing_Offset"),
-            correction_data=corr_data,
-            inverse_correction_data=inv_data,
-            manufacturer=_read_str(a, "Manufacturer"),
-            model=_read_str(a, "Model"),
-            output_path=_read_str(a, "Output_Path"),
-            selected_camera=_read_str(a, "Selected_Camera"),
-            custom_video_format=_read_str(a, "Custom_Video_Format"),
-            video_output=_read_str(a, "Video_Output"),
-            show_console=_read_bool_from_int(a, "Show_Console"),
-            software_trigger_delay=_read_int(a, "Software_Trigger_Delay"),
-            correction_grid_domain_shape=_read_str(a, "Correction_Grid_Domain_Shape"),
-            inverse_grid_domain_shape=_read_str(a, "Inverse_Grid_Domain_Shape"),
-            synchronous_sensors=synchronous_sensors,
-        )
-
-    def _parse_synchronous_sensor(self, grp: h5py.Group) -> SynchronousSensor:
-        a = grp.attrs
-        derivation_equation_constants: list[EquationConstant] = []
-        if "Derivation_Equation_Constants" in grp:
-            rows = grp["Derivation_Equation_Constants"][()]
-            derivation_equation_constants = [
-                EquationConstant(name=row["name"].decode("utf-8"), value=float(row["value"]))
-                for row in rows
-            ]
-        calibration_points: list[CalibrationPoint] = []
-        if "Calibration_Points" in grp:
-            rows = grp["Calibration_Points"][()]
-            calibration_points = [
-                CalibrationPoint(input_value=float(row["input_value"]), output_value=float(row["output_value"]))
-                for row in rows
-            ]
-        return SynchronousSensor(
-            enabled=_read_bool_from_int(a, "Enabled"),
-            sensor_name=_read_str(a, "Sensor_Name"),
-            sensor_output_range_low=_read_float(a, "Sensor_Output_Range_Low"),
-            sensor_output_range_high=_read_float(a, "Sensor_Output_Range_High"),
-            sensor_output_space=_read_str(a, "Sensor_Output_Space"),
-            sensor_model=_read_str(a, "Sensor_Model"),
-            sensor_manufacturer=_read_str(a, "Sensor_Manufacturer"),
-            sensor_scope=_read_str(a, "Sensor_Scope"),
-            units_derived_quantity=_read_str(a, "Units_Derived_Quantity"),
-            port_id=_read_int(a, "Port_ID"),
-            sensor_type=_read_str(a, "Sensor_Type"),
-            input_type=_read_str(a, "Input_Type"),
-            algorithm_type=_read_str(a, "Algorithm_Type"),
-            algorithm_equation=_read_str(a, "Algorithm_Equation"),
-            calibration_source=_read_str(a, "Calibration_Source"),
-            calibration_verified=_read_bool_from_int(a, "Calibration_Verified"),
-            sample_period=_read_float(a, "Sample_Period"),
-            metadata=_read_str(a, "Metadata"),
-            derivation_equation_constants=derivation_equation_constants,
-            calibration_points=calibration_points,
-        )
-
     def _parse_sfcf(self, ds: h5py.Dataset) -> ScanFieldCorrectionFile:
         a = ds.attrs
         return ScanFieldCorrectionFile(
@@ -560,9 +470,6 @@ class MockV1_1Writer:
             self._write_light_source(f.require_group(f"{base}/{L.GROUP_LIGHT_SOURCE}"), train.light_source)
             self._write_collimator(f.require_group(f"{base}/{L.GROUP_COLLIMATOR}"), train.collimator)
             self._write_scanner_card(f.require_group(f"{base}/{L.GROUP_SCANNER_CARD}"), train.scanner_card)
-            if train.optional_components.clearbox is not None:
-                opt = f.require_group(f"{base}/{L.GROUP_OPTIONAL_COMPONENTS}")
-                self._write_clearbox(opt.require_group(L.GROUP_CLEARBOX), train.optional_components.clearbox)
             if train.scan_field_correction_file is not None:
                 self._write_sfcf(f, base, train.scan_field_correction_file)
 
@@ -669,78 +576,6 @@ class MockV1_1Writer:
         grp.attrs["Communication_Protocol"] = _s(sc.communication_protocol)
         grp.attrs["Sample_Period"]      = _f(sc.sample_period)
         grp.attrs["Sample_Period_unit"] = sc.sample_period_unit or "μs"
-
-    def _write_clearbox(self, grp: h5py.Group, cb: ClearBox) -> None:
-        grp.attrs["Ip_Address"]           = cb.ip_address
-        grp.attrs["Serial_Number"]        = _s(cb.serial_number)
-        grp.attrs["Data_Port"]            = _i(cb.data_port)
-        grp.attrs["Server_Port"]          = _i(cb.server_port)
-        grp.attrs["Actual_Timing_Offset"]    = _i(cb.actual_timing_offset)
-        grp.attrs["Commanded_Timing_Offset"] = _i(cb.commanded_timing_offset)
-        grp.attrs["Manufacturer"]         = _s(cb.manufacturer)
-        grp.attrs["Model"]                = _s(cb.model)
-        grp.attrs["Output_Path"]          = _s(cb.output_path)
-        grp.attrs["Selected_Camera"]      = _s(cb.selected_camera)
-        grp.attrs["Custom_Video_Format"]  = _s(cb.custom_video_format)
-        grp.attrs["Video_Output"]         = _s(cb.video_output)
-        grp.attrs["Show_Console"]         = _b(cb.show_console)
-        grp.attrs["Software_Trigger_Delay"]    = _i(cb.software_trigger_delay)
-        grp.attrs["Correction_Grid_Domain_Shape"]  = _s(cb.correction_grid_domain_shape)
-        grp.attrs["Inverse_Grid_Domain_Shape"]     = _s(cb.inverse_grid_domain_shape)
-        grp.create_dataset("Correction_Data", data=nested_to_array(cb.correction_data))
-        cds = grp["Correction_Data"]
-        cds.attrs["dimensions"] = "H,W,D"
-        cds.attrs["dtype"]      = "float64"
-        cds.attrs["shape"]      = f"{cds.shape[0]}x{cds.shape[1]}x{cds.shape[2]}"
-        grp.create_dataset("Inverse_Correction_Data", data=nested_to_array(cb.inverse_correction_data))
-        ids = grp["Inverse_Correction_Data"]
-        ids.attrs["dimensions"] = "H,W,D"
-        ids.attrs["dtype"]      = "float64"
-        ids.attrs["shape"]      = f"{ids.shape[0]}x{ids.shape[1]}x{ids.shape[2]}"
-        if cb.synchronous_sensors:
-            sensors_grp = grp.create_group("Synchronous_Sensors")
-            for name, sensor in cb.synchronous_sensors.items():
-                self._write_synchronous_sensor(sensors_grp.require_group(name), sensor)
-
-    def _write_synchronous_sensor(self, grp: h5py.Group, sensor: SynchronousSensor) -> None:
-        grp.attrs["Enabled"]                  = _b(sensor.enabled)
-        grp.attrs["Sensor_Name"]              = _s(sensor.sensor_name)
-        grp.attrs["Sensor_Output_Range_Low"]  = _f(sensor.sensor_output_range_low)
-        grp.attrs["Sensor_Output_Range_High"] = _f(sensor.sensor_output_range_high)
-        grp.attrs["Sensor_Output_Space"]      = _s(sensor.sensor_output_space)
-        grp.attrs["Sensor_Model"]             = _s(sensor.sensor_model)
-        grp.attrs["Sensor_Manufacturer"]      = _s(sensor.sensor_manufacturer)
-        grp.attrs["Sensor_Scope"]             = _s(sensor.sensor_scope)
-        grp.attrs["Units_Derived_Quantity"]   = _s(sensor.units_derived_quantity)
-        grp.attrs["Port_ID"]                  = _i(sensor.port_id)
-        grp.attrs["Sensor_Type"]              = _s(sensor.sensor_type)
-        grp.attrs["Input_Type"]               = _s(sensor.input_type)
-        grp.attrs["Algorithm_Type"]           = _s(sensor.algorithm_type)
-        grp.attrs["Algorithm_Equation"]       = _s(sensor.algorithm_equation)
-        grp.attrs["Calibration_Source"]       = _s(sensor.calibration_source)
-        grp.attrs["Calibration_Verified"]     = _b(sensor.calibration_verified)
-        grp.attrs["Sample_Period"]            = _f(sensor.sample_period)
-        grp.attrs["Metadata"]                 = _s(sensor.metadata)
-
-        for c in sensor.derivation_equation_constants:
-            name_bytes = len(c.name.encode("utf-8"))
-            if name_bytes > EQUATION_CONSTANT_NAME_MAX_BYTES:
-                raise ValueError(
-                    f"Derivation_Equation_Constants name {c.name!r} is {name_bytes} UTF-8 "
-                    f"bytes, which does not fit in the {EQUATION_CONSTANT_NAME_MAX_BYTES}-byte "
-                    "fixed-length field (would otherwise be silently truncated on write)."
-                )
-        constants = np.array(
-            [(c.name, c.value) for c in sensor.derivation_equation_constants],
-            dtype=_EQUATION_CONSTANT_DTYPE,
-        )
-        grp.create_dataset("Derivation_Equation_Constants", data=constants)
-
-        points = np.array(
-            [(p.input_value, p.output_value) for p in sensor.calibration_points],
-            dtype=_CALIBRATION_POINT_DTYPE,
-        )
-        grp.create_dataset("Calibration_Points", data=points)
 
     def _write_sfcf(self, f: h5py.File, train_path: str, sfcf: ScanFieldCorrectionFile) -> None:
         if sfcf.raw_bytes is not None:
@@ -870,7 +705,6 @@ def _make_config(
                     communication_protocol="PCIe",
                     sample_period=10.0, sample_period_unit="μs",
                 ),
-                optional_components=OptionalComponents(),
                 scan_field_correction_file=None,
             )
         ],

@@ -15,11 +15,10 @@
 // file tampered with since MCF itself last touched it," not "does this
 // match some other system's proprietary algorithm."
 //
-// Binary correction-grid data (correction_data/inverse_correction_data/
-// raw_bytes) is always excluded regardless of whether the MachineConfig
-// passed in happens to carry it (e.g. a config obtained via
-// parseWithBinary()) — a separate, dedicated mechanism (correction-hash)
-// already exists for binary-grid integrity.
+// Binary raw_bytes of the scan-field correction file is always excluded regardless of whether the
+// MachineConfig passed in happens to carry it (e.g. a config obtained via parseWithBinary()).
+// ClearBox's correction grids are ordinary extension datasets and enter the hash through the
+// extension digest.
 //
 // # Why this is the simplest of the five languages' implementations
 //
@@ -76,13 +75,6 @@ namespace detail {
 inline void stripBinaryFieldsForHash(nlohmann::json& j) {
     if (!j.contains("optical_trains") || !j["optical_trains"].is_array()) return;
     for (auto& train : j["optical_trains"]) {
-        if (train.contains("optional_components")) {
-            auto& oc = train["optional_components"];
-            if (oc.contains("clearbox") && !oc["clearbox"].is_null()) {
-                oc["clearbox"].erase("correction_data");
-                oc["clearbox"].erase("inverse_correction_data");
-            }
-        }
         if (train.contains("scan_field_correction_file") &&
             !train["scan_field_correction_file"].is_null()) {
             train["scan_field_correction_file"].erase("raw_bytes");

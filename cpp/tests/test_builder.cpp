@@ -7,6 +7,7 @@
 
 #include "machine_config/builder.hpp"
 #include "machine_config/reader.hpp"
+#include "clearbox_helpers.hpp"
 
 using namespace machine_config;
 
@@ -50,22 +51,28 @@ TEST_CASE("MockBuilderPlateDimensions") {
 }
 
 TEST_CASE("MockBuilderCorrectionGridShape") {
-    auto out = tmpBuilderPath("grid_shape");
-    MockConfigBuilder{}.save(out);
-    auto cd = MachineConfigReader{out}.getCorrectionData(0);
-    REQUIRE((cd.shape == std::array<size_t, 3>{257, 257, 2}));
-    std::filesystem::remove(out);
+    auto cfg = MockConfigBuilder{}.build();
+    std::vector<std::uint64_t> shape;
+    const auto& data = cbtest::grid(cfg, 0, "Correction_Data", &shape);
+    REQUIRE((shape == std::vector<std::uint64_t>{257, 257, 2}));
+    REQUIRE(data.size() == 257u * 257u * 2u);
 }
 
 TEST_CASE("MockBuilderCorrectionGridNonzero") {
-    auto out = tmpBuilderPath("grid_val");
-    MockConfigBuilder{}.save(out);
-    auto cd = MachineConfigReader{out}.getCorrectionData(0);
-    // Centre cell [128,128,0]: Gaussian peak ≈ 2.0
-    double centre = cd.data[(128 * 257 + 128) * 2 + 0];
+    auto cfg = MockConfigBuilder{}.build();
+    const auto& data = cbtest::grid(cfg, 0, "Correction_Data");
+    // Centre cell [128,128,0]: Gaussian peak ~ 2.0
+    double centre = data[(128 * 257 + 128) * 2 + 0];
     REQUIRE(centre > 1.9);
     REQUIRE(centre < 2.1);
-    std::filesystem::remove(out);
+}
+
+TEST_CASE("MockBuilderInverseGridRatio") {
+    auto cfg = MockConfigBuilder{}.build();
+    const auto& fwd = cbtest::grid(cfg, 0, "Correction_Data");
+    const auto& inv = cbtest::grid(cfg, 0, "Inverse_Correction_Data");
+    const std::size_t i = (128 * 257 + 128) * 2;
+    REQUIRE_THAT(inv[i] / fwd[i], Catch::Matchers::WithinAbs(0.9, 1e-9));
 }
 
 TEST_CASE("MockBuilderNoClearbox") {
@@ -73,6 +80,6 @@ TEST_CASE("MockBuilderNoClearbox") {
     MockConfigBuilder b; b.include_clearbox = false;
     b.save(out);
     auto cfg = MachineConfigReader{out}.parse();
-    REQUIRE_FALSE(cfg.optical_trains[0].optional_components.clearbox.has_value());
+    REQUIRE(cfg.extensions.count("ClearBox") == 0);
     std::filesystem::remove(out);
 }

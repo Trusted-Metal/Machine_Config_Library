@@ -16,7 +16,7 @@ import (
 )
 
 // ContractVersion is the version of this contract.
-const ContractVersion = "0.1.0"
+const ContractVersion = "0.1.1"
 
 // Fixed-width storage types; each maps 1:1 to an HDF5 type.
 const (
@@ -98,12 +98,32 @@ type Dataset struct {
 	Attrs map[string]Attr
 }
 
-// Tree is one group: its attributes, child groups and datasets. Order is not significant; the
-// canonical form sorts by UTF-8 bytes.
+// TableField is one column of a Table. Size is the fixed byte length of a utf8 column and 0 for
+// numeric ones.
+type TableField struct {
+	Name  string
+	Dtype string
+	Size  int
+}
+
+// Table is a 1-D compound dataset (HDF5 compound type): one row per record, one named column per
+// field. Fields order is the compound member order and is significant. Columns[name] holds Rows
+// values in the dtype's Go shape ([]string, []int64, []uint64 or []float64).
+type Table struct {
+	Fields  []TableField
+	Rows    uint64
+	Columns map[string]any
+	Attrs   map[string]Attr
+}
+
+// Tree is one group: its attributes, child groups, datasets and tables. Order is not significant;
+// the canonical form sorts by UTF-8 bytes. Tables is empty unless used, so a tree without compound
+// data is encoded and hashed exactly as in contract 0.1.0.
 type Tree struct {
 	Attrs    map[string]Attr
 	Children map[string]*Tree
 	Datasets map[string]*Dataset
+	Tables   map[string]*Table
 }
 
 // NewTree returns an empty tree with initialised maps.
@@ -112,6 +132,7 @@ func NewTree() *Tree {
 		Attrs:    map[string]Attr{},
 		Children: map[string]*Tree{},
 		Datasets: map[string]*Dataset{},
+		Tables:   map[string]*Table{},
 	}
 }
 
@@ -285,5 +306,86 @@ func Validate(t *Tree, path string) error {
 			return err
 		}
 	}
+	for name, table := range t.Tables {
+		tablePath := joinPath(path, name)
+		if err := ValidateNodeName(name, tablePath); err != nil {
+			return err
+		}
+		_, isChild := t.Children[name]
+		_, isDataset := t.Datasets[name]
+		if isChild || isDataset {
+			return errAt(tablePath, "a table cannot share a name with a dataset or child group")
+		}
+		if err := validateTable(table, tablePath); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateTable(table *Table, path string) error {
+	if table == nil {
+		return errAt(path, "table must not be nil")
+	}
+	if len(table.Fields) == 0 {
+		return errAt(path, "a table needs at least one field")
+	}
+	names := map[string]bool{}
+	for _, f := range table.Fields {
+		fieldPath := joinPath(path, f.Name)
+		if err := ValidateNodeName(f.Name, fieldPath); err != nil {
+			return err
+		}
+		if names[f.Name] {
+			return errAt(fieldPath, "duplicate field name")
+		}
+		names[f.Name] = true
+		if !IsKnownDtype(f.Dtype) {
+			return errAt(fieldPath, "unknown dtype %q", f.Dtype)
+		}
+		column, ok := table.Columns[f.Name]
+		if !ok {
+			return errAt(fieldPath, "missing column")
+		}
+		if f.Dtype == Utf8 {
+			if f.Size < 1 {
+				return errAt(fieldPath, "a utf8 field needs a positive integer size")
+			}
+		} else if f.Size != 0 {
+			return errAt(fieldPath, "size is only valid for utf8 fields")
+		}
+		n, ok := columnLen(column)
+		if !ok {
+			return errAt(fieldPath, "column must be []string, []int64, []uint64 or []float64, got %T", column)
+		}
+		if uint64(n) != table.Rows {
+			return errAt(fieldPath, "column length %d does not match %d rows", n, table.Rows)
+		}
+		if _, isStrings := column.([]string); isStrings != (f.Dtype == Utf8) {
+			return errAt(fieldPath, "column is %T but the field dtype is %s", column, f.Dtype)
+		}
+		if err := checkValue(f.Dtype, column, fieldPath); err != nil {
+			return err
+		}
+		if strs, isStrings := column.([]string); isStrings {
+			for i, s := range strs {
+				if len(s) > f.Size {
+					return errAt(fmt.Sprintf("%s[%d]", fieldPath, i), "%d UTF-8 bytes do not fit the %d-byte field", len(s), f.Size)
+				}
+			}
+		}
+	}
+	for name := range table.Columns {
+		if !names[name] {
+			return errAt(joinPath(path, name), "column has no matching field")
+		}
+	}
+	return validateAttrs(table.Attrs, path)
+}
+
+func columnLen(column any) (int, bool) {
+	if s, ok := column.([]string); ok {
+		return len(s), true
+	}
+	return dataLen(column)
 }

@@ -18,7 +18,6 @@ from pathlib import Path
 import numpy as np
 
 from machine_config import (
-    ClearBox,
     Collimator,
     LightSource,
     Machine,
@@ -32,7 +31,6 @@ from machine_config import (
     ExtensionTree,
     canonical_digest,
     OpticalTrain,
-    OptionalComponents,
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
@@ -49,6 +47,16 @@ from test_adapter_migration import MockV1_1Reader, MockV1_1Writer  # noqa: E402
 
 def av_fixture(fixtures_dir: str, name: str) -> Path:
     return Path(fixtures_dir).parent / "docs" / "validation" / "fixtures" / name
+
+
+def _clearbox_train(cfg: MachineConfig, index: int) -> ExtensionTree:
+    """ClearBox is an opaque extension tree: extensions["ClearBox"] / Optical_Train_NN."""
+    return cfg.extensions["ClearBox"].children[f"Optical_Train_{index + 1:02d}"]
+
+
+def _grid(cfg: MachineConfig, index: int, name: str) -> np.ndarray:
+    ds = _clearbox_train(cfg, index).datasets[name]
+    return np.asarray(ds.data, dtype=np.float64).reshape(ds.shape)
 
 
 # S-01: Read reference fixture, all scalar fields
@@ -117,8 +125,9 @@ def run_s01(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
 # Rationale:   Binary data round-trips are the highest-risk correctness area.
 def run_s02(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     reader = MachineConfigReader(Path(fixtures_dir) / "reference_config.h5")
-    cd = reader.get_correction_data(0)
-    icd = reader.get_inverse_correction_data(0)
+    cfg = reader.parse()
+    cd = _grid(cfg, 0, "Correction_Data")
+    icd = _grid(cfg, 0, "Inverse_Correction_Data")
 
     if cd.shape != (257, 257, 2):
         return False, f"correction_data shape: {cd.shape}"
@@ -223,17 +232,17 @@ def run_s05(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     reader = MachineConfigReader(path)
     cfg = reader.parse()
 
-    cd_before = reader.get_correction_data(0)
-    icd_before = reader.get_inverse_correction_data(0)
+    cd_before = _grid(cfg, 0, "Correction_Data")
+    icd_before = _grid(cfg, 0, "Inverse_Correction_Data")
 
     with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as f:
         tmp = f.name
 
     MachineConfigWriter(cfg).write(tmp)
-    reader2 = MachineConfigReader(tmp)
+    cfg2 = MachineConfigReader(tmp).parse()
 
-    cd_after = reader2.get_correction_data(0)
-    icd_after = reader2.get_inverse_correction_data(0)
+    cd_after = _grid(cfg2, 0, "Correction_Data")
+    icd_after = _grid(cfg2, 0, "Inverse_Correction_Data")
 
     if not np.array_equal(cd_before, cd_after, equal_nan=True):
         h_before = hashlib.sha256(cd_before.tobytes()).hexdigest()[:16]
@@ -276,10 +285,7 @@ def run_s06(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     if not cfg.meta.machine_name:
         return False, "machine_name is empty"
 
-    cb = cfg.optical_trains[0].optional_components.clearbox
-    if cb is None or cb.correction_data is None:
-        return False, "clearbox or correction_data is None"
-    center = cb.correction_data[128][128][0]
+    center = _grid(cfg, 0, "Correction_Data")[128][128][0]
     if not math.isfinite(center) or abs(center - 2.0) > 0.01:
         return False, f"correction_data center: expected ~2.0, got {center}"
 
@@ -352,17 +358,17 @@ def run_s07(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
 #                1. Add a third optical train (clone train 1, change train_id)
 #                2. Change build_plate_x from 250.0 to 350.0
 #                3. Set scan_head_rotation on new train to 90.0
-#                4. Clear all correction data (set to None/null/nil)
-#                5. Change machine_name to "MODIFIED_ACONITY_VALIDATION"
+#              4. The new train carries no ClearBox (its extension subtree is absent)
+#              5. Change machine_name to "MODIFIED_ACONITY_VALIDATION"
 #              → write to temp → read temp → verify all five changes persisted
 # Expected:    len(optical_trains) == 3
 #              build_plate_x ≈ 350.0
 #              train[2].scanner.scan_head_rotation ≈ 90.0
-#              train[2].optional_components.clearbox.correction_data is None/null/nil
+#              extensions["ClearBox"] has Optical_Train_01/02 but no Optical_Train_03
 #              machine_name == "MODIFIED_ACONITY_VALIDATION"
 #              file_version still "1.0" (adapter did not change the version)
 # Rationale:   Tests that the adapter pipeline handles structural changes (new
-#              train, nil correction data) without silent corruption or
+#              train, train without ClearBox) without silent corruption or
 #              wrong-adapter dispatch.
 def run_s08(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     matches = [
@@ -378,8 +384,6 @@ def run_s08(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     new_train = replace(new_train, train_id="Optical_Train_03")
     new_bp = replace(cfg.machine.build_plate, x=350.0)
     new_train = replace(new_train, scanner=replace(new_train.scanner, scan_head_rotation=90.0))
-    new_train = replace(new_train,
-        optional_components=replace(new_train.optional_components, clearbox=None))
 
     modified = replace(cfg,
         meta=replace(cfg.meta, machine_name="MODIFIED_ACONITY_VALIDATION"),
@@ -400,14 +404,15 @@ def run_s08(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
     r2 = rb.optical_trains[2].scanner.scan_head_rotation
     if r2 is None or abs(r2 - 90.0) > 0.001:
         return False, f"train[2].scan_head_rotation: got {r2}"
-    if rb.optical_trains[2].optional_components.clearbox is not None:
-        return False, "train[2].clearbox should be None"
+    cb_children = rb.extensions["ClearBox"].children
+    if "Optical_Train_03" in cb_children or not {"Optical_Train_01", "Optical_Train_02"} <= set(cb_children):
+        return False, f"ClearBox train groups after roundtrip: {sorted(cb_children)}"
     if rb.meta.machine_name != "MODIFIED_ACONITY_VALIDATION":
         return False, f"machine_name: got '{rb.meta.machine_name}'"
     if rb.meta.file_version.strip() != "1.0":
         return False, f"file_version changed: '{rb.meta.file_version}'"
 
-    return True, "3 trains, build_plate_x=350.0, rotation=90.0, clearbox cleared, machine_name OK"
+    return True, "3 trains, build_plate_x=350.0, rotation=90.0, new train has no ClearBox, machine_name OK"
 
 
 # S-09: Public types importable from machine_config top-level
@@ -417,7 +422,7 @@ def run_s08(fixtures_dir: str, real_dir: str) -> tuple[bool, str]:
 # Layer:       public API / packaging
 # Precondition: Library installed from artifact (wheel / tarball / module), not from source
 # Action:      Import MachineConfig, Scanner, OpticalTrain, LightSource, Collimator,
-#              ScannerCard, ClearBox, ScanFieldCorrectionFile, OpcuaConfig, and
+#              ScannerCard, ScanFieldCorrectionFile, and
 #              MockConfigBuilder from the library's public import path only.
 # Expected:    All imports resolve without error.
 #              No type needs to be defined or re-implemented by the consumer.

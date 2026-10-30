@@ -29,7 +29,7 @@ also reach.
 [PASS] S-05: correction_data preserved: SHA-256=b3b95bf5d5e73119ad8c632e6f5b44ba3beada6f054e04797afd6f193f2cebc6
 [PASS] S-06: 2-laser build OK, center≈2.0, roundtrip OK
 [PASS] S-07: extension roundtrip OK: 2 trigger groups, digest=f7ba506abfe76096...
-[PASS] S-08: 3 trains, build_plate_x=350.0, rotation=90.0, clearbox cleared, machine_name OK
+[PASS] S-08: 3 trains, build_plate_x=350.0, rotation=90.0, new train has no ClearBox, machine_name OK
 [PASS] S-09: all public types resolve and are usable from the crate root
 [PASS] AV-01: UnsupportedVersion raised, version='2.0'
 [PASS] AV-02: missing File_Version dispatches OK, file_version=''

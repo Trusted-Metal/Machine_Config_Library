@@ -156,8 +156,8 @@ std::ofstream{"output.json"} << json;
 std::string compact = reader.toJson(/*indent=*/0);
 ```
 
-> **Binary data**: use `getCorrectionData()` / `getInverseCorrectionData()` /
-> `getScanFieldCorrectionBytes()` for binary datasets. `toJson()` does not include them.
+> **Binary data**: ClearBox grids are extension datasets (use case 9) and are included in
+> `toJson()`. Use `getScanFieldCorrectionBytes()` for the raw `.fc3` bytes.
 
 ---
 
@@ -183,10 +183,9 @@ assert(config.meta.machine_name == reread.meta.machine_name);
 assert(reread.optical_trains[0].scanner.scan_head_offset_x == -91.5);
 ```
 
-> **Binary data in the writer**: if `correction_data` / `inverse_correction_data` are `nullopt`
-> (config parsed with `parse()`, not `parseWithBinary()`), the writer writes zero-filled
-> `(257, 257, 2)` datasets — identical behaviour to Python and Rust. Use `parseWithBinary()`
-> before writing to preserve the original correction grids.
+> **Binary data in the writer**: the ClearBox grids travel inside `config.extensions`, so they are
+> written back verbatim. Only the scan-field correction bytes need `parseWithBinary()`; otherwise the
+> writer writes a zero-filled placeholder for them.
 
 ---
 
@@ -216,10 +215,11 @@ auto config = MockConfigBuilder{}.build();
 assert(config.optical_trains.size() == 2);
 assert(config.meta.machine_name == "MockMachine");
 
-// Verify the correction grid
-auto cd = MachineConfigReader{"test_config.h5"}.getCorrectionData(0);
-assert((cd.shape == std::array<size_t,3>{257, 257, 2}));
-double peak = cd.data[(128 * 257 + 128) * 2 + 0];  // ≈ 2.0 (Gaussian peak)
+// Verify the correction grid (ClearBox is an extension tree; see use case 9)
+auto cfg = MachineConfigReader{"test_config.h5"}.parse();
+const auto& ds = cfg.extensions.at("ClearBox").children.at("Optical_Train_01").datasets.at("Correction_Data");
+assert((ds.shape == std::vector<std::uint64_t>{257, 257, 2}));
+double peak = std::get<std::vector<double>>(ds.data)[(128 * 257 + 128) * 2 + 0];  // ≈ 2.0 (Gaussian peak)
 assert(peak > 1.9 && peak < 2.1);
 ```
 
@@ -258,38 +258,44 @@ assert(missing.empty());
 
 ## Use case 9 — Access ClearBox correction arrays
 
-`CorrectionData` holds a flat row-major `std::vector<double>` and an
-`std::array<size_t, 3> shape`. NaN values indicate out-of-field cells.
+ClearBox is not a typed model in core: it is the opaque `ClearBox` extension tree
+(`config.extensions["ClearBox"]`, an `extension::Tree`), in the File_Version 1.1 layout for both file
+versions (see [EXTENSION_CONTRACT.md](EXTENSION_CONTRACT.md#clearbox)). Each train is a child
+`Optical_Train_NN` with `Correction_Data` / `Inverse_Correction_Data` datasets: a flat row-major
+`std::vector<double>` plus a `shape`; NaN values indicate out-of-field cells.
 
 ```cpp
 #include "machine_config/reader.hpp"
 using namespace machine_config;
 
 MachineConfigReader reader{"fixtures/reference_config.h5"};
+auto config = reader.parse();
+
+const auto& root  = config.extensions.at("ClearBox");
+const auto& train = root.children.at("Optical_Train_01");
 
 // Forward grid, train 0 — flat buffer + shape, NaN preserved
-CorrectionData cd = reader.getCorrectionData(0);
-assert((cd.shape == std::array<size_t,3>{257, 257, 2}));
+const auto& cd = train.datasets.at("Correction_Data");
+assert((cd.shape == std::vector<std::uint64_t>{257, 257, 2}));
+const auto& data = std::get<std::vector<double>>(cd.data);
 
 // Row-major: offset = (i * shape[1] + j) * shape[2] + k
 size_t d1 = cd.shape[1], d2 = cd.shape[2];
-double centre_x = cd.data[(128 * d1 + 128) * d2 + 0];
-double centre_y = cd.data[(128 * d1 + 128) * d2 + 1];
+double centre_x = data[(128 * d1 + 128) * d2 + 0];
+double centre_y = data[(128 * d1 + 128) * d2 + 1];
 if (!std::isnan(centre_x))
     std::cout << "Centre correction x=" << centre_x << "\n";
 
 // Inverse grid
-CorrectionData icd = reader.getInverseCorrectionData(0);
+const auto& icd = train.datasets.at("Inverse_Correction_Data");
+
+// Per-train scalars are extension attrs (with their stored dtypes); shared values are on the root.
+auto ip = std::get<std::string>(train.attrs.at("Ip_Address").value);
+auto out = std::get<std::string>(root.attrs.at("Output_Path").value);
 
 // Raw .fc3 bytes
 auto bytes = reader.getScanFieldCorrectionBytes(0);  // std::vector<uint8_t>
 std::cout << "fc3 size: " << bytes.size() << " bytes\n";  // 1138799 for train 0
-
-// parseWithBinary() populates Grid3D (nested optional<double>) in the model
-auto full = reader.parseWithBinary();
-auto& cb = *full.optical_trains[0].optional_components.clearbox;
-assert(cb.correction_data.has_value());
-assert((*cb.correction_data).size() == 257);  // outer dimension
 ```
 
 ---

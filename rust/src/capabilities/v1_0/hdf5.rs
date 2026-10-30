@@ -3,66 +3,25 @@
 // Reference: python/src/machine_config/reader.py
 // HDF5 path mapping: see §3.10; type coercion rules: see §3.11
 //
-// Design note (deliberate divergence from Python): Python's single `parse()`
-// always reads the ClearBox correction grids and the raw `.fc3` bytes into the
-// model; `include_binary` only controls whether `to_json()` serialises them.
-// The Rust reader instead controls this at parse time via two entry points —
+// Design note (deliberate divergence from Python): the Rust reader controls
+// whether the raw `.fc3` bytes are read at parse time via two entry points —
 // `parse()` (scalars/metadata only) and `parse_with_binary()` (also reads the
-// binary payloads) — so callers who only need scalar fields never pay the
-// cost of reading the (257, 257, 2) float64 grids or multi-megabyte byte
-// arrays. `to_json()` simply picks which of the two to call.
+// binary payload) — so callers who only need scalar fields never pay the
+// cost of reading multi-megabyte byte arrays. `to_json()` simply picks which
+// of the two to call. Extension trees (including ClearBox's correction grids)
+// are always read in full.
 
 use std::path::{Path, PathBuf};
 
-use hdf5::types::{FixedUnicode, TypeDescriptor, VarLenAscii, VarLenUnicode};
+use hdf5::types::{TypeDescriptor, VarLenAscii, VarLenUnicode};
 use hdf5::{Dataset, File as H5File, Group, Location};
 use indexmap::IndexMap;
 
-/// On-disk compound-dataset row for `Derivation_Equation_Constants`. Distinct
-/// from the model-facing [`EquationConstant`] (which uses `String`) because
-/// `String` doesn't implement `H5Type` — `FixedUnicode<64>` is the
-/// HDF5-compound equivalent; converted to/from `String` at the model
-/// boundary, the same way every other field already converts between its
-/// on-disk and in-memory representation.
-///
-/// **Fixed-length, not `VarLenUnicode` — deliberate, cross-language decision.**
-/// The HDF5 C library cannot convert between fixed-length and variable-length
-/// strings when they're compound-type *members* (confirmed at the raw
-/// `H5Tinsert`/`H5Dread` level, independent of any single binding), and
-/// Node.js's h5wasm cannot write a non-empty VLEN string inside a compound
-/// row at all. A 64-byte fixed-length UTF-8 string (NULLPAD-padded on disk)
-/// is the one representation every language's HDF5 binding can both read and
-/// write here. 64 bytes is generous relative to real usage (`a`/`b`, or
-/// `c0`..`cN` for `POLYNOMIAL`) while leaving room for more descriptive
-/// names. `FixedUnicode::from_str` (used at the model boundary) rejects
-/// names whose UTF-8 encoding exceeds 64 bytes with `StringError`, rather
-/// than silently truncating. See `SYNCHRONOUS_SENSOR_PLAN.md`'s "Compound
-/// dataset string convention" section for the full cross-language
-/// investigation.
-#[derive(hdf5::H5Type, Clone, Debug)]
-#[repr(C)]
-pub(crate) struct RawEquationConstant {
-    pub(crate) name: FixedUnicode<64>,
-    pub(crate) value: f64,
-}
-
-/// On-disk compound-dataset row for `Calibration_Points`. All-`f64`, so there
-/// is no string-conversion concern here — kept as its own type anyway, for
-/// symmetry with [`RawEquationConstant`] and to keep the model layer
-/// (`crate::models`) free of any HDF5-specific derive.
-#[derive(hdf5::H5Type, Clone, Debug)]
-#[repr(C)]
-pub(crate) struct RawCalibrationPoint {
-    pub(crate) input_value: f64,
-    pub(crate) output_value: f64,
-}
-
 use super::layout;
+use crate::clearbox_legacy;
 use crate::error::{MachineConfigError, Result};
 use crate::models::*;
-use crate::power_characterization::{
-    forward_power_characterization_coefficients, forward_power_characterization_points,
-};
+use crate::power_characterization::forward_power_characterization_points;
 use crate::reader::ReaderAdapter;
 use crate::extensions::read_extension_tree;
 
@@ -313,34 +272,6 @@ impl Hdf5AdapterV1_0 {
         self.parse_inner(&f, true)
     }
 
-    /// Returns the `(257, 257, 2)` float64 correction grid for optical train
-    /// `train_index` (0-indexed) as a version-agnostic [`CorrectionData`].
-    ///
-    /// Data is row-major; NaN cells (outside the scan-field boundary) are
-    /// preserved as IEEE 754 NaN. See [`CorrectionData`] for indexing details
-    /// and instructions on reconstructing an `ndarray::Array3` if needed.
-    pub fn get_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
-        let f = H5File::open(&self.path)?;
-        let path = layout::correction_data_path(train_index);
-        let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
-        let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
-        Ok(CorrectionData { data: arr.into_raw_vec_and_offset().0, shape })
-    }
-
-    /// Returns the `(257, 257, 2)` float64 *inverse* correction grid for
-    /// optical train `train_index` (0-indexed) as a version-agnostic
-    /// [`CorrectionData`].
-    ///
-    /// Data is row-major; NaN cells are preserved as IEEE 754 NaN.
-    /// See [`CorrectionData`] for indexing details.
-    pub fn get_inverse_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
-        let f = H5File::open(&self.path)?;
-        let path = layout::inverse_correction_data_path(train_index);
-        let arr = f.dataset(&path)?.read::<f64, ndarray::Ix3>()?;
-        let shape = [arr.shape()[0], arr.shape()[1], arr.shape()[2]];
-        Ok(CorrectionData { data: arr.into_raw_vec_and_offset().0, shape })
-    }
-
     /// Returns the raw `.fc3` bytes embedded as a `uint8` dataset for optical
     /// train `train_index` (0-indexed).
     pub fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>> {
@@ -363,11 +294,10 @@ impl Hdf5AdapterV1_0 {
 
     /// Parses and returns the canonical JSON representation.
     ///
-    /// `include_binary` controls whether `correction_data`,
-    /// `inverse_correction_data`, and `raw_bytes` are included — the HDF5
-    /// file remains the source of truth for those; use
-    /// [`Self::get_correction_data`] and [`Self::get_scan_field_correction_bytes`]
-    /// for direct numeric access instead.
+    /// `include_binary` controls whether `raw_bytes` is included — the HDF5
+    /// file remains the source of truth for it; use
+    /// [`Self::get_scan_field_correction_bytes`] for direct access instead.
+    /// Extension trees (including ClearBox's correction grids) are always complete.
     pub fn to_json(&self, pretty: bool, include_binary: bool) -> Result<String> {
         let config = if include_binary { self.parse_with_binary()? } else { self.parse()? };
         if pretty {
@@ -428,13 +358,26 @@ impl Hdf5AdapterV1_0 {
             .filter(|k| k.starts_with(layout::TRAIN_ID_PREFIX))
             .collect();
         train_ids.sort();
-        let optical_trains = train_ids
-            .iter()
-            .map(|tid| self.parse_train(f, tid, include_binary))
-            .collect::<Result<Vec<_>>>()?;
+        let mut clearbox_trains = Vec::new();
+        let mut optical_trains = Vec::with_capacity(train_ids.len());
+        for tid in &train_ids {
+            optical_trains.push(self.parse_train(f, tid, include_binary)?);
+            let path = format!(
+                "{}/{}/{}",
+                layout::train_path_by_id(tid),
+                layout::GROUP_OPTIONAL_COMPONENTS,
+                layout::GROUP_CLEARBOX
+            );
+            if let Ok(grp) = f.group(&path) {
+                clearbox_trains.push((tid.clone(), read_extension_tree(&grp, tid)?));
+            }
+        }
 
-        // v1.0 stores the TM_OPCUA extension at the root as `OPCUA/`.
         let mut extensions = std::collections::BTreeMap::new();
+        if let Some(tree) = clearbox_legacy::from_v1_0_trains(clearbox_trains)? {
+            extensions.insert(clearbox_legacy::EXTENSION_NAME.to_string(), tree);
+        }
+        // v1.0 stores the TM_OPCUA extension at the root as `OPCUA/`.
         if let Ok(grp) = f.group(layout::ROOT_OPCUA) {
             let name = layout::LEGACY_OPCUA_EXTENSION_NAME;
             extensions.insert(name.to_string(), read_extension_tree(&grp, name)?);
@@ -451,11 +394,6 @@ impl Hdf5AdapterV1_0 {
         let light_source = self.parse_light_source(&require_group(&a, "Light_Source")?)?;
         let collimator = self.parse_collimator(&require_group(&a, "Collimator")?)?;
         let scanner_card = self.parse_scanner_card(&require_group(&a, "Scanner_Card")?)?;
-
-        let clearbox = match a.group("Optional_Components/ClearBox") {
-            Ok(grp) => Some(self.parse_clearbox(&grp, include_binary)?),
-            Err(_) => None,
-        };
 
         let sfcf = match a.dataset("scan_field_correction_file") {
             Ok(ds) => Some(self.parse_sfcf(&ds, include_binary)?),
@@ -517,7 +455,6 @@ impl Hdf5AdapterV1_0 {
             light_source,
             collimator,
             scanner_card,
-            optional_components: crate::models::OptionalComponents { clearbox },
             scan_field_correction_file: sfcf,
         })
     }
@@ -633,107 +570,6 @@ impl Hdf5AdapterV1_0 {
         })
     }
 
-    fn parse_clearbox(&self, grp: &Group, include_binary: bool) -> Result<ClearBox> {
-        let (correction_data, inverse_correction_data) = if include_binary {
-            let cd = grp.dataset("Correction_Data")?.read::<f64, ndarray::Ix3>()?;
-            let icd = grp.dataset("Inverse_Correction_Data")?.read::<f64, ndarray::Ix3>()?;
-            (Some(nan_array3_to_nested(&cd)), Some(nan_array3_to_nested(&icd)))
-        } else {
-            (None, None)
-        };
-        // Synchronous_Sensors: absent entirely (e.g. today's plain
-        // reference_config.h5) and present-but-empty are the same state —
-        // an empty IndexMap, not a separate "absent" marker. member_names()
-        // only ever enumerates sensor sub-groups here since nothing else is
-        // ever placed directly under Synchronous_Sensors itself.
-        let synchronous_sensors = match grp.group("Synchronous_Sensors") {
-            Ok(sensors_grp) => {
-                let mut map = IndexMap::new();
-                for name in sensors_grp.member_names()? {
-                    let sg = sensors_grp.group(&name)?;
-                    map.insert(name, self.parse_synchronous_sensor(&sg)?);
-                }
-                map
-            }
-            Err(_) => IndexMap::new(),
-        };
-        let volts_to_watts_algorithm = read_str(grp, "Volts_To_Watts_Algorithm")?;
-        let volts_to_watts_params = read_str(grp, "Volts_To_Watts_Params")?;
-        Ok(ClearBox {
-            ip_address: read_required_str(grp, "Ip_Address")?,
-            serial_number: read_str(grp, "Serial_Number")?,
-            data_port: read_int(grp, "Data_Port")?,
-            server_port: read_int(grp, "Server_Port")?,
-            actual_timing_offset: read_int(grp, "Actual_Timing_Offset")?,
-            commanded_timing_offset: read_int(grp, "Commanded_Timing_Offset")?,
-            correction_data,
-            inverse_correction_data,
-            manufacturer: read_str(grp, "Manufacturer")?,
-            model: read_str(grp, "Model")?,
-            output_path: read_str(grp, "Output_Path")?,
-            selected_camera: read_str(grp, "Selected_Camera")?,
-            custom_video_format: read_str(grp, "Custom_Video_Format")?,
-            video_output: read_str(grp, "Video_Output")?,
-            show_console: read_bool_from_int(grp, "Show_Console")?,
-            software_trigger_delay: read_int(grp, "Software_Trigger_Delay")?,
-            correction_grid_domain_shape: read_str(grp, "Correction_Grid_Domain_Shape")?,
-            inverse_grid_domain_shape: read_str(grp, "Inverse_Grid_Domain_Shape")?,
-            synchronous_sensors,
-            // v1.1 field; no v1.0 on-disk source.
-            firmware_version: None,
-            power_characterization: forward_power_characterization_coefficients(
-                volts_to_watts_algorithm.as_deref(),
-                volts_to_watts_params.as_deref(),
-            )?,
-        })
-    }
-
-    /// Parses one `ClearBox/Synchronous_Sensors/<key>/` sub-group. Both
-    /// compound datasets default to an empty `Vec` if the dataset itself is
-    /// absent — the same "never panic on missing optional data" discipline
-    /// used everywhere else in this reader, extended to datasets, not just
-    /// attributes.
-    fn parse_synchronous_sensor(&self, grp: &Group) -> Result<SynchronousSensor> {
-        let derivation_equation_constants = match grp.dataset("Derivation_Equation_Constants") {
-            Ok(ds) => ds
-                .read_raw::<RawEquationConstant>()?
-                .into_iter()
-                .map(|r| EquationConstant { name: r.name.as_str().to_string(), value: r.value })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        let calibration_points = match grp.dataset("Calibration_Points") {
-            Ok(ds) => ds
-                .read_raw::<RawCalibrationPoint>()?
-                .into_iter()
-                .map(|r| CalibrationPoint { input_value: r.input_value, output_value: r.output_value })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        Ok(SynchronousSensor {
-            enabled: read_bool_from_int(grp, "Enabled")?,
-            sensor_name: read_str(grp, "Sensor_Name")?,
-            sensor_output_range_low: read_float(grp, "Sensor_Output_Range_Low")?,
-            sensor_output_range_high: read_float(grp, "Sensor_Output_Range_High")?,
-            sensor_output_space: read_str(grp, "Sensor_Output_Space")?,
-            sensor_model: read_str(grp, "Sensor_Model")?,
-            sensor_manufacturer: read_str(grp, "Sensor_Manufacturer")?,
-            sensor_scope: read_str(grp, "Sensor_Scope")?,
-            units_derived_quantity: read_str(grp, "Units_Derived_Quantity")?,
-            port_id: read_int(grp, "Port_ID")?,
-            sensor_type: read_str(grp, "Sensor_Type")?,
-            input_type: read_str(grp, "Input_Type")?,
-            algorithm_type: read_str(grp, "Algorithm_Type")?,
-            algorithm_equation: read_str(grp, "Algorithm_Equation")?,
-            calibration_source: read_str(grp, "Calibration_Source")?,
-            calibration_verified: read_bool_from_int(grp, "Calibration_Verified")?,
-            sample_period: read_float(grp, "Sample_Period")?,
-            metadata: read_str(grp, "Metadata")?,
-            derivation_equation_constants,
-            calibration_points,
-        })
-    }
-
     fn parse_sfcf(&self, ds: &Dataset, include_binary: bool) -> Result<ScanFieldCorrectionFile> {
         let raw_bytes = if include_binary { Some(ds.read_raw::<u8>()?) } else { None };
         Ok(ScanFieldCorrectionFile {
@@ -766,12 +602,6 @@ impl ReaderAdapter for Hdf5AdapterV1_0 {
     }
     fn parse_with_binary(&self) -> Result<MachineConfig> {
         self.parse_with_binary()
-    }
-    fn get_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
-        self.get_correction_data(train_index)
-    }
-    fn get_inverse_correction_data(&self, train_index: usize) -> Result<CorrectionData> {
-        self.get_inverse_correction_data(train_index)
     }
     fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>> {
         self.get_scan_field_correction_bytes(train_index)
@@ -855,13 +685,17 @@ mod tests {
 
     #[test]
     fn parse_reference_clearbox_and_sfcf_metadata_without_binary() {
+        use mcf_extension_contract::DatasetData;
         let config = Hdf5AdapterV1_0::open(REFERENCE).unwrap().parse().unwrap();
         let t1 = &config.optical_trains[0];
 
-        let cb = t1.optional_components.clearbox.as_ref().expect("clearbox present on reference fixture");
-        assert!(!cb.ip_address.is_empty());
-        assert!(cb.correction_data.is_none(), "parse() must not read binary correction grids");
-        assert!(cb.inverse_correction_data.is_none());
+        let cb = &config.extensions["ClearBox"].children["Optical_Train_01"];
+        assert!(!cb.attrs["Ip_Address"].as_str().unwrap().is_empty());
+        let grid = &cb.datasets["Correction_Data"];
+        assert_eq!(grid.shape, [257, 257, 2]);
+        let DatasetData::F64(values) = &grid.data else { panic!("grid is not float64") };
+        // Out-of-field corners of a real correction grid are NaN.
+        assert!(values.iter().any(|v| v.is_nan()));
 
         let sfcf = t1
             .scan_field_correction_file
@@ -873,64 +707,67 @@ mod tests {
 
     #[test]
     fn reference_fixture_has_no_synchronous_sensors() {
-        // reference_config.h5 deliberately has no Synchronous_Sensors group
-        // (SYNCHRONOUS_SENSOR_PLAN.md Phase 0) — must read back as an empty
-        // map, not an error, not a panic.
         let config = Hdf5AdapterV1_0::open(REFERENCE).unwrap().parse().unwrap();
-        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        assert!(cb.synchronous_sensors.is_empty());
+        let cb = &config.extensions["ClearBox"].children["Optical_Train_01"];
+        assert!(!cb.children.contains_key("Synchronous_Sensors"));
     }
 
-    /// Every one of the 18 scalar fields plus both compound datasets, checked
-    /// against the real ZR800 example values in
-    /// `reference_config_synchronous_sensors.h5` — verified directly via
-    /// h5py before writing this test (SYNCHRONOUS_SENSOR_PLAN.md Phase 0).
+    #[test]
+    fn v1_0_clearbox_is_shimmed_into_the_v1_1_layout() {
+        let config = Hdf5AdapterV1_0::open(REFERENCE).unwrap().parse().unwrap();
+        let root = &config.extensions["ClearBox"];
+        // Shared values live on the extension root, once.
+        assert!(root.attrs.contains_key("Output_Path"));
+        assert!(root.attrs.contains_key("Software_Trigger_Delay"));
+        for id in ["Optical_Train_01", "Optical_Train_02"] {
+            let cb = &root.children[id];
+            assert!(!cb.attrs.contains_key("Output_Path"));
+            assert!(!cb.attrs.contains_key("Volts_To_Watts_Algorithm"));
+            assert!(cb.children.contains_key("Power_Characterization"));
+            // v1.0-only attributes ride along per train.
+            assert!(cb.attrs.contains_key("Show_Console"));
+        }
+    }
+
+    /// The real ZR800 example values in `reference_config_synchronous_sensors.h5`, read as
+    /// opaque tree content (attributes plus both compound datasets as tables).
     #[test]
     fn synchronous_sensor_fixture_has_real_values() {
+        use mcf_extension_contract::ColumnData;
         let config = Hdf5AdapterV1_0::open(REFERENCE_SENSORS).unwrap().parse().unwrap();
-        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        assert_eq!(cb.synchronous_sensors.len(), 1);
-        let sensor = &cb.synchronous_sensors["Oxygen Sensor"];
+        let sensors = &config.extensions["ClearBox"].children["Optical_Train_01"].children
+            ["Synchronous_Sensors"];
+        assert_eq!(sensors.children.len(), 1);
+        let sensor = &sensors.children["Oxygen Sensor"];
 
-        assert_eq!(sensor.enabled, Some(true));
-        assert_eq!(sensor.sensor_name, Some("ZR800 Oxygen Analyzer".to_string()));
-        assert_eq!(sensor.sensor_output_range_low, Some(-1.0));
-        assert_eq!(sensor.sensor_output_range_high, Some(6.0));
-        assert_eq!(sensor.sensor_output_space, Some("log10(ppm)".to_string()));
-        assert_eq!(sensor.sensor_model, Some("ZR810".to_string()));
-        assert_eq!(sensor.sensor_manufacturer, Some("Industrial Physics".to_string()));
-        assert_eq!(sensor.sensor_scope, Some("Global".to_string()));
-        assert_eq!(sensor.units_derived_quantity, Some("ppm".to_string()));
-        assert_eq!(sensor.port_id, Some(5));
-        assert_eq!(sensor.sensor_type, Some("Oxygen Sensor".to_string()));
-        assert_eq!(sensor.input_type, Some("4-20 mA".to_string()));
-        assert_eq!(sensor.algorithm_type, Some("Log-Linear".to_string()));
-        assert_eq!(sensor.algorithm_equation, Some("log(ppm) = a*mA + b".to_string()));
-        assert_eq!(sensor.calibration_source, Some("Datasheet".to_string()));
-        assert_eq!(sensor.calibration_verified, Some(false));
-        assert_eq!(sensor.sample_period, Some(5.0));
-        assert!(sensor.metadata.as_deref().unwrap_or("").contains("100KHz"));
+        let s = |k: &str| sensor.attrs[k].as_str().map(str::to_owned);
+        assert_eq!(s("Sensor_Name").as_deref(), Some("ZR800 Oxygen Analyzer"));
+        assert_eq!(sensor.attrs["Sensor_Output_Range_Low"].as_f64(), Some(-1.0));
+        assert_eq!(sensor.attrs["Sensor_Output_Range_High"].as_f64(), Some(6.0));
+        assert_eq!(s("Sensor_Output_Space").as_deref(), Some("log10(ppm)"));
+        assert_eq!(s("Sensor_Model").as_deref(), Some("ZR810"));
+        assert_eq!(s("Sensor_Manufacturer").as_deref(), Some("Industrial Physics"));
+        assert_eq!(s("Units_Derived_Quantity").as_deref(), Some("ppm"));
+        assert_eq!(sensor.attrs["Port_ID"].as_i64(), Some(5));
+        assert_eq!(s("Algorithm_Equation").as_deref(), Some("log(ppm) = a*mA + b"));
+        assert_eq!(sensor.attrs["Sample_Period"].as_f64(), Some(5.0));
+        assert!(s("Metadata").unwrap_or_default().contains("100KHz"));
 
-        // Compound datasets — exact values, in on-disk row order.
-        assert_eq!(sensor.derivation_equation_constants.len(), 2);
-        assert_eq!(sensor.derivation_equation_constants[0].name, "a");
-        assert_eq!(sensor.derivation_equation_constants[0].value, 0.4375);
-        assert_eq!(sensor.derivation_equation_constants[1].name, "b");
-        assert_eq!(sensor.derivation_equation_constants[1].value, -2.75);
+        let constants = &sensor.tables["Derivation_Equation_Constants"];
+        assert_eq!(constants.columns[0], ColumnData::Utf8(vec!["a".into(), "b".into()]));
+        assert_eq!(constants.columns[1], ColumnData::F64(vec![0.4375, -2.75]));
+        let points = &sensor.tables["Calibration_Points"];
+        assert_eq!(points.columns[0], ColumnData::F64(vec![4.0, 20.0]));
+        assert_eq!(points.columns[1], ColumnData::F64(vec![-1.0, 6.0]));
 
-        assert_eq!(sensor.calibration_points.len(), 2);
-        assert_eq!(sensor.calibration_points[0].input_value, 4.0);
-        assert_eq!(sensor.calibration_points[0].output_value, -1.0);
-        assert_eq!(sensor.calibration_points[1].input_value, 20.0);
-        assert_eq!(sensor.calibration_points[1].output_value, 6.0);
-
-        // Confirms the calibration points are in Sensor_Output_Space
-        // (log-space), not Units_Derived_Quantity (linear ppm) — the exact
-        // proof from SYNCHRONOUS_SENSOR_PLAN.md's unit-convention discussion.
-        let a = sensor.derivation_equation_constants[0].value;
-        let b = sensor.derivation_equation_constants[1].value;
-        for point in &sensor.calibration_points {
-            assert!((a * point.input_value + b - point.output_value).abs() < 1e-9);
+        // The calibration points are in Sensor_Output_Space (log-space), not linear ppm.
+        let (ColumnData::F64(k), ColumnData::F64(x), ColumnData::F64(y)) =
+            (&constants.columns[1], &points.columns[0], &points.columns[1])
+        else {
+            panic!("unexpected column types")
+        };
+        for (xi, yi) in x.iter().zip(y) {
+            assert!((k[0] * xi + k[1] - yi).abs() < 1e-9);
         }
     }
 
@@ -941,37 +778,20 @@ mod tests {
         let opcua = config.extensions.get("TM_OPCUA").expect("OPCUA present on the combined fixture");
         assert!(!opcua.children["Client"].attrs["Server_URL"].as_str().unwrap().is_empty());
 
-        let cb = config.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        assert_eq!(cb.synchronous_sensors.len(), 1);
+        let sensors = &config.extensions["ClearBox"].children["Optical_Train_01"].children
+            ["Synchronous_Sensors"];
         assert_eq!(
-            cb.synchronous_sensors["Oxygen Sensor"].sensor_name,
-            Some("ZR800 Oxygen Analyzer".to_string())
+            sensors.children["Oxygen Sensor"].attrs["Sensor_Name"].as_str(),
+            Some("ZR800 Oxygen Analyzer")
         );
     }
 
     #[test]
-    fn parse_with_binary_populates_correction_data_and_raw_bytes() {
+    fn parse_with_binary_populates_raw_bytes() {
         let config = Hdf5AdapterV1_0::open(REFERENCE).unwrap().parse_with_binary().unwrap();
-        let t1 = &config.optical_trains[0];
-
-        let cb = t1.optional_components.clearbox.as_ref().unwrap();
-        let data = cb.correction_data.as_ref().expect("correction_data populated");
-        assert_eq!(data.len(), 257);
-        assert_eq!(data[0].len(), 257);
-        assert_eq!(data[0][0].len(), 2);
-
-        let sfcf = t1.scan_field_correction_file.as_ref().unwrap();
+        let sfcf = config.optical_trains[0].scan_field_correction_file.as_ref().unwrap();
         let raw = sfcf.raw_bytes.as_ref().expect("raw_bytes populated");
         assert_eq!(raw.len(), sfcf.file_size as usize);
-    }
-
-    #[test]
-    fn get_correction_data_shape_and_nan_present() {
-        let reader = Hdf5AdapterV1_0::open(REFERENCE).unwrap();
-        let cd = reader.get_correction_data(0).unwrap();
-        assert_eq!(cd.shape, [257, 257, 2]);
-        // Out-of-field corners of a real correction grid are NaN.
-        assert!(cd.data.iter().any(|v| v.is_nan()));
     }
 
     #[test]
@@ -991,15 +811,15 @@ mod tests {
     }
 
     #[test]
-    fn reference_fixture_has_no_extensions() {
+    fn reference_fixture_carries_only_the_clearbox_extension() {
         let config = Hdf5AdapterV1_0::open(REFERENCE).unwrap().parse().unwrap();
-        assert!(config.extensions.is_empty());
+        assert_eq!(config.extensions.keys().collect::<Vec<_>>(), ["ClearBox"]);
     }
 
     #[test]
     fn opcua_fixture_exposes_the_legacy_group_as_an_extension_tree() {
         let config = Hdf5AdapterV1_0::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
-        assert_eq!(config.extensions.keys().collect::<Vec<_>>(), ["TM_OPCUA"]);
+        assert_eq!(config.extensions.keys().collect::<Vec<_>>(), ["ClearBox", "TM_OPCUA"]);
         let tree = &config.extensions["TM_OPCUA"];
         assert_eq!(
             tree.children.keys().map(String::as_str).collect::<Vec<_>>(),
@@ -1044,16 +864,14 @@ mod tests {
         let json = reader.to_json(true, false).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert!(parsed.get("meta").is_some());
-        assert!(!json.contains("\"correction_data\""));
         assert!(!json.contains("\"raw_bytes\""));
         assert!(!json.contains("\"opcua\""));
     }
 
     #[test]
-    fn to_json_include_binary_adds_correction_and_raw_bytes() {
+    fn to_json_include_binary_adds_raw_bytes() {
         let reader = Hdf5AdapterV1_0::open(REFERENCE).unwrap();
         let json = reader.to_json(false, true).unwrap();
-        assert!(json.contains("\"correction_data\""));
         assert!(json.contains("\"raw_bytes\""));
     }
 
@@ -1067,12 +885,14 @@ mod tests {
     fn matches_python_golden_file() {
         let golden_path =
             concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/reference_output.json");
-        let golden: serde_json::Value =
+        let mut golden: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(golden_path).unwrap()).unwrap();
 
         let reader = Hdf5AdapterV1_0::open(REFERENCE).unwrap();
-        let ours: serde_json::Value =
+        let mut ours: serde_json::Value =
             serde_json::from_str(&reader.to_json(true, false).unwrap()).unwrap();
+        crate::extensions::strip_dataset_data(&mut golden);
+        crate::extensions::strip_dataset_data(&mut ours);
 
         assert_eq!(ours, golden, "Rust reader output diverges from the Python golden file");
     }

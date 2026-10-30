@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Map, Number, Value};
 
-use crate::tree::{Attr, AttrValue, Dataset, DatasetData, Dtype, ExtensionTree, Scalar};
+use crate::tree::{
+    Attr, AttrValue, ColumnData, Dataset, DatasetData, Dtype, ExtensionTree, Scalar, Table, TableField,
+};
 use crate::validate::{join, validate_tree, ContractError};
 
 // Plain-JSON form of a tree, used by fixtures and `to_json()`. i64/u64 become decimal strings and
@@ -70,6 +72,50 @@ fn data_to_json(data: &DatasetData) -> Value {
     })
 }
 
+fn column_to_json(column: &ColumnData) -> Value {
+    macro_rules! each {
+        ($values:expr, $variant:ident) => {
+            $values.iter().map(|x| scalar_to_json(&Scalar::$variant(*x))).collect()
+        };
+    }
+    Value::Array(match column {
+        ColumnData::Utf8(v) => v.iter().map(|s| Value::String(s.clone())).collect(),
+        ColumnData::I8(v) => each!(v, I8),
+        ColumnData::U8(v) => each!(v, U8),
+        ColumnData::I16(v) => each!(v, I16),
+        ColumnData::U16(v) => each!(v, U16),
+        ColumnData::I32(v) => each!(v, I32),
+        ColumnData::U32(v) => each!(v, U32),
+        ColumnData::I64(v) => each!(v, I64),
+        ColumnData::U64(v) => each!(v, U64),
+        ColumnData::F32(v) => each!(v, F32),
+        ColumnData::F64(v) => each!(v, F64),
+    })
+}
+
+fn table_to_json(table: &Table) -> Value {
+    let fields: Vec<Value> = table
+        .fields
+        .iter()
+        .map(|f| match f.size {
+            Some(size) => json!({ "name": f.name, "dtype": f.dtype.name(), "size": size }),
+            None => json!({ "name": f.name, "dtype": f.dtype.name() }),
+        })
+        .collect();
+    let columns: Map<String, Value> = table
+        .fields
+        .iter()
+        .zip(&table.columns)
+        .map(|(f, c)| (f.name.clone(), column_to_json(c)))
+        .collect();
+    json!({
+        "fields": fields,
+        "rows": table.rows,
+        "columns": columns,
+        "attrs": attrs_to_json(&table.attrs),
+    })
+}
+
 pub fn tree_to_json(tree: &ExtensionTree) -> Value {
     let children: Map<String, Value> =
         tree.children.iter().map(|(n, c)| (n.clone(), tree_to_json(c))).collect();
@@ -88,7 +134,14 @@ pub fn tree_to_json(tree: &ExtensionTree) -> Value {
             )
         })
         .collect();
-    json!({ "attrs": attrs_to_json(&tree.attrs), "children": children, "datasets": datasets })
+    let mut out =
+        json!({ "attrs": attrs_to_json(&tree.attrs), "children": children, "datasets": datasets });
+    if !tree.tables.is_empty() {
+        let tables: Map<String, Value> =
+            tree.tables.iter().map(|(n, t)| (n.clone(), table_to_json(t))).collect();
+        out["tables"] = Value::Object(tables);
+    }
+    out
 }
 
 fn err(path: &str, message: impl Into<String>) -> ContractError {
@@ -230,7 +283,63 @@ fn tree_from_json_at(json: &Value, path: &str) -> Result<ExtensionTree, Contract
             );
         }
     }
+    if let Some(Value::Object(tables)) = json.get("tables") {
+        for (name, table) in tables {
+            tree.tables.insert(name.clone(), table_from_json(table, &join(path, name))?);
+        }
+    }
     Ok(tree)
+}
+
+fn column_from_json(dtype: Dtype, items: &[Value], path: &str) -> Result<ColumnData, ContractError> {
+    if dtype == Dtype::Utf8 {
+        return items
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| err(&format!("{path}[{i}]"), "utf8 JSON value must be a string"))
+            })
+            .collect::<Result<_, _>>()
+            .map(ColumnData::Utf8);
+    }
+    Ok(match data_from_json(dtype, items, path)? {
+        DatasetData::I8(v) => ColumnData::I8(v),
+        DatasetData::U8(v) => ColumnData::U8(v),
+        DatasetData::I16(v) => ColumnData::I16(v),
+        DatasetData::U16(v) => ColumnData::U16(v),
+        DatasetData::I32(v) => ColumnData::I32(v),
+        DatasetData::U32(v) => ColumnData::U32(v),
+        DatasetData::I64(v) => ColumnData::I64(v),
+        DatasetData::U64(v) => ColumnData::U64(v),
+        DatasetData::F32(v) => ColumnData::F32(v),
+        DatasetData::F64(v) => ColumnData::F64(v),
+    })
+}
+
+fn table_from_json(json: &Value, path: &str) -> Result<Table, ContractError> {
+    let field_values =
+        json.get("fields").and_then(Value::as_array).ok_or_else(|| err(path, "missing fields"))?;
+    let rows =
+        json.get("rows").and_then(Value::as_u64).ok_or_else(|| err(path, "missing rows"))? as usize;
+    let mut fields = Vec::with_capacity(field_values.len());
+    let mut columns = Vec::with_capacity(field_values.len());
+    for f in field_values {
+        let name =
+            f.get("name").and_then(Value::as_str).ok_or_else(|| err(path, "field is missing a name"))?;
+        let field_path = join(path, name);
+        let dtype = dtype_from_json(f.get("dtype"), &field_path)?;
+        let size = f.get("size").and_then(Value::as_u64).map(|n| n as usize);
+        let items = json
+            .get("columns")
+            .and_then(|c| c.get(name))
+            .and_then(Value::as_array)
+            .ok_or_else(|| err(&field_path, "missing column"))?;
+        columns.push(column_from_json(dtype, items, &field_path)?);
+        fields.push(TableField { name: name.to_string(), dtype, size });
+    }
+    Ok(Table { fields, rows, columns, attrs: attrs_from_json(json.get("attrs"), path)? })
 }
 
 /// Inverse of [`tree_to_json`]; the result is validated.

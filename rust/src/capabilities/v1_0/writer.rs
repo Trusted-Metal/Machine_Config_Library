@@ -8,15 +8,14 @@ use hdf5::types::VarLenUnicode;
 use hdf5::{Dataset, File as H5File, Group};
 use ndarray::Array1;
 
-use super::hdf5::{RawCalibrationPoint, RawEquationConstant};
 use super::layout;
+use crate::clearbox_legacy;
 use crate::error::{MachineConfigError, Result};
 use crate::extensions::{validate_extension_trees, write_extension_tree};
 use crate::models::*;
-use crate::power_characterization::{
-    backward_flat_fields_coefficients, backward_flat_fields_points,
-};
+use crate::power_characterization::backward_flat_fields_points;
 use crate::writer::WriterAdapter;
+use mcf_extension_contract::ExtensionTree;
 
 // ---------------------------------------------------------------------------
 // Write helpers — exact inverses of the reader helpers (§3.11)
@@ -134,6 +133,7 @@ impl<'a> Hdf5WriterV1_0<'a> {
     /// Writes the config to `path`, creating or overwriting the file.
     pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         self.validate_extensions()?;
+        let clearbox = self.clearbox_groups()?;
         let f = H5File::create(path)?;
         // Root group opened at "/" so ws/wf/wi/wb helpers work uniformly.
         let root = f.group("/")?;
@@ -159,10 +159,9 @@ impl<'a> Hdf5WriterV1_0<'a> {
             let sc_grp = train_grp.create_group("Scanner_Card")?;
             self.write_scanner_card(&sc_grp, &train.scanner_card)?;
 
-            if let Some(cb) = &train.optional_components.clearbox {
-                let opt_grp = train_grp.create_group("Optional_Components")?;
-                let cb_grp = opt_grp.create_group("ClearBox")?;
-                self.write_clearbox(&cb_grp, cb)?;
+            if let Some(tree) = clearbox.get(&tid) {
+                let opt_grp = train_grp.create_group(layout::GROUP_OPTIONAL_COMPONENTS)?;
+                write_extension_tree(&opt_grp, layout::GROUP_CLEARBOX, tree)?;
             }
 
             if let Some(sfcf) = &train.scan_field_correction_file {
@@ -181,13 +180,28 @@ impl<'a> Hdf5WriterV1_0<'a> {
     fn validate_extensions(&self) -> Result<()> {
         validate_extension_trees(&self.config.extensions)?;
         for name in self.config.extensions.keys() {
-            if name != layout::LEGACY_OPCUA_EXTENSION_NAME {
+            if name != layout::LEGACY_OPCUA_EXTENSION_NAME && name != clearbox_legacy::EXTENSION_NAME {
                 return Err(MachineConfigError::InvalidExtension(format!(
                     "File_Version 1.0 has no Extensions group; cannot write extension \"{name}\""
                 )));
             }
         }
         Ok(())
+    }
+
+    /// The ClearBox extension split into one v1.0 group per optical train, keyed by train id.
+    fn clearbox_groups(&self) -> Result<std::collections::BTreeMap<String, ExtensionTree>> {
+        let Some(tree) = self.config.extensions.get(clearbox_legacy::EXTENSION_NAME) else {
+            return Ok(Default::default());
+        };
+        let groups = clearbox_legacy::to_v1_0_trains(tree)?;
+        let known: Vec<String> = (0..self.config.optical_trains.len()).map(layout::train_id).collect();
+        if let Some(id) = groups.keys().find(|id| !known.contains(id)) {
+            return Err(MachineConfigError::InvalidExtension(format!(
+                "ClearBox: no optical train \"{id}\" in this configuration"
+            )));
+        }
+        Ok(groups)
     }
 
     // ------------------------------------------------------------------
@@ -370,120 +384,6 @@ impl<'a> Hdf5WriterV1_0<'a> {
         ws(grp, "Communication_Protocol", sc.communication_protocol.as_deref().unwrap_or(""))?;
         wf(grp, "Sample_Period", sc.sample_period)?;
         ws(grp, "Sample_Period_unit", sc.sample_period_unit.as_deref().unwrap_or(""))?;
-        Ok(())
-    }
-
-    fn write_clearbox(&self, grp: &Group, cb: &ClearBox) -> Result<()> {
-        ws(grp, "Ip_Address", &cb.ip_address)?;
-        ws(grp, "Serial_Number", cb.serial_number.as_deref().unwrap_or(""))?;
-        wi(grp, "Data_Port", cb.data_port)?;
-        wi(grp, "Server_Port", cb.server_port)?;
-        wi(grp, "Actual_Timing_Offset", cb.actual_timing_offset)?;
-        wi(grp, "Commanded_Timing_Offset", cb.commanded_timing_offset)?;
-        ws(grp, "Manufacturer", cb.manufacturer.as_deref().unwrap_or(""))?;
-        ws(grp, "Model", cb.model.as_deref().unwrap_or(""))?;
-        ws(grp, "Output_Path", cb.output_path.as_deref().unwrap_or(""))?;
-        ws(grp, "Selected_Camera", cb.selected_camera.as_deref().unwrap_or(""))?;
-        ws(grp, "Custom_Video_Format", cb.custom_video_format.as_deref().unwrap_or(""))?;
-        ws(grp, "Video_Output", cb.video_output.as_deref().unwrap_or(""))?;
-        wb(grp, "Show_Console", cb.show_console)?;
-        wi(grp, "Software_Trigger_Delay", cb.software_trigger_delay)?;
-        // power_characterization is the only StableModel representation of
-        // this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md) —
-        // always derive the flat v1.0 shape from it, unconditionally.
-        let (algorithm, params) = backward_flat_fields_coefficients(cb.power_characterization.as_ref());
-        ws(grp, "Volts_To_Watts_Algorithm", algorithm.as_deref().unwrap_or(""))?;
-        ws(grp, "Volts_To_Watts_Params", params.as_deref().unwrap_or(""))?;
-        ws(grp, "Correction_Grid_Domain_Shape", cb.correction_grid_domain_shape.as_deref().unwrap_or(""))?;
-        ws(grp, "Inverse_Grid_Domain_Shape", cb.inverse_grid_domain_shape.as_deref().unwrap_or(""))?;
-
-        // Correction dataset — zero-filled when binary data was not loaded.
-        let cd_arr = nested_to_array3(&cb.correction_data);
-        let shape = cd_arr.shape().to_owned();
-        let cd_ds = grp
-            .new_dataset_builder()
-            .with_data(&cd_arr)
-            .create("Correction_Data")?;
-        ws_ds(&cd_ds, "dimensions", "H,W,D")?;
-        ws_ds(&cd_ds, "dtype", "float64")?;
-        ws_ds(&cd_ds, "shape", &format!("{}x{}x{}", shape[0], shape[1], shape[2]))?;
-
-        let icd_arr = nested_to_array3(&cb.inverse_correction_data);
-        let icd_shape = icd_arr.shape().to_owned();
-        let icd_ds = grp
-            .new_dataset_builder()
-            .with_data(&icd_arr)
-            .create("Inverse_Correction_Data")?;
-        ws_ds(&icd_ds, "dimensions", "H,W,D")?;
-        ws_ds(&icd_ds, "dtype", "float64")?;
-        ws_ds(&icd_ds, "shape", &format!("{}x{}x{}", icd_shape[0], icd_shape[1], icd_shape[2]))?;
-
-        // Synchronous_Sensors: only created when non-empty, so a ClearBox
-        // with no sensors looks identical on disk to before this field
-        // existed — no empty placeholder group. Mirrors ClearBox itself
-        // being entirely absent rather than an empty shell.
-        if !cb.synchronous_sensors.is_empty() {
-            let sensors_grp = grp.create_group("Synchronous_Sensors")?;
-            for (name, sensor) in &cb.synchronous_sensors {
-                let sg = sensors_grp.create_group(name)?;
-                self.write_synchronous_sensor(&sg, sensor)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn write_synchronous_sensor(&self, grp: &Group, sensor: &SynchronousSensor) -> Result<()> {
-        wb(grp, "Enabled", sensor.enabled)?;
-        ws(grp, "Sensor_Name", sensor.sensor_name.as_deref().unwrap_or(""))?;
-        wf(grp, "Sensor_Output_Range_Low", sensor.sensor_output_range_low)?;
-        wf(grp, "Sensor_Output_Range_High", sensor.sensor_output_range_high)?;
-        ws(grp, "Sensor_Output_Space", sensor.sensor_output_space.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Model", sensor.sensor_model.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Manufacturer", sensor.sensor_manufacturer.as_deref().unwrap_or(""))?;
-        ws(grp, "Sensor_Scope", sensor.sensor_scope.as_deref().unwrap_or(""))?;
-        ws(grp, "Units_Derived_Quantity", sensor.units_derived_quantity.as_deref().unwrap_or(""))?;
-        wi(grp, "Port_ID", sensor.port_id)?;
-        ws(grp, "Sensor_Type", sensor.sensor_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Input_Type", sensor.input_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Algorithm_Type", sensor.algorithm_type.as_deref().unwrap_or(""))?;
-        ws(grp, "Algorithm_Equation", sensor.algorithm_equation.as_deref().unwrap_or(""))?;
-        ws(grp, "Calibration_Source", sensor.calibration_source.as_deref().unwrap_or(""))?;
-        wb(grp, "Calibration_Verified", sensor.calibration_verified)?;
-        wf(grp, "Sample_Period", sensor.sample_period)?;
-        ws(grp, "Metadata", sensor.metadata.as_deref().unwrap_or(""))?;
-
-        let const_rows: Vec<RawEquationConstant> = sensor
-            .derivation_equation_constants
-            .iter()
-            .map(|c| -> Result<RawEquationConstant> {
-                Ok(RawEquationConstant {
-                    name: c.name.parse().map_err(|e| {
-                        crate::error::MachineConfigError::Parse(format!(
-                            "Derivation_Equation_Constants name {:?} does not fit in a \
-                             64-byte FixedUnicode field: {e:?}",
-                            c.name
-                        ))
-                    })?,
-                    value: c.value,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let const_arr = Array1::from(const_rows);
-        grp.new_dataset_builder()
-            .with_data(&const_arr)
-            .create("Derivation_Equation_Constants")?;
-
-        let point_rows: Vec<RawCalibrationPoint> = sensor
-            .calibration_points
-            .iter()
-            .map(|p| RawCalibrationPoint { input_value: p.input_value, output_value: p.output_value })
-            .collect();
-        let point_arr = Array1::from(point_rows);
-        grp.new_dataset_builder()
-            .with_data(&point_arr)
-            .create("Calibration_Points")?;
-
         Ok(())
     }
 
@@ -687,251 +587,142 @@ mod tests {
         );
     }
 
+    fn clearbox_train(config: &MachineConfig) -> &ExtensionTree {
+        &config.extensions["ClearBox"].children["Optical_Train_01"]
+    }
+
+    fn sensor_tree(constants: Vec<(String, f64)>) -> ExtensionTree {
+        use mcf_extension_contract::{ColumnData, Dtype, Table, TableField};
+        let mut tree = ExtensionTree::default();
+        tree.tables.insert(
+            "Derivation_Equation_Constants".into(),
+            Table {
+                fields: vec![TableField::utf8("name", 64), TableField::numeric("value", Dtype::F64)],
+                rows: constants.len(),
+                columns: vec![
+                    ColumnData::Utf8(constants.iter().map(|c| c.0.clone()).collect()),
+                    ColumnData::F64(constants.iter().map(|c| c.1).collect()),
+                ],
+                attrs: Default::default(),
+            },
+        );
+        tree
+    }
+
+    fn add_sensor(config: &mut MachineConfig, label: &str, sensor: ExtensionTree) {
+        config
+            .extensions
+            .get_mut("ClearBox")
+            .unwrap()
+            .children
+            .get_mut("Optical_Train_01")
+            .unwrap()
+            .children
+            .entry("Synchronous_Sensors".into())
+            .or_default()
+            .children
+            .insert(label.into(), sensor);
+    }
+
     #[test]
-    fn roundtrip_clearbox_scalar_fields() {
-        // reference_config_synchronous_sensors.h5, not reference_config.h5,
-        // which deliberately has no sensors (SYNCHRONOUS_SENSOR_PLAN.md
-        // Phase 0) — every pre-existing scalar assertion below still holds,
-        // since the two fixtures are byte-identical outside the new group.
+    fn roundtrip_clearbox_extension_tree() {
         let orig = MachineConfigReader::open(REFERENCE_SENSORS).unwrap().parse().unwrap();
         let rt = roundtrip(REFERENCE_SENSORS);
-        let cb_orig = orig.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        assert_eq!(cb_orig.ip_address, cb_rt.ip_address);
-        assert_eq!(cb_orig.data_port, cb_rt.data_port);
-        assert_eq!(cb_orig.show_console, cb_rt.show_console);
-        assert_eq!(cb_orig.correction_grid_domain_shape, cb_rt.correction_grid_domain_shape);
-
-        assert_eq!(cb_orig.synchronous_sensors.len(), cb_rt.synchronous_sensors.len());
-        let sensor_orig = &cb_orig.synchronous_sensors["Oxygen Sensor"];
-        let sensor_rt = &cb_rt.synchronous_sensors["Oxygen Sensor"];
-        assert_eq!(sensor_orig.sensor_name, sensor_rt.sensor_name);
-        assert_eq!(sensor_orig.port_id, sensor_rt.port_id);
-        assert_eq!(sensor_orig.calibration_verified, sensor_rt.calibration_verified);
         assert_eq!(
-            sensor_orig.derivation_equation_constants,
-            sensor_rt.derivation_equation_constants
+            crate::canonical_digest(&orig.extensions["ClearBox"]).unwrap(),
+            crate::canonical_digest(&rt.extensions["ClearBox"]).unwrap()
         );
-        assert_eq!(sensor_orig.calibration_points, sensor_rt.calibration_points);
+        assert_eq!(
+            clearbox_train(&orig).attrs["Show_Console"],
+            clearbox_train(&rt).attrs["Show_Console"],
+            "v1.0-only attributes ride along as extra per-train attributes"
+        );
     }
 
     #[test]
     fn roundtrip_synchronous_sensor_compound_datasets_exact_values_in_order() {
+        use mcf_extension_contract::ColumnData;
         let rt = roundtrip(REFERENCE_SENSORS);
-        let cb = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        let sensor = &cb.synchronous_sensors["Oxygen Sensor"];
-
-        assert_eq!(
-            sensor.derivation_equation_constants,
-            vec![
-                EquationConstant { name: "a".to_string(), value: 0.4375 },
-                EquationConstant { name: "b".to_string(), value: -2.75 },
-            ]
-        );
-        assert_eq!(
-            sensor.calibration_points,
-            vec![
-                CalibrationPoint { input_value: 4.0, output_value: -1.0 },
-                CalibrationPoint { input_value: 20.0, output_value: 6.0 },
-            ]
-        );
+        let sensor = &clearbox_train(&rt).children["Synchronous_Sensors"].children["Oxygen Sensor"];
+        let constants = &sensor.tables["Derivation_Equation_Constants"];
+        assert_eq!(constants.columns[0], ColumnData::Utf8(vec!["a".into(), "b".into()]));
+        assert_eq!(constants.columns[1], ColumnData::F64(vec![0.4375, -2.75]));
+        let points = &sensor.tables["Calibration_Points"];
+        assert_eq!(points.columns[0], ColumnData::F64(vec![4.0, 20.0]));
+        assert_eq!(points.columns[1], ColumnData::F64(vec![-1.0, 6.0]));
     }
 
     #[test]
-    fn roundtrip_empty_synchronous_sensors_map_stays_empty_not_absent() {
-        // reference_config.h5 has zero sensors already — the write path must
-        // skip creating the Synchronous_Sensors group entirely (not write an
-        // empty placeholder), and the read path must default back to an
-        // empty map, not error.
+    fn roundtrip_empty_synchronous_sensors_map_stays_absent() {
         let rt = roundtrip(REFERENCE);
-        let cb = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        assert!(cb.synchronous_sensors.is_empty());
+        assert!(!clearbox_train(&rt).children.contains_key("Synchronous_Sensors"));
     }
 
     #[test]
     fn roundtrip_synchronous_sensor_with_zero_row_compound_datasets() {
-        // The distinct edge case from the empty-*map* test above: here the
-        // sensor itself exists (its group is created), but both compound
-        // datasets have zero rows — proving 0-length compound dataset
-        // creation/read genuinely works, not assumed.
         let mut config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
-        let cb = config.optical_trains[0].optional_components.clearbox.as_mut().unwrap();
-        cb.synchronous_sensors.insert(
-            "Untested Sensor".to_string(),
-            SynchronousSensor {
-                enabled: Some(false),
-                sensor_name: Some("Placeholder".to_string()),
-                sensor_output_range_low: None,
-                sensor_output_range_high: None,
-                sensor_output_space: None,
-                sensor_model: None,
-                sensor_manufacturer: None,
-                sensor_scope: None,
-                units_derived_quantity: None,
-                port_id: None,
-                sensor_type: None,
-                input_type: None,
-                algorithm_type: None,
-                algorithm_equation: None,
-                calibration_source: None,
-                calibration_verified: None,
-                sample_period: None,
-                metadata: None,
-                derivation_equation_constants: vec![],
-                calibration_points: vec![],
-            },
-        );
+        add_sensor(&mut config, "Untested Sensor", sensor_tree(vec![]));
 
         let tmp = NamedTempFile::with_suffix(".h5").unwrap();
         Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap();
         let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
-        let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        let sensor_rt = &cb_rt.synchronous_sensors["Untested Sensor"];
-        assert!(sensor_rt.derivation_equation_constants.is_empty());
-        assert!(sensor_rt.calibration_points.is_empty());
-        assert_eq!(sensor_rt.sensor_name, Some("Placeholder".to_string()));
+        let sensor = &clearbox_train(&rt).children["Synchronous_Sensors"].children["Untested Sensor"];
+        assert_eq!(sensor.tables["Derivation_Equation_Constants"].rows, 0);
     }
 
     #[test]
     fn write_synchronous_sensor_constant_name_too_long_for_fixed64_errors() {
-        // Derivation_Equation_Constants.name is a 64-byte FixedUnicode field
-        // (see SYNCHRONOUS_SENSOR_PLAN.md's "Compound dataset string
-        // convention"). A name whose UTF-8 encoding exceeds 64 bytes must be
-        // rejected with a clear error at write time, not silently truncated.
+        // The 64-byte name field must reject an over-long name, not truncate it.
         let mut config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
-        let cb = config.optical_trains[0].optional_components.clearbox.as_mut().unwrap();
-        cb.synchronous_sensors.insert(
-            "Oversized Name Sensor".to_string(),
-            SynchronousSensor {
-                enabled: None,
-                sensor_name: None,
-                sensor_output_range_low: None,
-                sensor_output_range_high: None,
-                sensor_output_space: None,
-                sensor_model: None,
-                sensor_manufacturer: None,
-                sensor_scope: None,
-                units_derived_quantity: None,
-                port_id: None,
-                sensor_type: None,
-                input_type: None,
-                algorithm_type: None,
-                algorithm_equation: None,
-                calibration_source: None,
-                calibration_verified: None,
-                sample_period: None,
-                metadata: None,
-                derivation_equation_constants: vec![EquationConstant {
-                    name: "a".repeat(65),
-                    value: 1.0,
-                }],
-                calibration_points: vec![],
-            },
-        );
+        add_sensor(&mut config, "Oversized Name Sensor", sensor_tree(vec![("a".repeat(65), 1.0)]));
 
         let tmp = NamedTempFile::with_suffix(".h5").unwrap();
         let err = Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap_err();
         assert!(
-            matches!(err, crate::error::MachineConfigError::Parse(_)),
-            "expected a Parse error for an oversized constant name, got: {err:?}"
+            matches!(err, crate::error::MachineConfigError::InvalidExtension(_)),
+            "expected an InvalidExtension error for an oversized constant name, got: {err:?}"
         );
     }
 
     #[test]
     fn roundtrip_synchronous_sensor_arbitrary_differently_styled_key() {
-        // The map key is a free-form label with no schema meaning — proves a
-        // key unlike the fixture's own "Oxygen Sensor" (different style:
-        // underscore-joined, all-caps) survives a write->read cycle verbatim.
         let mut config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
-        let cb = config.optical_trains[0].optional_components.clearbox.as_mut().unwrap();
-        cb.synchronous_sensors.insert(
-            "HUMIDITY_SENSOR_2".to_string(),
-            SynchronousSensor {
-                enabled: Some(true),
-                sensor_name: None,
-                sensor_output_range_low: None,
-                sensor_output_range_high: None,
-                sensor_output_space: None,
-                sensor_model: None,
-                sensor_manufacturer: None,
-                sensor_scope: None,
-                units_derived_quantity: None,
-                port_id: Some(9),
-                sensor_type: None,
-                input_type: None,
-                algorithm_type: None,
-                algorithm_equation: None,
-                calibration_source: None,
-                calibration_verified: None,
-                sample_period: None,
-                metadata: None,
-                derivation_equation_constants: vec![],
-                calibration_points: vec![],
-            },
-        );
+        let mut sensor = ExtensionTree::default();
+        sensor.attrs.insert("Port_ID".into(), mcf_extension_contract::Attr::scalar(mcf_extension_contract::Scalar::I64(9)));
+        add_sensor(&mut config, "HUMIDITY_SENSOR_2", sensor);
 
         let tmp = NamedTempFile::with_suffix(".h5").unwrap();
         Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap();
         let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
-        let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        assert!(cb_rt.synchronous_sensors.contains_key("HUMIDITY_SENSOR_2"));
-        assert_eq!(cb_rt.synchronous_sensors["HUMIDITY_SENSOR_2"].port_id, Some(9));
+        let sensors = &clearbox_train(&rt).children["Synchronous_Sensors"];
+        assert_eq!(sensors.children["HUMIDITY_SENSOR_2"].attrs["Port_ID"].as_i64(), Some(9));
     }
 
     #[test]
     fn opcua_and_synchronous_sensor_coexist_through_writer() {
-        // Proves the Writer side of the cross-feature guarantee (the Reader
-        // side is proved directly against the pre-built combined fixture in
-        // capabilities/v1_0/hdf5.rs's own test module) — parses a real
-        // OPCUA-only fixture, adds a sensor purely in memory, writes, and
-        // confirms both survive re-reading. See SYNCHRONOUS_SENSOR_PLAN.md's
-        // Phase 0 fixture-layout decision for why both tests are kept.
         let mut config = MachineConfigReader::open(REFERENCE_OPCUA).unwrap().parse().unwrap();
-        assert!(config.extensions.contains_key("TM_OPCUA"), "fixture must already have OPCUA before the test adds a sensor");
-
-        let cb = config.optical_trains[0].optional_components.clearbox.as_mut().unwrap();
-        cb.synchronous_sensors.insert(
-            "Oxygen Sensor".to_string(),
-            SynchronousSensor {
-                enabled: Some(true),
-                sensor_name: Some("ZR800 Oxygen Analyzer".to_string()),
-                sensor_output_range_low: Some(-1.0),
-                sensor_output_range_high: Some(6.0),
-                sensor_output_space: Some("log10(ppm)".to_string()),
-                sensor_model: Some("ZR810".to_string()),
-                sensor_manufacturer: Some("Industrial Physics".to_string()),
-                sensor_scope: Some("Global".to_string()),
-                units_derived_quantity: Some("ppm".to_string()),
-                port_id: Some(5),
-                sensor_type: Some("Oxygen Sensor".to_string()),
-                input_type: Some("4-20 mA".to_string()),
-                algorithm_type: Some("Log-Linear".to_string()),
-                algorithm_equation: Some("log(ppm) = a*mA + b".to_string()),
-                calibration_source: Some("Datasheet".to_string()),
-                calibration_verified: Some(false),
-                sample_period: Some(5.0),
-                metadata: None,
-                derivation_equation_constants: vec![
-                    EquationConstant { name: "a".to_string(), value: 0.4375 },
-                    EquationConstant { name: "b".to_string(), value: -2.75 },
-                ],
-                calibration_points: vec![
-                    CalibrationPoint { input_value: 4.0, output_value: -1.0 },
-                    CalibrationPoint { input_value: 20.0, output_value: 6.0 },
-                ],
-            },
-        );
+        assert!(config.extensions.contains_key("TM_OPCUA"));
+        add_sensor(&mut config, "Oxygen Sensor", sensor_tree(vec![("a".into(), 0.4375)]));
 
         let tmp = NamedTempFile::with_suffix(".h5").unwrap();
         Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap();
         let rt = MachineConfigReader::open(tmp.path()).unwrap().parse().unwrap();
 
-        assert!(rt.extensions.contains_key("TM_OPCUA"), "OPCUA must survive alongside the newly-added sensor");
-        let cb_rt = rt.optical_trains[0].optional_components.clearbox.as_ref().unwrap();
-        let sensor_rt = &cb_rt.synchronous_sensors["Oxygen Sensor"];
-        assert_eq!(sensor_rt.sensor_name, Some("ZR800 Oxygen Analyzer".to_string()));
-        assert_eq!(sensor_rt.derivation_equation_constants.len(), 2);
-        assert_eq!(sensor_rt.calibration_points.len(), 2);
+        assert!(rt.extensions.contains_key("TM_OPCUA"), "OPCUA must survive alongside ClearBox");
+        let sensor = &clearbox_train(&rt).children["Synchronous_Sensors"].children["Oxygen Sensor"];
+        assert_eq!(sensor.tables["Derivation_Equation_Constants"].rows, 1);
+    }
+
+    #[test]
+    fn write_rejects_a_clearbox_train_with_no_matching_optical_train() {
+        let mut config = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let tree = config.extensions.get_mut("ClearBox").unwrap();
+        let extra = tree.children["Optical_Train_01"].clone();
+        tree.children.insert("Optical_Train_09".into(), extra);
+
+        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
+        let err = Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap_err();
+        assert!(matches!(err, crate::error::MachineConfigError::InvalidExtension(_)));
     }
 
     #[test]
@@ -946,40 +737,17 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_correction_data_sha256() {
-        use crate::models::CorrectionData;
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        fn cd_hash(cd: &CorrectionData) -> u64 {
-            let mut h = DefaultHasher::new();
-            for v in &cd.data {
-                v.to_bits().hash(&mut h);
-            }
-            h.finish()
+    fn roundtrip_correction_grids_are_bit_identical() {
+        use mcf_extension_contract::DatasetData;
+        let orig = MachineConfigReader::open(REFERENCE).unwrap().parse().unwrap();
+        let rt = roundtrip(REFERENCE);
+        for name in ["Correction_Data", "Inverse_Correction_Data"] {
+            let bits = |c: &MachineConfig| match &clearbox_train(c).datasets[name].data {
+                DatasetData::F64(v) => v.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                _ => panic!("{name} is not float64"),
+            };
+            assert_eq!(bits(&orig), bits(&rt), "{name} changed across write roundtrip");
         }
-
-        let reader = MachineConfigReader::open(REFERENCE).unwrap();
-        let original_corr = reader.get_correction_data(0).unwrap();
-        let original_inv = reader.get_inverse_correction_data(0).unwrap();
-
-        let config = reader.parse_with_binary().unwrap();
-        let tmp = NamedTempFile::with_suffix(".h5").unwrap();
-        Hdf5WriterV1_0::new(&config).write(tmp.path()).unwrap();
-        let rt_reader = MachineConfigReader::open(tmp.path()).unwrap();
-        let rt_corr = rt_reader.get_correction_data(0).unwrap();
-        let rt_inv = rt_reader.get_inverse_correction_data(0).unwrap();
-
-        assert_eq!(
-            cd_hash(&original_corr),
-            cd_hash(&rt_corr),
-            "Correction_Data hash changed across write roundtrip"
-        );
-        assert_eq!(
-            cd_hash(&original_inv),
-            cd_hash(&rt_inv),
-            "Inverse_Correction_Data hash changed across write roundtrip"
-        );
     }
 
     #[test]

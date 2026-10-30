@@ -7,7 +7,6 @@ package hdf5
 import (
 	"sort"
 	"fmt"
-	"strings"
 
 	"machine-config-go/capabilities/v1_1/layout"
 	"machine-config-go/extension"
@@ -18,12 +17,8 @@ import (
 
 // Write serialises cfg to a File_Version 1.1 HDF5 file at path.
 //
-// Returns an error naming the conflicting trains/values if any ClearBox-
-// bearing train disagrees with another on Output_Path or
-// Software_Trigger_Delay — see docs/migrations/v1_0_to_v1_1.md Change 1's
-// "Consolidate conflict rule". This check happens here (write time), not
-// during v1.0->v1.1 migration, since it applies uniformly whether the model
-// came from a migration or was authored directly as v1.1.
+// ClearBox is an ordinary extension tree here: the shared Output_Path/Software_Trigger_Delay live
+// on its root and one subgroup per train beneath it, so every extension is written the same way.
 func Write(cfg *MachineConfig, path string) error {
 	if err := validateExtensions(cfg); err != nil {
 		return err
@@ -60,56 +55,6 @@ func Write(cfg *MachineConfig, path string) error {
 	}
 	defer trainsGrp.Close()
 
-	var trainsWithClearbox []trainClearbox
-	for i := range cfg.OpticalTrains {
-		if cb := cfg.OpticalTrains[i].OptionalComponents.Clearbox; cb != nil {
-			trainsWithClearbox = append(trainsWithClearbox, trainClearbox{tid: layout.TrainID(i), cb: cb})
-		}
-	}
-
-	needExtensions := len(trainsWithClearbox) > 0 || len(cfg.Extensions) > 0
-	var extGrp *h5c.Group
-	if needExtensions {
-		extGrp, err = root.CreateGroup(layout.RootExtensions)
-		if err != nil {
-			return err
-		}
-		defer extGrp.Close()
-	}
-
-	if len(trainsWithClearbox) > 0 {
-		outputPath, err := consolidateOutputPath(trainsWithClearbox)
-		if err != nil {
-			return err
-		}
-		softwareTriggerDelay, err := consolidateSoftwareTriggerDelay(trainsWithClearbox)
-		if err != nil {
-			return err
-		}
-		cbRootGrp, err := extGrp.CreateGroup("ClearBox")
-		if err != nil {
-			return err
-		}
-		defer cbRootGrp.Close()
-		if err := ws(cbRootGrp, "Output_Path", strOrEmpty(outputPath)); err != nil {
-			return err
-		}
-		if err := wi(cbRootGrp, "Software_Trigger_Delay", softwareTriggerDelay); err != nil {
-			return err
-		}
-		for _, tc := range trainsWithClearbox {
-			trainCbGrp, err := cbRootGrp.CreateGroup(tc.tid)
-			if err != nil {
-				return err
-			}
-			err = writeClearBoxPerTrain(trainCbGrp, tc.cb)
-			trainCbGrp.Close()
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	for i := range cfg.OpticalTrains {
 		train := &cfg.OpticalTrains[i]
 		tid := layout.TrainID(i)
@@ -124,9 +69,16 @@ func Write(cfg *MachineConfig, path string) error {
 		}
 	}
 
-	for _, name := range sortedExtensionNames(cfg.Extensions) {
-		if err := extio.WriteTree(extGrp, name, cfg.Extensions[name]); err != nil {
+	if len(cfg.Extensions) > 0 {
+		extGrp, err := root.CreateGroup(layout.RootExtensions)
+		if err != nil {
 			return err
+		}
+		defer extGrp.Close()
+		for _, name := range sortedExtensionNames(cfg.Extensions) {
+			if err := extio.WriteTree(extGrp, name, cfg.Extensions[name]); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -148,96 +100,8 @@ func validateExtensions(cfg *MachineConfig) error {
 		if err := extension.Validate(cfg.Extensions[name], name); err != nil {
 			return err
 		}
-		if _, modelled := layout.ModelledExtensionNames[name]; modelled {
-			return fmt.Errorf("extension %q is modelled by core and cannot be written as an extension tree", name)
-		}
 	}
 	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Change 1: Consolidate (Output_Path / Software_Trigger_Delay)
-// ---------------------------------------------------------------------------
-
-type trainClearbox struct {
-	tid string
-	cb  *ClearBox
-}
-
-// consolidateOutputPath collects Output_Path from every ClearBox-bearing
-// train; hard error, naming every train/value, if they disagree.
-func consolidateOutputPath(trains []trainClearbox) (*string, error) {
-	if len(trains) == 0 {
-		return nil, nil
-	}
-	first := trains[0].cb.OutputPath
-	agree := true
-	for _, t := range trains[1:] {
-		if !strPtrEqual(t.cb.OutputPath, first) {
-			agree = false
-			break
-		}
-	}
-	if !agree {
-		parts := make([]string, len(trains))
-		for i, t := range trains {
-			parts[i] = fmt.Sprintf("%s=%s", t.tid, fmtStrPtrDetail(t.cb.OutputPath))
-		}
-		return nil, fmt.Errorf("consolidate conflict on %q: trains disagree — %s", "Output_Path", strings.Join(parts, ", "))
-	}
-	return first, nil
-}
-
-// consolidateSoftwareTriggerDelay is Software_Trigger_Delay's counterpart —
-// same rule as consolidateOutputPath.
-func consolidateSoftwareTriggerDelay(trains []trainClearbox) (*int, error) {
-	if len(trains) == 0 {
-		return nil, nil
-	}
-	first := trains[0].cb.SoftwareTriggerDelay
-	agree := true
-	for _, t := range trains[1:] {
-		if !intPtrEqual(t.cb.SoftwareTriggerDelay, first) {
-			agree = false
-			break
-		}
-	}
-	if !agree {
-		parts := make([]string, len(trains))
-		for i, t := range trains {
-			parts[i] = fmt.Sprintf("%s=%s", t.tid, fmtIntPtrDetail(t.cb.SoftwareTriggerDelay))
-		}
-		return nil, fmt.Errorf("consolidate conflict on %q: trains disagree — %s", "Software_Trigger_Delay", strings.Join(parts, ", "))
-	}
-	return first, nil
-}
-
-func strPtrEqual(a, b *string) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-func intPtrEqual(a, b *int) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-func fmtStrPtrDetail(s *string) string {
-	if s == nil {
-		return "None"
-	}
-	return *s
-}
-
-func fmtIntPtrDetail(v *int) string {
-	if v == nil {
-		return "None"
-	}
-	return fmt.Sprintf("%d", *v)
 }
 
 // ---------------------------------------------------------------------------
@@ -844,180 +708,6 @@ func writeScannerCard(g *h5c.Group, sc *ScannerCard) error {
 		return err
 	}
 	return ws(g, "Sample_Period_unit", strOrEmpty(sc.SamplePeriodUnit))
-}
-
-// ---------------------------------------------------------------------------
-// Extensions/ClearBox/<train_id>/ — Change 1: only the per-train subset;
-// Output_Path/Software_Trigger_Delay are written once, at
-// Extensions/ClearBox/ itself, by Write's own loop before this is called.
-// Several v1.0 attrs are simply never written here (Change 1's Removals);
-// Firmware_Version is new.
-// ---------------------------------------------------------------------------
-
-func writeClearBoxPerTrain(g *h5c.Group, cb *ClearBox) error {
-	if err := ws(g, "Ip_Address", cb.IPAddress); err != nil {
-		return err
-	}
-	if err := ws(g, "Serial_Number", strOrEmpty(cb.SerialNumber)); err != nil {
-		return err
-	}
-	if err := wi(g, "Data_Port", cb.DataPort); err != nil {
-		return err
-	}
-	if err := wi(g, "Server_Port", cb.ServerPort); err != nil {
-		return err
-	}
-	if err := wi(g, "Actual_Timing_Offset", cb.ActualTimingOffset); err != nil {
-		return err
-	}
-	if err := wi(g, "Commanded_Timing_Offset", cb.CommandedTimingOffset); err != nil {
-		return err
-	}
-	if err := ws(g, "Manufacturer", strOrEmpty(cb.Manufacturer)); err != nil {
-		return err
-	}
-	if err := ws(g, "Model", strOrEmpty(cb.Model)); err != nil {
-		return err
-	}
-	if err := ws(g, "Firmware_Version", strOrEmpty(cb.FirmwareVersion)); err != nil {
-		return err
-	}
-
-	cdFlat := FlatFromNestedGrid(cb.CorrectionData)
-	cdDS, err := g.CreateFloat64DatasetOpen(layout.DSCorrectionData, []uint64{257, 257, 2}, cdFlat)
-	if err != nil {
-		return err
-	}
-	if err := wsDS(cdDS, "dimensions", "H,W,D"); err != nil {
-		cdDS.Close()
-		return err
-	}
-	if err := wsDS(cdDS, "dtype", "float64"); err != nil {
-		cdDS.Close()
-		return err
-	}
-	if err := wsDS(cdDS, "shape", "257x257x2"); err != nil {
-		cdDS.Close()
-		return err
-	}
-	cdDS.Close()
-
-	icdFlat := FlatFromNestedGrid(cb.InverseCorrectionData)
-	icdDS, err := g.CreateFloat64DatasetOpen(layout.DSInverseCorrectionData, []uint64{257, 257, 2}, icdFlat)
-	if err != nil {
-		return err
-	}
-	if err := wsDS(icdDS, "dimensions", "H,W,D"); err != nil {
-		icdDS.Close()
-		return err
-	}
-	if err := wsDS(icdDS, "dtype", "float64"); err != nil {
-		icdDS.Close()
-		return err
-	}
-	if err := wsDS(icdDS, "shape", "257x257x2"); err != nil {
-		icdDS.Close()
-		return err
-	}
-	icdDS.Close()
-
-	if len(cb.SynchronousSensors) > 0 {
-		sensorsGrp, err := g.CreateGroup("Synchronous_Sensors")
-		if err != nil {
-			return err
-		}
-		defer sensorsGrp.Close()
-		for name, sensor := range cb.SynchronousSensors {
-			sGrp, err := sensorsGrp.CreateGroup(name)
-			if err != nil {
-				return err
-			}
-			if err := writeSynchronousSensor(sGrp, &sensor); err != nil {
-				sGrp.Close()
-				return err
-			}
-			sGrp.Close()
-		}
-	}
-
-	pc := cb.PowerCharacterization
-	pcGrp, err := g.CreateGroup(layout.GroupPowerCharacterization)
-	if err != nil {
-		return err
-	}
-	defer pcGrp.Close()
-	return writePowerCharacterization(pcGrp, pc)
-}
-
-func writeSynchronousSensor(g *h5c.Group, s *SynchronousSensor) error {
-	if err := wb(g, "Enabled", s.Enabled); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Name", strOrEmpty(s.SensorName)); err != nil {
-		return err
-	}
-	if err := wf(g, "Sensor_Output_Range_Low", s.SensorOutputRangeLow); err != nil {
-		return err
-	}
-	if err := wf(g, "Sensor_Output_Range_High", s.SensorOutputRangeHigh); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Output_Space", strOrEmpty(s.SensorOutputSpace)); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Model", strOrEmpty(s.SensorModel)); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Manufacturer", strOrEmpty(s.SensorManufacturer)); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Scope", strOrEmpty(s.SensorScope)); err != nil {
-		return err
-	}
-	if err := ws(g, "Units_Derived_Quantity", strOrEmpty(s.UnitsDerivedQuantity)); err != nil {
-		return err
-	}
-	if err := wi(g, "Port_ID", s.PortID); err != nil {
-		return err
-	}
-	if err := ws(g, "Sensor_Type", strOrEmpty(s.SensorType)); err != nil {
-		return err
-	}
-	if err := ws(g, "Input_Type", strOrEmpty(s.InputType)); err != nil {
-		return err
-	}
-	if err := ws(g, "Algorithm_Type", strOrEmpty(s.AlgorithmType)); err != nil {
-		return err
-	}
-	if err := ws(g, "Algorithm_Equation", strOrEmpty(s.AlgorithmEquation)); err != nil {
-		return err
-	}
-	if err := ws(g, "Calibration_Source", strOrEmpty(s.CalibrationSource)); err != nil {
-		return err
-	}
-	if err := wb(g, "Calibration_Verified", s.CalibrationVerified); err != nil {
-		return err
-	}
-	if err := wf(g, "Sample_Period", s.SamplePeriod); err != nil {
-		return err
-	}
-	if err := ws(g, "Metadata", strOrEmpty(s.Metadata)); err != nil {
-		return err
-	}
-
-	constRows := make([]h5c.EquationConstantRow, len(s.DerivationEquationConstants))
-	for i, c := range s.DerivationEquationConstants {
-		constRows[i] = h5c.EquationConstantRow{Name: c.Name, Value: c.Value}
-	}
-	if err := g.CreateEquationConstantsDataset("Derivation_Equation_Constants", constRows); err != nil {
-		return err
-	}
-
-	pointRows := make([]h5c.CalibrationPointRow, len(s.CalibrationPoints))
-	for i, p := range s.CalibrationPoints {
-		pointRows[i] = h5c.CalibrationPointRow{InputValue: p.InputValue, OutputValue: p.OutputValue}
-	}
-	return g.CreateCalibrationPointsDataset("Calibration_Points", pointRows)
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 // Machine Config Library — MockConfigBuilder (§4.20).
 // Mirrors Python MockConfigBuilder and Rust MockConfigBuilder field-for-field.
 
+#include "machine_config/clearbox_legacy.hpp"
 #include "machine_config/models.hpp"
 #include "machine_config/power_characterization.hpp"
 #include "machine_config/writer.hpp"
@@ -16,18 +17,18 @@ namespace machine_config {
 // Correction grid helper
 // ---------------------------------------------------------------------------
 
-// 257×257×2 Gaussian correction grid (no NaN cells).
-// channel 0 = warp, channel 1 = warp×0.8; scale=0.95 gives the inverse variant.
-inline Grid3D makeGaussianGrid(double scale = 1.0) {
+// Flat, row-major 257x257x2 Gaussian correction grid (no NaN cells).
+// channel 0 = warp, channel 1 = warp*0.8.
+inline std::vector<double> gaussianCorrectionGrid(double scale = 1.0) {
     constexpr size_t N = 257, C = 2;
-    Grid3D grid(N, std::vector<std::vector<GridCell>>(N, std::vector<GridCell>(C)));
+    std::vector<double> grid(N * N * C);
     for (size_t i = 0; i < N; ++i) {
         double x = -1.0 + 2.0 * static_cast<double>(i) / (N - 1.0);
         for (size_t j = 0; j < N; ++j) {
             double y    = -1.0 + 2.0 * static_cast<double>(j) / (N - 1.0);
             double warp = 2.0 * std::exp(-(x * x + y * y) / 0.5);
-            grid[i][j][0] = GridCell{scale * warp};
-            grid[i][j][1] = GridCell{scale * warp * 0.8};
+            grid[(i * N + j) * C]     = scale * warp;
+            grid[(i * N + j) * C + 1] = scale * warp * 0.8;
         }
     }
     return grid;
@@ -79,6 +80,14 @@ public:
         for (size_t i = 0; i < laser_count; ++i)
             cfg.optical_trains.push_back(mockTrain(i));
 
+        if (include_clearbox && laser_count > 0) {
+            std::vector<clearbox_legacy::TrainGroup> groups;
+            for (size_t i = 0; i < laser_count; ++i)
+                groups.push_back({cfg.optical_trains[i].train_id, mockClearboxGroup(i)});
+            if (auto tree = clearbox_legacy::fromV10Trains(std::move(groups)))
+                cfg.extensions[clearbox_legacy::EXTENSION_NAME] = std::move(*tree);
+        }
+
         return cfg;
     }
 
@@ -99,25 +108,39 @@ private:
         return a;
     }
 
-    static ClearBox mockClearbox(size_t index) {
-        ClearBox cb;
-        cb.ip_address = "192.168.1." + std::to_string(10 + static_cast<int>(index));
+    // One train's ClearBox group, authored the way a File_Version 1.0 file stores it; build() runs
+    // it through the v1.0 shim like the file reader does.
+    static extension::Tree mockClearboxGroup(size_t index) {
+        extension::Tree tree;
+        auto str = [&](const char* name, std::string v) {
+            tree.attrs[name] = extension::Attr{"utf8", std::move(v)};
+        };
+        auto i64 = [&](const char* name, std::int64_t v) {
+            tree.attrs[name] = extension::Attr{"i64", v};
+        };
+        str("Ip_Address", "192.168.1." + std::to_string(10 + static_cast<int>(index)));
         std::string sn = std::to_string(index + 1);
-        cb.serial_number = std::string(3 - sn.size(), '0') + sn; // zero-padded, e.g. "001"
-        cb.data_port                = 5001;
-        cb.server_port              = 20101;
-        cb.actual_timing_offset     = -8;
-        cb.commanded_timing_offset  = 50;
-        cb.output_path              = "/recordings/";
-        cb.selected_camera          = "Default";
-        cb.custom_video_format      = "MP4";
-        cb.video_output             = "HDMI";
-        cb.show_console             = false;
-        cb.software_trigger_delay   = 3000;
-        cb.power_characterization   = forwardPowerCharacterizationCoefficients("LINEAR", "50.0,100.0");
-        cb.correction_data         = makeGaussianGrid(1.0);
-        cb.inverse_correction_data = makeGaussianGrid(0.95);
-        return cb;
+        str("Serial_Number", std::string(3 - sn.size(), '0') + sn); // zero-padded, e.g. "001"
+        str("Output_Path", "/recordings/");
+        str("Selected_Camera", "Default");
+        str("Custom_Video_Format", "MP4");
+        str("Video_Output", "HDMI");
+        str("Volts_To_Watts_Algorithm", "LINEAR");
+        str("Volts_To_Watts_Params", "50.0,100.0");
+        i64("Data_Port", 5001);
+        i64("Server_Port", 20101);
+        i64("Actual_Timing_Offset", -8);
+        i64("Commanded_Timing_Offset", 50);
+        i64("Show_Console", 0);
+        i64("Software_Trigger_Delay", 3000);
+
+        const auto fwd = gaussianCorrectionGrid(1.0);
+        std::vector<double> inv(fwd.size());
+        for (size_t k = 0; k < fwd.size(); ++k) inv[k] = fwd[k] * 0.9;
+        const std::vector<std::uint64_t> shape{257, 257, 2};
+        tree.datasets["Correction_Data"] = extension::Dataset{"f64", shape, fwd, {}};
+        tree.datasets["Inverse_Correction_Data"] = extension::Dataset{"f64", shape, inv, {}};
+        return tree;
     }
 
     static ScanFieldCorrectionFile mockSfcf(size_t index) {
@@ -187,10 +210,6 @@ private:
         sk.sample_period          = 10.0;
         sk.sample_period_unit     = "\xce\xbcs"; // μs (UTF-8)
 
-        OptionalComponents oc;
-        if (include_clearbox)
-            oc.clearbox = mockClearbox(index);
-
         OpticalTrain t;
         t.train_id                               = "Optical_Train_" + zeroPad(index + 1, 2);
         t.beam_waist_definition                  = "knife-edge";
@@ -223,7 +242,6 @@ private:
         t.light_source                           = std::move(ls);
         t.collimator                             = std::move(col);
         t.scanner_card                           = std::move(sk);
-        t.optional_components                    = std::move(oc);
         if (include_clearbox)
             t.scan_field_correction_file = mockSfcf(index);
         return t;

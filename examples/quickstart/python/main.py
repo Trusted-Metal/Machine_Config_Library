@@ -36,27 +36,26 @@ meta = file.meta().get_model()
 print(f"Machine name   : {meta['machine_name']}")
 print(f"Optical trains : {len(file.optical_trains())}")
 
+# ClearBox is an opaque extension tree: extensions["ClearBox"] / Optical_Train_NN.
+reader = MachineConfigReader(DUMMY)
+clearbox_root = reader.parse().extensions["ClearBox"]
+
 for i, train in enumerate(file.optical_trains()):
     scanner = train.get_scanner()
     print(
         f"  Train {i}  wd={scanner['working_distance']} {scanner.get('working_distance_unit') or ''}  "
         f"offset x={scanner.get('scan_head_offset_x')}, y={scanner.get('scan_head_offset_y')}"
     )
-    oc = train.optional_components()
-    if oc is None:
-        print("           optionalComponents: none")
-    else:
-        cb = oc.clearbox()
-        print(f"           clearbox: {'present' if cb.ok else cb.error.code}")
+    cb = clearbox_root.children.get(f"Optical_Train_{i + 1:02d}")
+    print(f"           clearbox: {'present' if cb is not None else 'none'}")
 
 train0 = file.optical_train(0)
 if not isinstance(train0, Ok):
     sys.exit(train0.error.message)
 scanner0 = train0.value.get_scanner()
 
-reader = MachineConfigReader(DUMMY)
-correction = reader.get_correction_data(0)
-print(f"Correction grid: {correction.shape}   (train 0)")
+correction = clearbox_root.children["Optical_Train_01"].datasets["Correction_Data"]
+print(f"Correction grid: {tuple(correction.shape)}   (train 0)")
 
 print()
 with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as tmp:

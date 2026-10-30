@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { MockConfigBuilder, MachineConfigReader } from '../src/index.js';
 import type { MachineConfig } from '../src/index.js';
+import { clearbox, grid } from './clearboxHelpers.js';
 
 /** Absolute path to a unique temp HDF5 file that does not exist yet. */
 function tmpH5(): string {
@@ -83,28 +84,26 @@ describe('MockConfigBuilder — build()', () => {
 
   it('includeClearbox: true (default) populates ClearBox and SFCF on every train', () => {
     const config = new MockConfigBuilder({ nLasers: 2 }).build();
-    for (const train of config.optical_trains) {
-      expect(train.optional_components.clearbox).not.toBeNull();
+    config.optical_trains.forEach((train, i) => {
+      expect(clearbox(config, i)).toBeDefined();
       expect(train.scan_field_correction_file).not.toBeNull();
-    }
+    });
   });
 
   it('includeClearbox: false omits ClearBox and SFCF on every train', () => {
     const config = new MockConfigBuilder({ nLasers: 2, includeClearbox: false }).build();
+    expect(config.extensions).toBeUndefined();
     for (const train of config.optical_trains) {
-      expect(train.optional_components.clearbox).toBeNull();
       expect(train.scan_field_correction_file).toBeNull();
     }
   });
 
-  it('correction_data in-memory has shape [257][257][2] and a ~2.0 centre peak', () => {
+  it('the correction grid in memory has shape [257, 257, 2] and a ~2.0 centre peak', () => {
     const config = new MockConfigBuilder({ nLasers: 1 }).build();
-    const cd = config.optical_trains[0].optional_components.clearbox!.correction_data!;
-    expect(cd).toHaveLength(257);
-    expect(cd[0]).toHaveLength(257);
-    expect(cd[0][0]).toHaveLength(2);
-    expect(cd[128][128][0]).toBeGreaterThan(1.9);
-    expect(cd[128][128][0]).toBeLessThan(2.1);
+    const { data, shape } = grid(config, 0, 'Correction_Data');
+    expect(shape).toEqual([257, 257, 2]);
+    expect(data[(128 * 257 + 128) * 2]).toBeGreaterThan(1.9);
+    expect(data[(128 * 257 + 128) * 2]).toBeLessThan(2.1);
   });
 });
 
@@ -131,27 +130,23 @@ describe('MockConfigBuilder — save() + read back', () => {
   });
 
   it('correction grid round-trips with shape [257, 257, 2]', async () => {
-    const { path } = await buildAndRead(new MockConfigBuilder({ nLasers: 1 }));
-    const cd = await new MachineConfigReader(path).getCorrectionData(0);
-    expect(cd.shape).toEqual([257, 257, 2]);
+    const { config } = await buildAndRead(new MockConfigBuilder({ nLasers: 1 }));
+    expect(grid(config, 0, 'Correction_Data').shape).toEqual([257, 257, 2]);
   });
 
   it('correction grid centre peak is ~2.0 and the grid is non-zero', async () => {
-    const { path } = await buildAndRead(new MockConfigBuilder({ nLasers: 1 }));
-    const cd = await new MachineConfigReader(path).getCorrectionData(0);
-    const centre = cd.data[(128 * 257 + 128) * 2];
+    const { config } = await buildAndRead(new MockConfigBuilder({ nLasers: 1 }));
+    const { data } = grid(config, 0, 'Correction_Data');
+    const centre = data[(128 * 257 + 128) * 2];
     expect(centre).toBeGreaterThan(1.9);
     expect(centre).toBeLessThan(2.1);
-    expect(cd.data.some((v) => v !== 0)).toBe(true);
+    expect(data.some((v) => v !== 0)).toBe(true);
   });
 
   it('inverse correction grid is 0.9x the forward grid at centre', async () => {
-    const { path } = await buildAndRead(new MockConfigBuilder({ nLasers: 1 }));
-    const reader = new MachineConfigReader(path);
-    const cd = await reader.getCorrectionData(0);
-    const icd = await reader.getInverseCorrectionData(0);
-    const fwd = cd.data[(128 * 257 + 128) * 2];
-    const inv = icd.data[(128 * 257 + 128) * 2];
+    const { config } = await buildAndRead(new MockConfigBuilder({ nLasers: 1 }));
+    const fwd = grid(config, 0, 'Correction_Data').data[(128 * 257 + 128) * 2];
+    const inv = grid(config, 0, 'Inverse_Correction_Data').data[(128 * 257 + 128) * 2];
     expect(inv).toBeCloseTo(fwd * 0.9, 6);
   });
 
@@ -159,7 +154,7 @@ describe('MockConfigBuilder — save() + read back', () => {
     const { config } = await buildAndRead(
       new MockConfigBuilder({ nLasers: 1, includeClearbox: false }),
     );
-    expect(config.optical_trains[0].optional_components.clearbox).toBeNull();
+    expect(config.extensions).toBeUndefined();
     expect(config.optical_trains[0].scan_field_correction_file).toBeNull();
   });
 

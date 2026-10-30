@@ -5,8 +5,10 @@
 #include <CLI/CLI.hpp>
 #include <picosha2.h>
 
+#include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 
 #ifdef _WIN32
@@ -76,11 +78,23 @@ int main(int argc, char* argv[]) {
             machine_config::MachineConfigWriter{cfg}.write(copy_out);
         } else if (app.got_subcommand(chash_cmd)) {
             machine_config::MachineConfigReader reader{chash_path};
-            auto cd = chash_inverse
-                ? reader.getInverseCorrectionData(static_cast<size_t>(chash_train))
-                : reader.getCorrectionData(static_cast<size_t>(chash_train));
-            const auto* p = reinterpret_cast<const uint8_t*>(cd.data.data());
-            std::cout << picosha2::hash256_hex_string(p, p + cd.data.size() * sizeof(double)) << "\n";
+            auto cfg = reader.parse();
+            char id[32];
+            std::snprintf(id, sizeof id, "Optical_Train_%02d", chash_train + 1);
+            const char* name = chash_inverse ? "Inverse_Correction_Data" : "Correction_Data";
+            auto cb = cfg.extensions.find("ClearBox");
+            const machine_config::extension::Dataset* ds = nullptr;
+            if (cb != cfg.extensions.end())
+                if (auto t = cb->second.children.find(id); t != cb->second.children.end())
+                    if (auto d = t->second.datasets.find(name); d != t->second.datasets.end())
+                        ds = &d->second;
+            if (!ds)
+                throw std::runtime_error(std::string("no ClearBox ") + name + " for " + id);
+            const auto* values = std::get_if<std::vector<double>>(&ds->data);
+            if (!values || ds->dtype != "f64")
+                throw std::runtime_error(std::string("ClearBox ") + name + " for " + id + " is not float64");
+            const auto* p = reinterpret_cast<const uint8_t*>(values->data());
+            std::cout << picosha2::hash256_hex_string(p, p + values->size() * sizeof(double)) << "\n";
         } else if (app.got_subcommand(confhash_cmd)) {
             machine_config::MachineConfigReader reader{confhash_path};
             auto cfg = reader.parse();

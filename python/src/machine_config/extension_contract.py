@@ -15,9 +15,9 @@ import hashlib
 import math
 import struct
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any, Optional, Union
 
-EXTENSION_CONTRACT_VERSION = "0.1.0"
+EXTENSION_CONTRACT_VERSION = "0.1.1"
 
 #: Fixed-width storage types; each maps 1:1 to an HDF5 type.
 DTYPES = ("utf8", "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "f32", "f64")
@@ -70,12 +70,37 @@ class Dataset:
 
 
 @dataclass
+class TableField:
+    """One column of a :class:`Table`. ``size`` is the fixed byte length of a ``utf8`` column and
+    ``None`` for numeric ones."""
+
+    name: str
+    dtype: str
+    size: Optional[int] = None
+
+
+@dataclass
+class Table:
+    """1-D compound dataset (HDF5 compound type): one row per record, one named column per field.
+    ``fields`` order is the compound member order and is significant; ``columns[name]`` is a list of
+    ``rows`` values of that field's dtype."""
+
+    fields: list
+    rows: int
+    columns: dict
+    attrs: dict = field(default_factory=dict)
+
+
+@dataclass
 class ExtensionTree:
-    """Order of attrs/children/datasets is not significant; the canonical form sorts by UTF-8 bytes."""
+    """Order of attrs/children/datasets/tables is not significant; the canonical form sorts by UTF-8
+    bytes. ``tables`` is empty unless used, so a tree without compound data is encoded and hashed
+    exactly as in contract 0.1.0."""
 
     attrs: dict = field(default_factory=dict)
     children: dict = field(default_factory=dict)
     datasets: dict = field(default_factory=dict)
+    tables: dict = field(default_factory=dict)
 
 
 def _join(path: str, name: str) -> str:
@@ -150,6 +175,53 @@ def validate_tree(tree: ExtensionTree, path: str = "") -> None:
         for i, v in enumerate(ds.data):
             _check_scalar(ds.dtype, v, f"{ds_path}[{i}]")
         _validate_attrs(ds.attrs, ds_path)
+    for name, table in tree.tables.items():
+        table_path = _join(path, name)
+        validate_node_name(name, table_path)
+        if name in tree.children or name in tree.datasets:
+            raise ExtensionContractError(
+                table_path, "a table cannot share a name with a dataset or child group"
+            )
+        _validate_table(table, table_path)
+
+
+def _validate_table(table: Table, path: str) -> None:
+    if not table.fields:
+        raise ExtensionContractError(path, "a table needs at least one field")
+    if not isinstance(table.rows, int) or isinstance(table.rows, bool) or table.rows < 0:
+        raise ExtensionContractError(path, f"invalid row count {table.rows}")
+    names: set = set()
+    for f in table.fields:
+        field_path = _join(path, f.name)
+        validate_node_name(f.name, field_path)
+        if f.name in names:
+            raise ExtensionContractError(field_path, "duplicate field name")
+        names.add(f.name)
+        if f.dtype not in DTYPES:
+            raise ExtensionContractError(field_path, f'unknown dtype "{f.dtype}"')
+        if f.name not in table.columns:
+            raise ExtensionContractError(field_path, "missing column")
+        column = table.columns[f.name]
+        if len(column) != table.rows:
+            raise ExtensionContractError(
+                field_path, f"column length {len(column)} does not match {table.rows} rows"
+            )
+        if f.dtype == "utf8":
+            if not isinstance(f.size, int) or isinstance(f.size, bool) or f.size < 1:
+                raise ExtensionContractError(field_path, "a utf8 field needs a positive integer size")
+        elif f.size is not None:
+            raise ExtensionContractError(field_path, "size is only valid for utf8 fields")
+        for i, v in enumerate(column):
+            row_path = f"{field_path}[{i}]"
+            _check_scalar(f.dtype, v, row_path)
+            if f.dtype == "utf8" and len(v.encode("utf-8")) > f.size:
+                raise ExtensionContractError(
+                    row_path, f"{len(v.encode('utf-8'))} UTF-8 bytes do not fit the {f.size}-byte field"
+                )
+    for name in table.columns:
+        if name not in names:
+            raise ExtensionContractError(_join(path, name), "column has no matching field")
+    _validate_attrs(table.attrs, path)
 
 
 # --------------------------------------------------------------------------------------------
@@ -162,6 +234,14 @@ def validate_tree(tree: ExtensionTree, path: str = "") -> None:
 #   attr    = name, u8 dtypeTag, u8 kind (0 scalar, 1 array), [u32 count], value*
 #   dataset = u8 dtypeTag, u32 rank, u64 dim*, u64 count, value*, attr map (as in tree)
 #   value   = utf8: u32 byteLength + bytes; ints: fixed width; f32/f64: IEEE bits
+#
+# Appended after the datasets only when a tree has tables (so trees without them hash as in 0.1.0):
+#
+#   tables  = u32 0xFFFFFFFF, u32 tableCount, (name table)*
+#   table   = u32 fieldCount, (name, u8 dtypeTag, u32 size)*, u64 rows, column values*, attr map
+#
+# Table fields keep their declared order (it is the compound member order); each column's values
+# follow in that order, row by row within a column.
 #
 # Entries are sorted by the UTF-8 bytes of their names. NaN is the quiet NaN and -0 is +0.
 # --------------------------------------------------------------------------------------------
@@ -238,6 +318,22 @@ def _put_tree(parts: list, t: ExtensionTree) -> None:
         for v in ds.data:
             _put_value(parts, ds.dtype, v)
         _put_attrs(parts, ds.attrs)
+    tables = _sorted_names(t.tables)
+    if tables:
+        parts.append(struct.pack("<II", 0xFFFFFFFF, len(tables)))
+        for n in tables:
+            table = t.tables[n]
+            _put_name(parts, n)
+            parts.append(struct.pack("<I", len(table.fields)))
+            for f in table.fields:
+                _put_name(parts, f.name)
+                parts.append(bytes([_DTYPE_TAG[f.dtype]]))
+                parts.append(struct.pack("<I", f.size or 0))
+            parts.append(struct.pack("<Q", table.rows))
+            for f in table.fields:
+                for v in table.columns[f.name]:
+                    _put_value(parts, f.dtype, v)
+            _put_attrs(parts, table.attrs)
 
 
 def canonical_digest(tree: ExtensionTree) -> str:
@@ -279,7 +375,7 @@ def _attrs_to_json(attrs: dict) -> dict:
 
 
 def tree_to_json(tree: ExtensionTree) -> dict:
-    return {
+    out = {
         "attrs": _attrs_to_json(tree.attrs),
         "children": {n: tree_to_json(c) for n, c in tree.children.items()},
         "datasets": {
@@ -292,6 +388,22 @@ def tree_to_json(tree: ExtensionTree) -> dict:
             for n, ds in tree.datasets.items()
         },
     }
+    if tree.tables:
+        out["tables"] = {
+            n: {
+                "fields": [
+                    {"name": f.name, "dtype": f.dtype, **({} if f.size is None else {"size": f.size})}
+                    for f in t.fields
+                ],
+                "rows": t.rows,
+                "columns": {
+                    f.name: [_scalar_to_json(f.dtype, v) for v in t.columns[f.name]] for f in t.fields
+                },
+                "attrs": _attrs_to_json(t.attrs),
+            }
+            for n, t in tree.tables.items()
+        }
+    return out
 
 
 def _scalar_from_json(dtype: str, v: Any, path: str) -> Scalar:
@@ -349,7 +461,26 @@ def _tree_from_json(d: dict, path: str) -> ExtensionTree:
             data=[_scalar_from_json(dtype, v, f"{ds_path}[{i}]") for i, v in enumerate(ds.get("data", []))],
             attrs=_attrs_from_json(ds.get("attrs"), ds_path),
         )
+    for name, t in (d.get("tables") or {}).items():
+        tree.tables[name] = _table_from_json(t, _join(path, name))
     return tree
+
+
+def _table_from_json(d: dict, path: str) -> Table:
+    fields = []
+    columns = {}
+    for f in d.get("fields") or []:
+        name = f.get("name")
+        field_path = _join(path, str(name))
+        dtype = f.get("dtype")
+        if dtype not in DTYPES:
+            raise ExtensionContractError(field_path, f'unknown dtype "{dtype}"')
+        raw = (d.get("columns") or {}).get(name)
+        if not isinstance(raw, list):
+            raise ExtensionContractError(field_path, "missing column")
+        fields.append(TableField(name, dtype, f.get("size")))
+        columns[name] = [_scalar_from_json(dtype, v, f"{field_path}[{i}]") for i, v in enumerate(raw)]
+    return Table(fields, d.get("rows", 0), columns, _attrs_from_json(d.get("attrs"), path))
 
 
 def tree_from_json(d: dict) -> ExtensionTree:

@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	machineconfig "machine-config-go"
+	"machine-config-go/extension"
 )
 
 func main() {
@@ -83,21 +84,32 @@ func cmdCorrectionHash(args []string) error {
 	if path == "" {
 		return fmt.Errorf("correction-hash: usage: correction-hash <path.h5> [--train N] [--inverse]")
 	}
-	reader := machineconfig.NewReader(path)
-	var cd *machineconfig.CorrectionData
-	var err error
-	if inverse {
-		cd, err = reader.GetInverseCorrectionData(train)
-	} else {
-		cd, err = reader.GetCorrectionData(train)
-	}
+	cfg, err := machineconfig.NewReader(path).Parse()
 	if err != nil {
 		return err
+	}
+	name := "Correction_Data"
+	if inverse {
+		name = "Inverse_Correction_Data"
+	}
+	trainID := fmt.Sprintf("Optical_Train_%02d", train+1)
+	var ds *extension.Dataset
+	if cb := cfg.Extensions["ClearBox"]; cb != nil {
+		if t := cb.Children[trainID]; t != nil {
+			ds = t.Datasets[name]
+		}
+	}
+	if ds == nil {
+		return fmt.Errorf("no ClearBox %s for %s", name, trainID)
+	}
+	data, ok := ds.Data.([]float64)
+	if !ok || ds.Dtype != extension.F64 {
+		return fmt.Errorf("ClearBox %s for %s is not float64", name, trainID)
 	}
 	// Hash as flat little-endian float64 bytes — same convention as Python/Rust/Node.js/C++.
 	h := sha256.New()
 	buf := make([]byte, 8)
-	for _, v := range cd.Data {
+	for _, v := range data {
 		binary.LittleEndian.PutUint64(buf, math.Float64bits(v))
 		h.Write(buf)
 	}

@@ -18,6 +18,14 @@ import (
 //	dataset = u8 dtypeTag, u32 rank, u64 dim*, u64 count, value*, attr map (as in tree)
 //	value   = utf8: u32 byteLength + bytes; ints: fixed width; f32/f64: IEEE bits
 //
+// Appended after the datasets only when a tree has tables (so trees without them hash as in 0.1.0):
+//
+//	tables  = u32 0xFFFFFFFF, u32 tableCount, (name table)*
+//	table   = u32 fieldCount, (name, u8 dtypeTag, u32 size)*, u64 rows, column values*, attr map
+//
+// Table fields keep their declared order (it is the compound member order); each column's values
+// follow in that order, row by row within a column.
+//
 // Entries are sorted by the UTF-8 bytes of their names. NaN is the quiet NaN and -0 is +0.
 // It returns an error if the tree violates the contract.
 func Digest(t *Tree) (string, error) {
@@ -192,5 +200,25 @@ func putTree(buf *bytes.Buffer, t *Tree) {
 		putU64(buf, uint64(count))
 		putElements(buf, ds.Dtype, ds.Data)
 		putAttrs(buf, ds.Attrs)
+	}
+	tables := sortedKeys(t.Tables)
+	if len(tables) > 0 {
+		putU32(buf, 0xFFFFFFFF)
+		putU32(buf, uint32(len(tables)))
+		for _, n := range tables {
+			table := t.Tables[n]
+			putName(buf, n)
+			putU32(buf, uint32(len(table.Fields)))
+			for _, f := range table.Fields {
+				putName(buf, f.Name)
+				buf.WriteByte(dtypeTag[f.Dtype])
+				putU32(buf, uint32(f.Size))
+			}
+			putU64(buf, table.Rows)
+			for _, f := range table.Fields {
+				putElements(buf, f.Dtype, table.Columns[f.Name])
+			}
+			putAttrs(buf, table.Attrs)
+		}
 	}
 }

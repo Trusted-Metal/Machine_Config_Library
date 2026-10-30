@@ -15,14 +15,11 @@ import type {
   LightSource,
   Collimator,
   ScannerCard,
-  ClearBox,
   ScanFieldCorrectionFile,
-  SynchronousSensor,
   PowerCharacterization,
   EquationConstant,
   CalibrationPoint,
 } from "../../models.js";
-import { nestedToFlat } from "../../models.js";
 import * as layout from "./layout.js";
 import { assertValidExtensionTree } from "../../extensions/contract.js";
 import { writeExtensionTree } from "../../extensions/hdf5.js";
@@ -126,25 +123,8 @@ function writeExtra(grp: h5wasm.Group, extra: Record<string, unknown>): void {
 }
 
 // ---------------------------------------------------------------------------
-// Correction data helpers
-// ---------------------------------------------------------------------------
-
-function writeCorrectionDataset(
-  grp: h5wasm.Group,
-  name: string,
-  data: Array<Array<Array<number | null>>> | null | undefined,
-): void {
-  const { flat, shape } = nestedToFlat(data);
-  const ds = grp.create_dataset({ name, data: flat, shape, dtype: "<d" });
-  ws_ds(ds, "dimensions", "H,W,D");
-  ws_ds(ds, "dtype", "float64");
-  ws_ds(ds, "shape", `${shape[0]}x${shape[1]}x${shape[2]}`);
-}
-
-// ---------------------------------------------------------------------------
-// Compound-dataset helpers (EquationConstant / CalibrationPoint rows) —
-// shared shape between SynchronousSensor and Power_Characterization, but at
-// different dataset names, so the name is a parameter rather than hardcoded.
+// Compound-dataset helpers (EquationConstant / CalibrationPoint rows) for
+// Power_Characterization, parameterised by dataset name.
 //
 // Derivation_Equation_Constants.name is a 64-byte fixed-length UTF-8 string
 // on disk, not h5wasm's default variable-length string — the HDF5 C library
@@ -200,29 +180,6 @@ function writePointPairs(
     dtype: [["input_value", "<d"], ["output_value", "<d"]],
     shape: [rows.length],
   });
-}
-
-function writeSynchronousSensor(grp: h5wasm.Group, sensor: SynchronousSensor): void {
-  wb(grp, "Enabled", sensor.enabled);
-  ws(grp, "Sensor_Name", sensor.sensor_name);
-  wf(grp, "Sensor_Output_Range_Low", sensor.sensor_output_range_low);
-  wf(grp, "Sensor_Output_Range_High", sensor.sensor_output_range_high);
-  ws(grp, "Sensor_Output_Space", sensor.sensor_output_space);
-  ws(grp, "Sensor_Model", sensor.sensor_model);
-  ws(grp, "Sensor_Manufacturer", sensor.sensor_manufacturer);
-  ws(grp, "Sensor_Scope", sensor.sensor_scope);
-  ws(grp, "Units_Derived_Quantity", sensor.units_derived_quantity);
-  wi(grp, "Port_ID", sensor.port_id);
-  ws(grp, "Sensor_Type", sensor.sensor_type);
-  ws(grp, "Input_Type", sensor.input_type);
-  ws(grp, "Algorithm_Type", sensor.algorithm_type);
-  ws(grp, "Algorithm_Equation", sensor.algorithm_equation);
-  ws(grp, "Calibration_Source", sensor.calibration_source);
-  wb(grp, "Calibration_Verified", sensor.calibration_verified);
-  wf(grp, "Sample_Period", sensor.sample_period);
-  ws(grp, "Metadata", sensor.metadata);
-  writeEquationConstants(grp, sensor.derivation_equation_constants, "Derivation_Equation_Constants");
-  writePointPairs(grp, sensor.calibration_points, "Calibration_Points");
 }
 
 /**
@@ -346,37 +303,6 @@ function writeScannerCard(grp: h5wasm.Group, sc: ScannerCard): void {
   ws(grp, "Sample_Period_unit", sc.sample_period_unit);
 }
 
-/**
- * Writes only the per-train subset — Output_Path/Software_Trigger_Delay are
- * written once, at Extensions/ClearBox/ itself, by the caller before this is
- * invoked (Change 1's Consolidate). `grp` is already positioned at
- * `Extensions/ClearBox/<train_id>/`.
- */
-function writeClearBox(grp: h5wasm.Group, cb: ClearBox): void {
-  ws(grp, "Ip_Address", cb.ip_address);
-  ws(grp, "Serial_Number", cb.serial_number);
-  wi(grp, "Data_Port", cb.data_port);
-  wi(grp, "Server_Port", cb.server_port);
-  wi(grp, "Actual_Timing_Offset", cb.actual_timing_offset);
-  wi(grp, "Commanded_Timing_Offset", cb.commanded_timing_offset);
-  ws(grp, "Manufacturer", cb.manufacturer);
-  ws(grp, "Model", cb.model);
-  ws(grp, "Firmware_Version", cb.firmware_version ?? null);
-  writeCorrectionDataset(grp, layout.DS_CORRECTION_DATA, cb.correction_data);
-  writeCorrectionDataset(grp, layout.DS_INVERSE_CORRECTION_DATA, cb.inverse_correction_data);
-
-  const sensors = cb.synchronous_sensors ?? {};
-  const sensorNames = Object.keys(sensors);
-  if (sensorNames.length > 0) {
-    const sensorsGrp = grp.create_group("Synchronous_Sensors");
-    for (const name of sensorNames) {
-      writeSynchronousSensor(sensorsGrp.create_group(name), sensors[name]);
-    }
-  }
-
-  writePowerCharacterization(grp.create_group(layout.GROUP_POWER_CHARACTERIZATION), cb.power_characterization);
-}
-
 function writeSfcf(trainGrp: h5wasm.Group, sfcf: ScanFieldCorrectionFile): void {
   let bytes: Uint8Array;
   if (sfcf.raw_bytes) {
@@ -434,46 +360,13 @@ function writeTrainAttrs(grp: h5wasm.Group, train: OpticalTrain): void {
 }
 
 // ---------------------------------------------------------------------------
-// Change 1: Consolidate (Output_Path / Software_Trigger_Delay)
-// ---------------------------------------------------------------------------
-
-interface TrainClearbox {
-  tid: string;
-  cb: ClearBox;
-}
-
-/**
- * Collects `field` (via `getter`) from every ClearBox-bearing train; hard
- * error naming every train/value if they disagree. See the v1.0-to-v1.1
- * migration manifest's Change 1 "Consolidate conflict rule" for the exact
- * message format.
- */
-function consolidate<T>(
-  trains: TrainClearbox[],
-  getter: (cb: ClearBox) => T,
-  fieldName: string,
-): T {
-  const byTrain: Array<[string, T]> = trains.map(({ tid, cb }) => [tid, getter(cb)]);
-  const first = byTrain[0][1];
-  const allAgree = byTrain.every(([, v]) => v === first);
-  if (!allAgree) {
-    const detail = byTrain.map(([tid, v]) => `${tid}=${JSON.stringify(v)}`).join(", ");
-    throw new Error(`Consolidate conflict on '${fieldName}': trains disagree — ${detail}`);
-  }
-  return first;
-}
-
-// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/** Validates every extension tree and rejects names core still models, before the output file is created. */
+/** Validates every extension tree before the output file is created. */
 function assertExtensionsWritable(config: MachineConfig): void {
   for (const [name, tree] of Object.entries(config.extensions ?? {})) {
     assertValidExtensionTree(tree, name);
-    if (layout.MODELLED_EXTENSION_NAMES.has(name)) {
-      throw new Error(`Extension "${name}" is modelled by core and cannot be written as an extension tree`);
-    }
   }
 }
 
@@ -523,31 +416,6 @@ export class Hdf5WriterV1_1 {
       const trainsGrp = machineGrp.create_group("Optical_Trains");
       const trains = this.config.optical_trains;
 
-      // Change 1 (Consolidate): collect every ClearBox-bearing train's
-      // Output_Path/Software_Trigger_Delay; hard error on disagreement.
-      const trainsWithClearbox: TrainClearbox[] = [];
-      for (let i = 0; i < trains.length; i++) {
-        const cb = trains[i].optional_components.clearbox;
-        if (cb != null) trainsWithClearbox.push({ tid: layout.trainId(i), cb });
-      }
-
-      const extensions = Object.entries(this.config.extensions ?? {});
-      const needsExtensions = trainsWithClearbox.length > 0 || extensions.length > 0;
-      const extensionsGrp = needsExtensions ? f.create_group(layout.ROOT_EXTENSIONS) : null;
-
-      let clearboxRootGrp: h5wasm.Group | null = null;
-      if (trainsWithClearbox.length > 0 && extensionsGrp != null) {
-        const outputPath = consolidate(trainsWithClearbox, (cb) => cb.output_path, "Output_Path");
-        const softwareTriggerDelay = consolidate(
-          trainsWithClearbox,
-          (cb) => cb.software_trigger_delay,
-          "Software_Trigger_Delay",
-        );
-        clearboxRootGrp = extensionsGrp.create_group("ClearBox");
-        ws(clearboxRootGrp, "Output_Path", outputPath);
-        wi(clearboxRootGrp, "Software_Trigger_Delay", softwareTriggerDelay);
-      }
-
       for (let i = 0; i < trains.length; i++) {
         const train = trains[i];
         const tid = layout.trainId(i);
@@ -559,18 +427,15 @@ export class Hdf5WriterV1_1 {
         writeCollimator(grp.create_group(layout.GROUP_COLLIMATOR), train.collimator);
         writeScannerCard(grp.create_group(layout.GROUP_SCANNER_CARD), train.scanner_card);
 
-        const cb = train.optional_components.clearbox;
-        if (cb != null && clearboxRootGrp != null) {
-          writeClearBox(clearboxRootGrp.create_group(tid), cb);
-        }
-
         if (train.scan_field_correction_file != null) {
           writeSfcf(grp, train.scan_field_correction_file);
         }
       }
 
-      for (const [name, tree] of extensions) {
-        writeExtensionTree(extensionsGrp as h5wasm.Group, name, tree);
+      const extensions = Object.entries(this.config.extensions ?? {});
+      if (extensions.length > 0) {
+        const extensionsGrp = f.create_group(layout.ROOT_EXTENSIONS);
+        for (const [name, tree] of extensions) writeExtensionTree(extensionsGrp, name, tree);
       }
     } finally {
       f.close();

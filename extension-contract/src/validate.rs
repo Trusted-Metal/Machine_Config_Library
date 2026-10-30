@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::tree::{Attr, AttrValue, Dataset, ExtensionTree, Scalar};
+use crate::tree::{Attr, AttrValue, ColumnData, Dataset, Dtype, ExtensionTree, Scalar, Table};
 
 /// `path` is the slash-joined location of the offending node; attributes are prefixed with `@`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -100,5 +100,72 @@ pub fn validate_tree(tree: &ExtensionTree, path: &str) -> Result<(), ContractErr
         }
         validate_dataset(ds, &ds_path)?;
     }
+    for (name, table) in &tree.tables {
+        let table_path = join(path, name);
+        validate_node_name(name, &table_path)?;
+        if tree.children.contains_key(name) || tree.datasets.contains_key(name) {
+            return Err(ContractError::new(
+                table_path,
+                "a table cannot share a name with a dataset or child group",
+            ));
+        }
+        validate_table(table, &table_path)?;
+    }
     Ok(())
+}
+
+fn validate_table(table: &Table, path: &str) -> Result<(), ContractError> {
+    if table.fields.is_empty() {
+        return Err(ContractError::new(path, "a table needs at least one field"));
+    }
+    if table.columns.len() != table.fields.len() {
+        return Err(ContractError::new(
+            path,
+            format!("{} columns for {} fields", table.columns.len(), table.fields.len()),
+        ));
+    }
+    for (i, field) in table.fields.iter().enumerate() {
+        let field_path = join(path, &field.name);
+        validate_node_name(&field.name, &field_path)?;
+        if table.fields[..i].iter().any(|f| f.name == field.name) {
+            return Err(ContractError::new(field_path, "duplicate field name"));
+        }
+        let column = &table.columns[i];
+        if column.dtype() != field.dtype {
+            return Err(ContractError::new(
+                field_path,
+                format!("column is {} but the field dtype is {}", column.dtype().name(), field.dtype.name()),
+            ));
+        }
+        if column.len() != table.rows {
+            return Err(ContractError::new(
+                field_path,
+                format!("column length {} does not match {} rows", column.len(), table.rows),
+            ));
+        }
+        match (field.dtype, field.size, column) {
+            (Dtype::Utf8, Some(size), ColumnData::Utf8(values)) if size >= 1 => {
+                for (row, v) in values.iter().enumerate() {
+                    let row_path = format!("{field_path}[{row}]");
+                    if v.contains('\0') {
+                        return Err(ContractError::new(row_path, "utf8 value must not contain NUL"));
+                    }
+                    if v.len() > size {
+                        return Err(ContractError::new(
+                            row_path,
+                            format!("{} UTF-8 bytes do not fit the {size}-byte field", v.len()),
+                        ));
+                    }
+                }
+            }
+            (Dtype::Utf8, _, _) => {
+                return Err(ContractError::new(field_path, "a utf8 field needs a positive integer size"));
+            }
+            (_, Some(_), _) => {
+                return Err(ContractError::new(field_path, "size is only valid for utf8 fields"));
+            }
+            _ => {}
+        }
+    }
+    validate_attrs(&table.attrs, path)
 }

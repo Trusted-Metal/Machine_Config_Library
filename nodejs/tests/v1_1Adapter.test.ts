@@ -1,32 +1,13 @@
 /**
  * File_Version 1.1 adapter tests — the real v1.1 adapter (not the mock in
- * `mockV1_1.ts`/`adapterMigration.test.ts`). Mirrors the other 4 languages'
- * rewritten test suites for `docs/migrations/v1_0_to_v1_1.md`'s 5 changes.
+ * `mockV1_1.ts`/`adapterMigration.test.ts`). Mirrors the Rust suite for
+ * `docs/migrations/v1_0_to_v1_1.md`'s 5 changes.
  *
- * Phase 2 clean-up (see the migration implementation plan) removed
- * migrateV1ToV1_1/migrateV1_1ToV1 — upgrade/downgrade is now just
- * parse()/write(), using MachineConfigWriter's optional targetVersion
- * parameter. Every test below that used to call a migrate function directly
- * now goes through a real HDF5 write+read instead — a genuine
- * strengthening, since it now exercises the same code path a real caller
- * uses.
- *
- * Tests
- * -----
- *   read                                          natively-authored v1.1 fixture -> StableModel, all 5 changes asserted
- *   roundtrip                                     write -> read -> write -> read, cross-wiring guard
- *   forward: v1.0 fixture written as v1.1         manifest rules
- *   Output_Path / Software_Trigger_Delay disagreement raises
- *   unrecognized Algorithm_Type (ClearBox/LightSource) — best-effort, never raises (Phase 2)
- *   backward: v1.1 fixture written as v1.0        surviving fields preserved
- *   backward reorders constants by name / missing-data writes blank
- *   v1 unaffected                                 v1.0 path undisturbed
- *   v1.0 write never invokes the fallback when native data is present
- *   roundtrip v1.0 -> v1.1 -> v1.0 / v1.1 -> v1.0 -> v1.1 (the acceptance criterion)
- *   writer targetVersion overrides meta / defaults to meta.file_version
- *   dispatcher forward / backward                 full public API, real registry
- *   adapters satisfy interface
- *   toJson() includes the new v1.1 fields
+ * ClearBox is an opaque extension tree in core, always in the File_Version 1.1 layout
+ * (`ClearBox/<train_id>/Power_Characterization/`, shared `Output_Path` and
+ * `Software_Trigger_Delay` on the extension root). A File_Version 1.0 file is shimmed into and out
+ * of that layout on read and write, so upgrade/downgrade is just parse()/write() using
+ * MachineConfigWriter's optional targetVersion parameter.
  */
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -34,26 +15,28 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import type {
-  CalibrationPoint,
-  ClearBox,
-  EquationConstant,
-  LightSource,
-  MachineConfig,
-  OptionalComponents,
-} from '../src/models.js';
+import type { MachineConfig } from '../src/models.js';
 import { MockConfigBuilder } from '../src/builder.js';
 import { Hdf5AdapterV1_0 } from '../src/capabilities/v1_0/hdf5.js';
 import { Hdf5AdapterV1_1, Hdf5WriterV1_1 } from '../src/capabilities/v1_1/index.js';
 import type { ReadOptions } from '../src/capabilities/v1_1/hdf5.js';
-import {
-  forwardPowerCharacterizationCoefficients,
-  forwardPowerCharacterizationPoints,
-} from '../src/powerCharacterization.js';
+import { forwardPowerCharacterizationPoints } from '../src/powerCharacterization.js';
 import { MachineConfigReader, _READERS } from '../src/reader.js';
 import { MachineConfigWriter, _WRITERS } from '../src/writer.js';
 import { MachineConfigFileV1_1 } from '../src/capabilities/index.js';
 import type { MachineConfigFile } from '../src/capabilities/generated.js';
+import { canonicalDigest } from '../src/index.js';
+import {
+  attr,
+  clearbox,
+  clearboxRoot,
+  constants,
+  int,
+  makePowerCharacterization,
+  pointCount,
+  powerCharacterization,
+  text,
+} from './clearboxHelpers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REFERENCE_V1_0 = join(__dirname, '../../fixtures/reference_config_opcua_synchronous_sensors.h5');
@@ -69,11 +52,7 @@ function mockV1Config(nLasers = 2): MachineConfig {
   return cfg;
 }
 
-/**
- * In-memory v1.1-shaped MachineConfig for tests that need one without
- * touching disk — MockConfigBuilder already builds power_characterization
- * natively, so this is just the v1.0 mock with file_version overridden.
- */
+/** In-memory v1.1-shaped config: the v1.0 mock with file_version overridden (its ClearBox tree is already in the v1.1 layout). */
 function mockV1_1Config(nLasers = 2): MachineConfig {
   const cfg = mockV1Config(nLasers);
   return { ...cfg, meta: { ...cfg.meta, file_version: '1.1' } };
@@ -82,6 +61,17 @@ function mockV1_1Config(nLasers = 2): MachineConfig {
 async function writeAs(cfg: MachineConfig, path: string, targetVersion: string): Promise<void> {
   await new MachineConfigWriter(cfg, targetVersion).write(path);
 }
+
+/** Write `cfg` as `version` and read it back through the public reader. */
+async function viaFile(cfg: MachineConfig, version: string): Promise<MachineConfig> {
+  const out = tempH5Path(`via_${version}`);
+  await writeAs(cfg, out, version);
+  return new MachineConfigReader(out).parse();
+}
+
+const names = (pc: ReturnType<typeof powerCharacterization>) => constants(pc).map((c) => c.name);
+const values = (pc: ReturnType<typeof powerCharacterization>) => constants(pc).map((c) => c.value);
+const sorted = (v: number[]) => [...v].sort((a, b) => a - b);
 
 // ---------------------------------------------------------------------------
 // read
@@ -92,47 +82,44 @@ describe('Hdf5AdapterV1_1 — read', () => {
     const cfg = await new Hdf5AdapterV1_1(REFERENCE_V1_1).parse();
     expect(cfg.meta.file_version).toBe('1.1');
 
-    for (const t of cfg.optical_trains) {
-      const cb = t.optional_components.clearbox as ClearBox;
-      // Change 1: Consolidate — same shared value on every train
-      expect(cb.output_path).toBe('/recordings/');
-      expect(cb.software_trigger_delay).toBe(3000);
+    // Change 1: Consolidate — one shared value, on the extension root.
+    const root = clearboxRoot(cfg);
+    expect(text(root, 'Output_Path')).toBe('/recordings/');
+    expect(int(root, 'Software_Trigger_Delay')).toBe(3000);
+
+    cfg.optical_trains.forEach((t, i) => {
+      const cb = clearbox(cfg, i);
       // Change 1: Addition
-      expect(cb.firmware_version).toBe('2.4.1');
+      expect(text(cb, 'Firmware_Version')).toBe('2.4.1');
       // Change 1: Removal
-      expect(cb.selected_camera).toBeNull();
-      expect(cb.custom_video_format).toBeNull();
-      expect(cb.video_output).toBeNull();
-      expect(cb.show_console).toBeNull();
-      expect(cb.correction_grid_domain_shape).toBeNull();
-      expect(cb.inverse_grid_domain_shape).toBeNull();
+      for (const removed of ['Selected_Camera', 'Custom_Video_Format', 'Video_Output', 'Show_Console', 'Output_Path', 'Software_Trigger_Delay']) {
+        expect(cb.attrs).not.toHaveProperty(removed);
+      }
 
       // Change 5: no on-disk source in v1.1, always null
       expect(t.scanner.x_axis?.tuning_parameters).toBeNull();
       expect(t.scanner.x_axis?.tuning_type).toBeNull();
       expect(t.scanner.y_axis?.tuning_parameters).toBeNull();
       expect(t.scanner.y_axis?.tuning_type).toBeNull();
-    }
+    });
 
     // Change 2: OPCUA relocated, contents unaffected
     expect(cfg.extensions?.TM_OPCUA).toBeDefined();
     expect(cfg).not.toHaveProperty('opcua');
 
     // Change 3: ClearBox Power_Characterization — train 1 LINEAR, train 2 POLYNOMIAL
-    const cb0 = cfg.optical_trains[0].optional_components.clearbox as ClearBox;
-    const pc0 = cb0.power_characterization!;
-    expect(pc0.algorithm_type).toBe('LINEAR');
-    expect(pc0.algorithm_equation).toBe('W = a*V + b');
-    expect(pc0.input_type).toBe('0-10 V');
-    expect(pc0.units_derived_quantity).toBe('Watts');
-    expect(pc0.derivation_equation_constants.map((c) => c.name)).toEqual(['b', 'a']);
-    expect(pc0.characterization_points.length).toBe(3);
+    const pc0 = powerCharacterization(cfg, 0);
+    expect(text(pc0, 'Algorithm_Type')).toBe('LINEAR');
+    expect(text(pc0, 'Algorithm_Equation')).toBe('W = a*V + b');
+    expect(text(pc0, 'Input_Type')).toBe('0-10 V');
+    expect(text(pc0, 'Units_Derived_Quantity')).toBe('Watts');
+    expect(names(pc0)).toEqual(['b', 'a']);
+    expect(pointCount(pc0)).toBe(3);
 
-    const cb1 = cfg.optical_trains[1].optional_components.clearbox as ClearBox;
-    const pc1 = cb1.power_characterization!;
-    expect(pc1.algorithm_type).toBe('POLYNOMIAL');
-    expect(pc1.algorithm_equation).toBe('W = c0 + c1*V + c2*V^2');
-    expect(pc1.derivation_equation_constants.map((c) => c.name)).toEqual(['c0', 'c1', 'c2']);
+    const pc1 = powerCharacterization(cfg, 1);
+    expect(text(pc1, 'Algorithm_Type')).toBe('POLYNOMIAL');
+    expect(text(pc1, 'Algorithm_Equation')).toBe('W = c0 + c1*V + c2*V^2');
+    expect(names(pc1)).toEqual(['c0', 'c1', 'c2']);
 
     // Change 4: LightSource Power_Characterization — inverse data availability
     const lspc0 = cfg.optical_trains[0].light_source.power_characterization!;
@@ -142,9 +129,9 @@ describe('Hdf5AdapterV1_1 — read', () => {
     expect(lspc0.derivation_equation_constants.length).toBeGreaterThan(0);
   });
 
-  it('toJson() includes firmware_version and power_characterization (explicit serialisation check)', async () => {
+  it('toJson() includes the ClearBox extension and the light source power_characterization', async () => {
     const json = await new Hdf5AdapterV1_1(REFERENCE_V1_1).toJson();
-    expect(json).toContain('"firmware_version"');
+    expect(json).toContain('"Firmware_Version"');
     expect(json).toContain('"power_characterization"');
   });
 });
@@ -156,31 +143,24 @@ describe('Hdf5AdapterV1_1 — read', () => {
 describe('Hdf5AdapterV1_1 / Hdf5WriterV1_1 — roundtrip', () => {
   it('write -> read -> write -> read, no drift; ClearBox/LightSource cross-wiring guard', async () => {
     const cfg = mockV1_1Config(1);
+    clearbox(cfg, 0).children['Power_Characterization'] = makePowerCharacterization('LINEAR', [['b', 1.0], ['a', 2.0]]);
     const train = cfg.optical_trains[0];
-    const cb = train.optional_components.clearbox as ClearBox;
-    const newCb: ClearBox = {
-      ...cb,
-      power_characterization: {
-        ...cb.power_characterization!,
-        algorithm_type: 'LINEAR',
-        derivation_equation_constants: [
-          { name: 'b', value: 1.0 },
-          { name: 'a', value: 2.0 },
-        ] as EquationConstant[],
-        characterization_points: [],
+    cfg.optical_trains = [
+      {
+        ...train,
+        light_source: {
+          ...train.light_source,
+          power_characterization: {
+            algorithm_type: 'POLYNOMIAL',
+            algorithm_equation: null,
+            input_type: null,
+            units_derived_quantity: null,
+            derivation_equation_constants: [],
+            characterization_points: [{ input_value: 9.0, output_value: 99.0 }],
+          },
+        },
       },
-    };
-    const newLs: LightSource = {
-      ...train.light_source,
-      power_characterization: {
-        ...train.light_source.power_characterization!,
-        algorithm_type: 'POLYNOMIAL',
-        derivation_equation_constants: [],
-        characterization_points: [{ input_value: 9.0, output_value: 99.0 }] as CalibrationPoint[],
-      },
-    };
-    const optional_components: OptionalComponents = { clearbox: newCb };
-    cfg.optical_trains = [{ ...train, light_source: newLs, optional_components }];
+    ];
 
     const p1 = tempH5Path('v1_1_a');
     await new Hdf5WriterV1_1(cfg).write(p1);
@@ -189,16 +169,18 @@ describe('Hdf5AdapterV1_1 / Hdf5WriterV1_1 — roundtrip', () => {
     await new Hdf5WriterV1_1(mid).write(p2);
     const result = await new Hdf5AdapterV1_1(p2).parse();
 
-    const cbR = result.optical_trains[0].optional_components.clearbox as ClearBox;
-    const lsR = result.optical_trains[0].light_source;
-    expect(cbR.power_characterization?.algorithm_type).toBe('LINEAR');
-    expect(cbR.power_characterization?.derivation_equation_constants.map((c) => c.name)).toEqual(['b', 'a']);
-    expect(cbR.power_characterization?.characterization_points).toEqual([]);
-    expect(lsR.power_characterization?.algorithm_type).toBe('POLYNOMIAL');
-    expect(lsR.power_characterization?.derivation_equation_constants).toEqual([]);
-    expect(lsR.power_characterization?.characterization_points[0].input_value).toBe(9.0);
+    const cbPc = powerCharacterization(result, 0);
+    const lsPc = result.optical_trains[0].light_source.power_characterization!;
+    expect(text(cbPc, 'Algorithm_Type')).toBe('LINEAR');
+    expect(names(cbPc)).toEqual(['b', 'a']);
+    expect(pointCount(cbPc)).toBe(0);
+    expect(lsPc.algorithm_type).toBe('POLYNOMIAL');
+    expect(lsPc.derivation_equation_constants).toEqual([]);
+    expect(lsPc.characterization_points[0].input_value).toBe(9.0);
     // Cross-wiring guard: the two instances must not have swapped.
-    expect(cbR.power_characterization?.algorithm_type).not.toBe(lsR.power_characterization?.algorithm_type);
+    expect(text(cbPc, 'Algorithm_Type')).not.toBe(lsPc.algorithm_type);
+    // The whole ClearBox tree, grids included, is bit-stable across the double round trip.
+    expect(canonicalDigest(result.extensions!.ClearBox)).toBe(canonicalDigest(cfg.extensions!.ClearBox));
   });
 });
 
@@ -214,113 +196,78 @@ describe('v1.0 fixture written as v1.1', () => {
     const migrated = await new Hdf5AdapterV1_1(out).parse();
     expect(migrated.meta.file_version).toBe('1.1');
 
-    migrated.optical_trains.forEach((t, i) => {
-      const srcCb = source.optical_trains[i].optional_components.clearbox as ClearBox;
-      const cb = t.optional_components.clearbox as ClearBox;
-      // Consolidate: same per-train value carried straight through (real
-      // fixture already agrees).
-      expect(cb.output_path).toBe(srcCb.output_path);
-      expect(cb.software_trigger_delay).toBe(srcCb.software_trigger_delay);
-      // Addition: no v1.0 source. h5wasm reads an empty/absent string
-      // attribute as null (`attrStr`), but the parser normalizes that to
-      // undefined for this field specifically — cross_check.py's read-parity
-      // phase caught this as a real cross-language bug (2026-09-01): an
-      // earlier version of this test asserted `.toBeNull()`, which papered
-      // over `firmware_version: attrStr(...)` keeping the key in the JSON
-      // output as `null` where Rust/Python/Go/C++ all omit it entirely
-      // (skip_serializing_if / omitempty / has_value() / `is not None`).
-      // Fixed at the source (`?? undefined`, matching the sibling
-      // `power_characterization` field on the very next line) rather than
-      // by re-adjusting this assertion a second time.
-      expect(cb.firmware_version).toBeUndefined();
-      // Removal.
-      expect(cb.selected_camera).toBeNull();
-      expect(cb.custom_video_format).toBeNull();
-      // Change 3: derived ClearBox data has real constants, zero points.
-      expect(cb.power_characterization?.characterization_points).toEqual([]);
-      expect(cb.power_characterization?.derivation_equation_constants.length).toBeGreaterThan(0);
-      expect(cb.power_characterization?.algorithm_type).toBe(srcCb.power_characterization?.algorithm_type);
+    // The shimmed tree is already in the v1.1 layout, so it survives unchanged.
+    expect(canonicalDigest(migrated.extensions!.ClearBox)).toBe(canonicalDigest(source.extensions!.ClearBox));
+    expect(clearboxRoot(migrated).attrs).toHaveProperty('Output_Path');
+    expect(clearboxRoot(migrated).attrs).toHaveProperty('Software_Trigger_Delay');
 
+    migrated.optical_trains.forEach((t, i) => {
+      const cb = clearbox(migrated, i);
+      // Addition: no v1.0 source.
+      expect(cb.attrs).not.toHaveProperty('Firmware_Version');
+      // v1.0-only attributes ride along as extra per-train attributes.
+      expect(cb.attrs).toHaveProperty('Selected_Camera');
+      // Change 3: derived ClearBox data has real constants, zero points.
+      const pc = powerCharacterization(migrated, i);
+      expect(pointCount(pc)).toBe(0);
+      expect(constants(pc).length).toBeGreaterThan(0);
+      expect(text(pc, 'Algorithm_Type')).toBe(text(powerCharacterization(source, i), 'Algorithm_Type'));
+
+      // Change 4: derived Light_Source data is the inverse — zero constants, real points.
       const ls = t.light_source;
-      // Change 4: derived Light_Source data is the inverse — zero
-      // constants, real points.
       expect(ls.power_characterization?.derivation_equation_constants).toEqual([]);
       expect(ls.power_characterization?.characterization_points.length).toBeGreaterThan(0);
     });
   });
 
-  it('Output_Path disagreement raises at write time', async () => {
+  it('the first train wins for the shared Output_Path / Software_Trigger_Delay in a v1.0 file', async () => {
+    // File_Version 1.0 stores them per train; the extension tree holds one value each.
     const cfg = mockV1Config(2);
-    const t1 = cfg.optical_trains[1];
-    const cb1: ClearBox = { ...(t1.optional_components.clearbox as ClearBox), output_path: '/other/' };
-    cfg.optical_trains = [
-      cfg.optical_trains[0],
-      { ...t1, optional_components: { clearbox: cb1 } },
-    ];
-    await expect(writeAs(cfg, tempH5Path('output_path_conflict'), '1.1')).rejects.toThrow(
-      /Consolidate conflict on 'Output_Path'/,
-    );
-  });
-
-  it('Software_Trigger_Delay disagreement raises at write time', async () => {
-    const cfg = mockV1Config(2);
-    const t1 = cfg.optical_trains[1];
-    const cb1: ClearBox = {
-      ...(t1.optional_components.clearbox as ClearBox),
-      software_trigger_delay: 9999,
-    };
-    cfg.optical_trains = [
-      cfg.optical_trains[0],
-      { ...t1, optional_components: { clearbox: cb1 } },
-    ];
-    await expect(writeAs(cfg, tempH5Path('trigger_delay_conflict'), '1.1')).rejects.toThrow(
-      /Consolidate conflict on 'Software_Trigger_Delay'/,
-    );
+    clearbox(cfg, 1).attrs['Output_Path'] = { dtype: 'utf8', value: '/other/' };
+    clearbox(cfg, 1).attrs['Software_Trigger_Delay'] = { dtype: 'i64', value: 9999n };
+    const back = await viaFile(cfg, '1.0');
+    const root = clearboxRoot(back);
+    expect(text(root, 'Output_Path')).toBe('/recordings/');
+    expect(int(root, 'Software_Trigger_Delay')).toBe(3000);
+    expect(clearbox(back, 1).attrs).not.toHaveProperty('Output_Path');
   });
 
   it('unrecognized Algorithm_Type on ClearBox is best-effort, never raises (Phase 2)', async () => {
-    const cfg = mockV1Config(1);
-    const t0 = cfg.optical_trains[0];
-    const cb0: ClearBox = {
-      ...(t0.optional_components.clearbox as ClearBox),
-      power_characterization: forwardPowerCharacterizationCoefficients('EXPONENTIAL', '1.5,2.5,3.5'),
-    };
-    cfg.optical_trains = [{ ...t0, optional_components: { clearbox: cb0 } }];
-    const out = tempH5Path('unrecognized_clearbox');
-    await writeAs(cfg, out, '1.1');
-    const result = await new Hdf5AdapterV1_1(out).parse();
-    const pc = (result.optical_trains[0].optional_components.clearbox as ClearBox).power_characterization!;
-    expect(pc.algorithm_type).toBe('EXPONENTIAL');
-    expect(pc.algorithm_equation).toBeNull();
-    expect(pc.derivation_equation_constants.map((c) => c.name)).toEqual(['0', '1', '2']);
-    expect(pc.derivation_equation_constants.map((c) => c.value)).toEqual([1.5, 2.5, 3.5]);
+    const cfg = mockV1_1Config(1);
+    clearbox(cfg, 0).children['Power_Characterization'] = makePowerCharacterization('EXPONENTIAL', [
+      ['0', 1.5],
+      ['1', 2.5],
+      ['2', 3.5],
+    ]);
+    const v1_0 = await viaFile(cfg, '1.0');
+    const pc = powerCharacterization(v1_0, 0);
+    expect(text(pc, 'Algorithm_Type')).toBe('EXPONENTIAL');
+    expect(text(pc, 'Algorithm_Equation')).toBeNull();
+    expect(names(pc)).toEqual(['0', '1', '2']);
+    expect(values(pc)).toEqual([1.5, 2.5, 3.5]);
 
-    // Round trip: writing back to v1.0 reproduces the original CSV exactly
-    // (checked via the structured shape, since the flat field no longer
-    // exists to compare against directly).
-    const v1_0Out = tempH5Path('unrecognized_clearbox_roundtrip');
-    await writeAs(result, v1_0Out, '1.0');
-    const back = await new Hdf5AdapterV1_0(v1_0Out).parse();
-    const backPc = (back.optical_trains[0].optional_components.clearbox as ClearBox).power_characterization!;
-    expect(backPc.algorithm_type).toBe('EXPONENTIAL');
-    expect(backPc.derivation_equation_constants.map((c) => c.value)).toEqual([1.5, 2.5, 3.5]);
+    const back = await viaFile(v1_0, '1.1');
+    expect(text(powerCharacterization(back, 0), 'Algorithm_Type')).toBe('EXPONENTIAL');
+    expect(values(powerCharacterization(back, 0))).toEqual([1.5, 2.5, 3.5]);
   });
 
   it('unrecognized Algorithm_Type on LightSource is best-effort, never raises (Phase 2)', async () => {
     const cfg = mockV1Config(1);
     const t0 = cfg.optical_trains[0];
-    const ls0: LightSource = {
-      ...t0.light_source,
-      power_characterization: forwardPowerCharacterizationPoints('QUADRATIC', '1,2,3,4'),
-    };
-    cfg.optical_trains = [{ ...t0, light_source: ls0 }];
-    const out = tempH5Path('unrecognized_lightsource');
-    await writeAs(cfg, out, '1.1');
-    const result = await new Hdf5AdapterV1_1(out).parse();
+    cfg.optical_trains = [
+      { ...t0, light_source: { ...t0.light_source, power_characterization: forwardPowerCharacterizationPoints('QUADRATIC', '1,2,3,4') } },
+    ];
+    const result = await viaFile(cfg, '1.1');
     const pc = result.optical_trains[0].light_source.power_characterization!;
     expect(pc.algorithm_type).toBe('QUADRATIC');
     expect(pc.algorithm_equation).toBeNull();
     expect(pc.characterization_points.length).toBe(2);
+  });
+
+  it('a ClearBox train with no matching optical train is rejected for v1.0', async () => {
+    const cfg = mockV1_1Config(1);
+    cfg.extensions!.ClearBox.children['Optical_Train_07'] = structuredClone(clearbox(cfg, 0));
+    await expect(writeAs(cfg, tempH5Path('no_matching_train'), '1.0')).rejects.toThrow(/Optical_Train_07/);
   });
 });
 
@@ -336,55 +283,32 @@ describe('v1.1 fixture written as v1.0', () => {
     const back = await new Hdf5AdapterV1_0(out).parse();
     expect(back.meta.file_version).toBe('1.0');
 
-    const srcCb0 = source.optical_trains[0].optional_components.clearbox as ClearBox;
-    const cb0 = back.optical_trains[0].optional_components.clearbox as ClearBox;
-    const srcPc0 = srcCb0.power_characterization!;
-    const pc0 = cb0.power_characterization!;
-    expect(pc0.algorithm_type).toBe(srcPc0.algorithm_type);
-    const expected = srcPc0.derivation_equation_constants.map((c) => c.value).sort((a: number, b: number) => a - b);
-    const actual = pc0.derivation_equation_constants.map((c) => c.value).sort((a: number, b: number) => a - b);
-    expect(actual).toEqual(expected);
-    expect(cb0.output_path).toBe(srcCb0.output_path);
-    expect(cb0.software_trigger_delay).toBe(srcCb0.software_trigger_delay);
+    const srcPc0 = powerCharacterization(source, 0);
+    const pc0 = powerCharacterization(back, 0);
+    expect(text(pc0, 'Algorithm_Type')).toBe(text(srcPc0, 'Algorithm_Type'));
+    expect(sorted(values(pc0))).toEqual(sorted(values(srcPc0)));
+    const [srcRoot, root] = [clearboxRoot(source), clearboxRoot(back)];
+    expect(root.attrs['Output_Path']).toEqual(srcRoot.attrs['Output_Path']);
+    expect(Number(attr(root, 'Software_Trigger_Delay'))).toBe(Number(attr(srcRoot, 'Software_Trigger_Delay')));
 
-    const srcLs0 = source.optical_trains[0].light_source;
-    const ls0 = back.optical_trains[0].light_source;
-    const srcLsPc0 = srcLs0.power_characterization!;
-    const lsPc0 = ls0.power_characterization!;
+    const srcLsPc0 = source.optical_trains[0].light_source.power_characterization!;
+    const lsPc0 = back.optical_trains[0].light_source.power_characterization!;
     expect(lsPc0.algorithm_type).toBe(srcLsPc0.algorithm_type);
-    const expectedPoints = srcLsPc0.characterization_points.flatMap((p) => [p.input_value, p.output_value]);
-    const actualPoints = lsPc0.characterization_points.flatMap((p) => [p.input_value, p.output_value]);
-    expect(actualPoints).toEqual(expectedPoints);
+    const flat = (p: typeof srcLsPc0) => p.characterization_points.flatMap((x) => [x.input_value, x.output_value]);
+    expect(flat(lsPc0)).toEqual(flat(srcLsPc0));
 
-    // Change 1 Removal fields: lost forever, not restored.
-    expect(cb0.selected_camera).toBeNull();
+    // v1.1-only fields: lost on the way down, not restored.
+    expect(clearbox(back, 0).attrs).not.toHaveProperty('Firmware_Version');
+    expect(clearbox(back, 0).attrs).not.toHaveProperty('Selected_Camera');
   });
 
   it('reorders Derivation_Equation_Constants by name before joining as CSV', async () => {
     const cfg = mockV1_1Config(1);
-    const t0 = cfg.optical_trains[0];
-    const cb0 = t0.optional_components.clearbox as ClearBox;
-    const scrambled: EquationConstant[] = [
-      { name: 'a', value: 2 },
-      { name: 'b', value: 1 },
-    ];
-    const newCb: ClearBox = {
-      ...cb0,
-      power_characterization: {
-        ...cb0.power_characterization!,
-        algorithm_type: 'LINEAR',
-        derivation_equation_constants: scrambled,
-      },
-    };
-    cfg.optical_trains = [{ ...t0, optional_components: { clearbox: newCb } }];
-    const out = tempH5Path('backward_reorders');
-    await writeAs(cfg, out, '1.0');
-    const back = await new Hdf5AdapterV1_0(out).parse();
-    // Written CSV is "1,2" (b before a); the v1.0 reader forward-derives
-    // that back into named constants positionally (b, then a) for LINEAR.
-    const backConstants = (back.optical_trains[0].optional_components.clearbox as ClearBox).power_characterization!
-      .derivation_equation_constants;
-    expect(backConstants).toEqual([
+    clearbox(cfg, 0).children['Power_Characterization'] = makePowerCharacterization('LINEAR', [['a', 2], ['b', 1]]);
+    const back = await viaFile(cfg, '1.0');
+    // Written CSV is "1,2" (b before a); the v1.0 reader forward-derives that back into named
+    // constants positionally (b, then a) for LINEAR.
+    expect(constants(powerCharacterization(back, 0))).toEqual([
       { name: 'b', value: 1 },
       { name: 'a', value: 2 },
     ]);
@@ -392,39 +316,19 @@ describe('v1.1 fixture written as v1.0', () => {
 
   it('writes a blank Volts_To_Watts_Params when Derivation_Equation_Constants is empty', async () => {
     const cfg = mockV1_1Config(1);
-    const t0 = cfg.optical_trains[0];
-    const cb0 = t0.optional_components.clearbox as ClearBox;
-    const newCb: ClearBox = {
-      ...cb0,
-      power_characterization: { ...cb0.power_characterization!, derivation_equation_constants: [] },
-    };
-    cfg.optical_trains = [{ ...t0, optional_components: { clearbox: newCb } }];
-    const out = tempH5Path('backward_blank_constants');
-    await writeAs(cfg, out, '1.0');
-    const back = await new Hdf5AdapterV1_0(out).parse();
-    // Backward derivation produces "" for Volts_To_Watts_Params (blank, not
-    // an error) — a real disk round-trip normalizes an empty string
-    // attribute back to null on read, this codebase's standard convention
-    // for absent optional strings (confirmed against the other 4
-    // languages' identical finding), so forward re-derivation on read
-    // produces zero constants.
-    expect(
-      (back.optical_trains[0].optional_components.clearbox as ClearBox).power_characterization
-        ?.derivation_equation_constants,
-    ).toEqual([]);
+    clearbox(cfg, 0).children['Power_Characterization'] = makePowerCharacterization('LINEAR', []);
+    const back = await viaFile(cfg, '1.0');
+    // Backward derivation produces "" (blank, not an error); forward re-derivation then yields zero constants.
+    expect(constants(powerCharacterization(back, 0))).toEqual([]);
   });
 
   it('writes a blank Watts_To_Volts_Params when Characterization_Points is empty', async () => {
     const cfg = mockV1_1Config(1);
     const t0 = cfg.optical_trains[0];
-    const newLs: LightSource = {
-      ...t0.light_source,
-      power_characterization: { ...t0.light_source.power_characterization!, characterization_points: [] },
-    };
-    cfg.optical_trains = [{ ...t0, light_source: newLs }];
-    const out = tempH5Path('backward_blank_points');
-    await writeAs(cfg, out, '1.0');
-    const back = await new Hdf5AdapterV1_0(out).parse();
+    cfg.optical_trains = [
+      { ...t0, light_source: { ...t0.light_source, power_characterization: { ...t0.light_source.power_characterization!, characterization_points: [] } } },
+    ];
+    const back = await viaFile(cfg, '1.0');
     expect(back.optical_trains[0].light_source.power_characterization?.characterization_points).toEqual([]);
   });
 });
@@ -434,13 +338,12 @@ describe('v1.1 fixture written as v1.0', () => {
 // ---------------------------------------------------------------------------
 
 describe('v1.0 path unaffected by v1.1 existing', () => {
-  it('the v1.0 read path forward-derives power_characterization from the flat fields', async () => {
+  it('the v1.0 read path surfaces the flat Volts_To_Watts fields as Power_Characterization', async () => {
     const config = await new MachineConfigReader(REFERENCE_V1_0).parse();
     expect(config.meta.file_version).toBe('1.0');
     expect(config.optical_trains.length).toBeGreaterThan(0);
-    const cb0 = config.optical_trains[0].optional_components.clearbox as ClearBox;
-    expect(cb0.power_characterization).toBeTruthy();
-    expect(cb0.power_characterization?.algorithm_type).toBe('LINEAR');
+    expect(text(powerCharacterization(config, 0), 'Algorithm_Type')).toBe('LINEAR');
+    expect(clearbox(config, 0).attrs).not.toHaveProperty('Volts_To_Watts_Algorithm');
   });
 });
 
@@ -451,62 +354,36 @@ describe('v1.0 path unaffected by v1.1 existing', () => {
 describe('round-trip acceptance criterion', () => {
   it('v1.0 -> v1.1 -> v1.0 reproduces the original exactly', async () => {
     const source = await new MachineConfigReader(REFERENCE_V1_0).parse();
-    const v1_1Path = tempH5Path('roundtrip_up');
-    await writeAs(source, v1_1Path, '1.1');
-    const mid = await new MachineConfigReader(v1_1Path).parse();
-    const v1_0Path = tempH5Path('roundtrip_down');
-    await writeAs(mid, v1_0Path, '1.0');
-    const back = await new MachineConfigReader(v1_0Path).parse();
+    const mid = await viaFile(source, '1.1');
+    const back = await viaFile(mid, '1.0');
 
     expect(back.meta.file_version).toBe('1.0');
+    expect(canonicalDigest(back.extensions!.ClearBox)).toBe(canonicalDigest(source.extensions!.ClearBox));
     back.optical_trains.forEach((t, i) => {
-      const srcCb = source.optical_trains[i].optional_components.clearbox as ClearBox;
-      const cb = t.optional_components.clearbox as ClearBox;
-      expect(cb.output_path).toBe(srcCb.output_path);
-      expect(cb.software_trigger_delay).toBe(srcCb.software_trigger_delay);
-      const srcPc = srcCb.power_characterization!;
-      const pc = cb.power_characterization!;
-      expect(pc.algorithm_type).toBe(srcPc.algorithm_type);
-      expect(pc.derivation_equation_constants.map((c) => c.value)).toEqual(
-        srcPc.derivation_equation_constants.map((c) => c.value),
-      );
-
-      const srcLs = source.optical_trains[i].light_source;
-      const ls = t.light_source;
-      const srcLsPc = srcLs.power_characterization!;
-      const lsPc = ls.power_characterization!;
+      const srcLsPc = source.optical_trains[i].light_source.power_characterization!;
+      const lsPc = t.light_source.power_characterization!;
       expect(lsPc.algorithm_type).toBe(srcLsPc.algorithm_type);
-      expect(lsPc.characterization_points.flatMap((p) => [p.input_value, p.output_value])).toEqual(
-        srcLsPc.characterization_points.flatMap((p) => [p.input_value, p.output_value]),
-      );
+      const flat = (p: typeof srcLsPc) => p.characterization_points.flatMap((x) => [x.input_value, x.output_value]);
+      expect(flat(lsPc)).toEqual(flat(srcLsPc));
     });
   });
 
   it('v1.1 -> v1.0 -> v1.1: fields v1.0 can hold survive, the rest comes back blank', async () => {
     const source = await new MachineConfigReader(REFERENCE_V1_1).parse();
-    const v1_0Path = tempH5Path('roundtrip_mirror_down');
-    await writeAs(source, v1_0Path, '1.0');
-    const mid = await new MachineConfigReader(v1_0Path).parse();
-    const v1_1Path = tempH5Path('roundtrip_mirror_up');
-    await writeAs(mid, v1_1Path, '1.1');
-    const back = await new MachineConfigReader(v1_1Path).parse();
+    const mid = await viaFile(source, '1.0');
+    const back = await viaFile(mid, '1.1');
 
     expect(back.meta.file_version).toBe('1.1');
-    back.optical_trains.forEach((t, i) => {
-      const srcCb = source.optical_trains[i].optional_components.clearbox as ClearBox;
-      const cb = t.optional_components.clearbox as ClearBox;
-      const srcPc = srcCb.power_characterization!;
-      const pc = cb.power_characterization!;
-      expect(pc.algorithm_type).toBe(srcPc.algorithm_type);
-      const sortedValues = (constants: EquationConstant[]) => constants.map((c) => c.value).sort((a, b) => a - b);
-      expect(sortedValues(pc.derivation_equation_constants)).toEqual(
-        sortedValues(srcPc.derivation_equation_constants),
-      );
+    back.optical_trains.forEach((_, i) => {
+      const srcPc = powerCharacterization(source, i);
+      const pc = powerCharacterization(back, i);
+      expect(text(pc, 'Algorithm_Type')).toBe(text(srcPc, 'Algorithm_Type'));
+      expect(sorted(values(pc))).toEqual(sorted(values(srcPc)));
       // Expected loss: v1.1-only fields have no v1.0 round-trip path.
-      expect(cb.firmware_version).toBeFalsy();
-      expect(pc.input_type).toBeNull();
-      expect(pc.units_derived_quantity).toBeNull();
-      expect(pc.characterization_points).toEqual([]);
+      expect(clearbox(back, i).attrs).not.toHaveProperty('Firmware_Version');
+      expect(text(pc, 'Input_Type')).toBeNull();
+      expect(text(pc, 'Units_Derived_Quantity')).toBeNull();
+      expect(pointCount(pc)).toBe(0);
     });
   });
 });
@@ -519,17 +396,13 @@ describe('MachineConfigWriter targetVersion', () => {
   it('overrides meta.file_version without mutating the input', async () => {
     const source = await new MachineConfigReader(REFERENCE_V1_0).parse();
     expect(source.meta.file_version).toBe('1.0');
-    const out = tempH5Path('target_version_up');
-    await writeAs(source, out, '1.1');
-    const result = await new MachineConfigReader(out).parse();
+    const result = await viaFile(source, '1.1');
     expect(result.meta.file_version).toBe('1.1');
     expect(source.meta.file_version).toBe('1.0');
 
     const v1_1Source = await new MachineConfigReader(REFERENCE_V1_1).parse();
     expect(v1_1Source.meta.file_version).toBe('1.1');
-    const out2 = tempH5Path('target_version_down');
-    await writeAs(v1_1Source, out2, '1.0');
-    const result2 = await new MachineConfigReader(out2).parse();
+    const result2 = await viaFile(v1_1Source, '1.0');
     expect(result2.meta.file_version).toBe('1.0');
     expect(v1_1Source.meta.file_version).toBe('1.1');
   });
@@ -557,25 +430,17 @@ describe('dispatcher — real "1.1" registry entry', () => {
 
   it('routes a real v1.0 fixture written as v1.1 through the public API', async () => {
     const source = await new MachineConfigReader(REFERENCE_V1_0).parse();
-    const out = tempH5Path('dispatcher_v1_1');
-    await writeAs(source, out, '1.1');
-    const result = await new MachineConfigReader(out).parse();
+    const result = await viaFile(source, '1.1');
     expect(result.meta.file_version).toBe('1.1');
-    expect((result.optical_trains[0].optional_components.clearbox as ClearBox).output_path).toBe('/recordings/');
-    expect(
-      (result.optical_trains[0].optional_components.clearbox as ClearBox).power_characterization,
-    ).toBeDefined();
+    expect(text(clearboxRoot(result), 'Output_Path')).toBe('/recordings/');
+    expect(clearbox(result, 0).children).toHaveProperty('Power_Characterization');
   });
 
   it('routes the natively-authored v1.1 fixture written as v1.0 through the public API', async () => {
     const v1_1Cfg = await new MachineConfigReader(REFERENCE_V1_1).parse();
-    const out = tempH5Path('dispatcher_migrated_v1');
-    await writeAs(v1_1Cfg, out, '1.0');
-    const result = await new MachineConfigReader(out).parse();
+    const result = await viaFile(v1_1Cfg, '1.0');
     expect(result.meta.file_version).toBe('1.0');
-    expect(
-      (result.optical_trains[0].optional_components.clearbox as ClearBox).power_characterization?.algorithm_type,
-    ).toBe('LINEAR');
+    expect(text(powerCharacterization(result, 0), 'Algorithm_Type')).toBe('LINEAR');
   });
 });
 

@@ -93,7 +93,30 @@ func (t *Tree) ToJSON() map[string]any {
 			"attrs": attrsToJSON(ds.Attrs),
 		}
 	}
-	return map[string]any{"attrs": attrsToJSON(t.Attrs), "children": children, "datasets": datasets}
+	out := map[string]any{"attrs": attrsToJSON(t.Attrs), "children": children, "datasets": datasets}
+	if len(t.Tables) > 0 {
+		tables := make(map[string]any, len(t.Tables))
+		for name, table := range t.Tables {
+			fields := make([]any, len(table.Fields))
+			columns := make(map[string]any, len(table.Fields))
+			for i, f := range table.Fields {
+				entry := map[string]any{"name": f.Name, "dtype": f.Dtype}
+				if f.Size > 0 {
+					entry["size"] = f.Size
+				}
+				fields[i] = entry
+				columns[f.Name] = valueToJSON(f.Dtype, table.Columns[f.Name])
+			}
+			tables[name] = map[string]any{
+				"fields":  fields,
+				"rows":    table.Rows,
+				"columns": columns,
+				"attrs":   attrsToJSON(table.Attrs),
+			}
+		}
+		out["tables"] = tables
+	}
+	return out
 }
 
 // MarshalJSON encodes the lossless JSON form.
@@ -345,5 +368,68 @@ func treeFromJSON(raw map[string]any, path string) (*Tree, error) {
 		}
 		t.Datasets[name] = &Dataset{Dtype: dtype, Shape: shape, Data: data, Attrs: dsAttrs}
 	}
+	tables, _ := raw["tables"].(map[string]any)
+	for name, tm := range tables {
+		tableRaw, ok := tm.(map[string]any)
+		if !ok {
+			return nil, errAt(joinPath(path, name), "table must be an object")
+		}
+		table, err := tableFromJSON(tableRaw, joinPath(path, name))
+		if err != nil {
+			return nil, err
+		}
+		t.Tables[name] = table
+	}
 	return t, nil
+}
+
+func tableFromJSON(raw map[string]any, path string) (*Table, error) {
+	table := &Table{Columns: map[string]any{}}
+	rowsNum, ok := jsonNumber(raw["rows"])
+	if !ok {
+		return nil, errAt(path, "missing rows")
+	}
+	rows, err := strconv.ParseUint(rowsNum.String(), 10, 64)
+	if err != nil {
+		return nil, errAt(path, "invalid rows %s", rowsNum)
+	}
+	table.Rows = rows
+	fieldsRaw, _ := raw["fields"].([]any)
+	columnsRaw, _ := raw["columns"].(map[string]any)
+	for _, fr := range fieldsRaw {
+		fm, ok := fr.(map[string]any)
+		if !ok {
+			return nil, errAt(path, "field must be an object")
+		}
+		name, _ := fm["name"].(string)
+		fieldPath := joinPath(path, name)
+		dtype, _ := fm["dtype"].(string)
+		if !IsKnownDtype(dtype) {
+			return nil, errAt(fieldPath, "unknown dtype %q", dtype)
+		}
+		field := TableField{Name: name, Dtype: dtype}
+		if sizeNum, ok := jsonNumber(fm["size"]); ok {
+			size, err := strconv.Atoi(sizeNum.String())
+			if err != nil {
+				return nil, errAt(fieldPath, "invalid size %s", sizeNum)
+			}
+			field.Size = size
+		}
+		list, ok := columnsRaw[name].([]any)
+		if !ok {
+			return nil, errAt(fieldPath, "missing column")
+		}
+		column, err := sliceFromJSON(dtype, list, fieldPath)
+		if err != nil {
+			return nil, err
+		}
+		table.Fields = append(table.Fields, field)
+		table.Columns[name] = column
+	}
+	attrs, err := attrsFromJSON(raw["attrs"], path)
+	if err != nil {
+		return nil, err
+	}
+	table.Attrs = attrs
+	return table, nil
 }

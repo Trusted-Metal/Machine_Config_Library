@@ -14,8 +14,6 @@ pub const GROUP_COLLIMATOR: &str = "Collimator";
 pub const GROUP_SCANNER_CARD: &str = "Scanner_Card";
 pub const GROUP_OPTIONAL_COMPONENTS: &str = "Optional_Components";
 pub const GROUP_CLEARBOX: &str = "ClearBox";
-pub const DS_CORRECTION_DATA: &str = "Correction_Data";
-pub const DS_INVERSE_CORRECTION_DATA: &str = "Inverse_Correction_Data";
 pub const DS_SCAN_FIELD_CORRECTION_FILE: &str = "scan_field_correction_file";
 
 pub fn train_id(index: usize) -> String {
@@ -30,19 +28,8 @@ pub fn train_path_by_id(tid: &str) -> String {
     format!("{ROOT_OPTICAL_TRAINS}/{tid}")
 }
 
-pub fn clearbox_path(train_index: usize) -> String {
-    format!(
-        "{}/{GROUP_OPTIONAL_COMPONENTS}/{GROUP_CLEARBOX}",
-        train_path(train_index)
-    )
-}
-
-pub fn correction_data_path(train_index: usize) -> String {
-    format!("{}/{DS_CORRECTION_DATA}", clearbox_path(train_index))
-}
-
-pub fn inverse_correction_data_path(train_index: usize) -> String {
-    format!("{}/{DS_INVERSE_CORRECTION_DATA}", clearbox_path(train_index))
+pub fn clearbox_path_by_id(tid: &str) -> String {
+    format!("{}/{GROUP_OPTIONAL_COMPONENTS}/{GROUP_CLEARBOX}", train_path_by_id(tid))
 }
 
 pub fn scan_field_correction_file_path(train_index: usize) -> String {

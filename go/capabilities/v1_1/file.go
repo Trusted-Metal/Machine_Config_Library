@@ -15,7 +15,6 @@ import (
 	"machine-config-go/capabilities/internal/api"
 	v1_1hdf5 "machine-config-go/capabilities/v1_1/hdf5"
 	"machine-config-go/capabilities/v1_1/layout"
-	"machine-config-go/internal/models"
 )
 
 const FileVersion = layout.FileVersion
@@ -140,45 +139,6 @@ func (f *File) SetScanner(index int, model machineconfig.Scanner, mode api.SetMo
 	}
 	f.config.OpticalTrains[index].Scanner = merged
 	return nil
-}
-
-func (f *File) GetClearbox(index int) (machineconfig.ClearBox, *api.Error) {
-	if err := f.assertOpen(); err != nil {
-		return machineconfig.ClearBox{}, err
-	}
-	if index < 0 || index >= len(f.config.OpticalTrains) {
-		return machineconfig.ClearBox{}, api.Errf(api.ErrInvalidIndex, "optical train index out of range")
-	}
-	cb := f.config.OpticalTrains[index].OptionalComponents.Clearbox
-	if cb == nil {
-		return machineconfig.ClearBox{}, api.Errf(api.ErrNotPresent, "clearbox is not present")
-	}
-	return api.Snapshot(*cb), nil
-}
-
-// GetCorrectionData returns the (257, 257, 2) float64 correction grid for
-// optical train index as a version-agnostic *machineconfig.CorrectionData.
-// Converts the already-loaded in-memory ClearBox model rather than
-// re-reading the file, so this works for both Open()- and Create()-based
-// instances alike.
-func (f *File) GetCorrectionData(index int) (*machineconfig.CorrectionData, *api.Error) {
-	cb, err := f.GetClearbox(index)
-	if err != nil {
-		return nil, err
-	}
-	flat := models.FlatFromNestedGrid(cb.CorrectionData)
-	return &machineconfig.CorrectionData{Data: flat, Shape: [3]int{257, 257, 2}}, nil
-}
-
-// GetInverseCorrectionData returns the (257, 257, 2) float64 *inverse*
-// correction grid for optical train index. See GetCorrectionData for details.
-func (f *File) GetInverseCorrectionData(index int) (*machineconfig.CorrectionData, *api.Error) {
-	cb, err := f.GetClearbox(index)
-	if err != nil {
-		return nil, err
-	}
-	flat := models.FlatFromNestedGrid(cb.InverseCorrectionData)
-	return &machineconfig.CorrectionData{Data: flat, Shape: [3]int{257, 257, 2}}, nil
 }
 
 // IsValid recomputes the configuration hash from the session's *current*

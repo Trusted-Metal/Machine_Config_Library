@@ -156,7 +156,8 @@ This writes:
 - [ ] Train 01: `working_distance` = 670.0, `scan_head_offset_x` = −87.5, `scan_head_offset_y` = 23.5, `scan_head_rotation` = 0.0
 - [ ] Train 02: `scan_head_offset_x` = 86.074, `scan_head_offset_y` = −21.695, `scan_head_rotation` = 180.0
 - [ ] Train 01 `thermal_lensing_passed` = false, Train 02 = true
-- [ ] Both trains: `clearbox.correction_data` is 257×257×2 nested list
+- [ ] Both trains: `extensions.ClearBox.children.Optical_Train_NN.datasets.Correction_Data` has shape `[257, 257, 2]`
+      (the golden file keeps dtype/shape/attrs of extension datasets but elides their `data`)
 - [ ] Train 01 `scan_field_correction_file.file_size` = 1138799
 - [ ] Train 02 `scan_field_correction_file.file_size` = 1142763
 - [ ] No OPCUA fields appear anywhere in the output

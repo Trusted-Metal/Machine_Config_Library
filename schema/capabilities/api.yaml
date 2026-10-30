@@ -35,12 +35,6 @@ handles:
     - { name: setCollimator, args: [Collimator, SetMode], mode_optional: true, returns: void, result: true }
     - { name: getScannerCard, returns: ScannerCard }
     - { name: setScannerCard, args: [ScannerCard, SetMode], mode_optional: true, returns: void, result: true }
-    - { name: optionalComponents, returns: OptionalComponentsHandle, nullable: true }
-  OptionalComponentsHandle:
-    - { name: clearbox, returns: ClearBoxHandle, result: true }
-  ClearBoxHandle:
-    - { name: getModel, returns: ClearBox }
-    - { name: setModel, args: [ClearBox, SetMode], mode_optional: true, returns: void, result: true }
   TrainCollection:
     - { name: length, returns: number }
     - { name: get, args: [index], returns: TrainHandle, result: true }
