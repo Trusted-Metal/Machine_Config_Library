@@ -1,3 +1,9 @@
+## [0.2.0-rc.10](https://github.com/Trusted-Metal/Machine_Config_Library/compare/v0.2.0-rc.9...v0.2.0-rc.10) (2026-10-30)
+
+### Features
+
+* remove clearbox from core MCF ([ed1817f](https://github.com/Trusted-Metal/Machine_Config_Library/commit/ed1817f3dfbba8323752b03d31670be28b24a57f))
+
 ## 0.2.0-rc.9 (2026-10-22)
 
 * Merge pull request #22 from Trusted-Metal/SD-1738 ([c6318c0](https://github.com/Trusted-Metal/Machine_Config_Library/commit/c6318c0)), closes [#22](https://github.com/Trusted-Metal/Machine_Config_Library/issues/22)
