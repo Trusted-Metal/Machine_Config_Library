@@ -30,6 +30,7 @@ To add a new language, add one entry to RUNNERS — no other file needs changing
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -61,9 +62,12 @@ REPO = Path(__file__).resolve().parent.parent
 SCHEMA_FILE = REPO / "schema" / "machine_config_v1.schema.json"
 
 FIXTURES: dict[str, Path] = {
-    "reference":       REPO / "fixtures" / "reference_config.h5",
-    "reference_opcua": REPO / "fixtures" / "reference_config_opcua.h5",
-    "synthetic":       REPO / "fixtures" / "synthetic_2laser.h5",
+    "reference":         REPO / "fixtures" / "reference_config.h5",
+    "reference_opcua":   REPO / "fixtures" / "reference_config_opcua.h5",
+    "synthetic":         REPO / "fixtures" / "synthetic_2laser.h5",
+    "v1_1":              REPO / "fixtures" / "reference_config_v1_1.h5",
+    "v1_1_migrated":     REPO / "fixtures" / "reference_config_v1_1_migrated.h5",
+    "extension_tables":  REPO / "fixtures" / "extension_table_sample_node_v1_1.h5",
 }
 
 _EXT = ".exe" if platform.system() == "Windows" else ""
@@ -73,6 +77,22 @@ def _rust_bin() -> Path:
     release = REPO / "rust" / "target" / "release" / f"machine-config-cli{_EXT}"
     debug   = REPO / "rust" / "target" / "debug"   / f"machine-config-cli{_EXT}"
     return release if release.exists() else debug
+
+
+def _cpp_bin() -> Path:
+    # MSVC multi-config puts the binary in Debug/ or Release/ subdirectory.
+    release = REPO / "cpp" / "build" / "Release" / f"machine_config_cli{_EXT}"
+    debug   = REPO / "cpp" / "build" / "Debug"   / f"machine_config_cli{_EXT}"
+    flat    = REPO / "cpp" / "build"              / f"machine_config_cli{_EXT}"
+    if release.exists():
+        return release
+    if debug.exists():
+        return debug
+    return flat
+
+
+def _go_bin() -> Path:
+    return REPO / "go" / "bin" / f"machine-config-cli{_EXT}"
 
 
 def _python_cli() -> str:
@@ -102,7 +122,10 @@ RUNNERS: dict[str, Callable[[Path], list[str]]] = {
     "python": lambda fix: [_python_cli(), "export-json", str(fix)],
     "rust":   lambda fix: [str(_rust_bin()), "export-json", str(fix)],
     "nodejs": lambda fix: ["node", str(REPO / "nodejs/dist/cli.js"), "export-json", str(fix)],
-    # "cpp":    lambda fix: [str(REPO / f"cpp/build/machine_config_cli{_EXT}"), "export-json", str(fix)],
+    "cpp":    lambda fix: [str(_cpp_bin()), "export-json", str(fix)],
+    # Go: CGo + libhdf5 (Linux via apt, Windows via MSYS2 MinGW64).
+    # Binary built by cross_check.yml before phases run.
+    "go":     lambda fix: [str(_go_bin()), "export-json", str(fix)],
 }
 
 # Argv *prefix* for subcommands other than export-json (e.g. correction-hash).
@@ -111,18 +134,32 @@ BINARIES: dict[str, Callable[[], list[str]]] = {
     "python": lambda: [_python_cli()],
     "rust":   lambda: [str(_rust_bin())],
     "nodejs": lambda: ["node", str(REPO / "nodejs/dist/cli.js")],
+    "cpp":    lambda: [str(_cpp_bin())],
+    # Go: CGo + libhdf5. Supports all subcommands including write-hdf5 and copy-hdf5.
+    "go":     lambda: [str(_go_bin())],
 }
 
 # Each entry is a callable(json_path: Path, h5_path: Path) -> list[str] that
 # returns the argv for the language's write-from-JSON CLI command.
 # Input:  canonical JSON file (output of `export-json` on the reference fixture)
 # Output: .h5 file verified by all reader languages in phase_write_interop().
-# Add nodejs/cpp here when their writers land.
 WRITERS: dict[str, Callable[[Path, Path], list[str]]] = {
     "python": lambda j, h: [_python_cli(), "write", str(j), "--output", str(h)],
     "rust":   lambda j, h: [str(_rust_bin()), "write-hdf5", str(j), str(h)],
     "nodejs": lambda j, h: ["node", str(REPO / "nodejs/dist/cli.js"), "write-hdf5", str(j), str(h)],
-    # "cpp": lambda j, h: [str(REPO / f"cpp/build/machine_config_cli{_EXT}"), "write-hdf5", str(j), str(h)],
+    "cpp":    lambda j, h: [str(_cpp_bin()), "write-hdf5", str(j), str(h)],
+    "go":     lambda j, h: [str(_go_bin()), "write-hdf5", str(j), str(h)],
+}
+
+# Each entry is a callable(input: Path, output: Path) -> list[str] that returns
+# the argv for the language's copy-hdf5 CLI subcommand (read with full binary
+# data, write verbatim — used in Phase 3.5 binary round-trip).
+COPIERS: dict[str, Callable[[Path, Path], list[str]]] = {
+    "python": lambda i, o: [_python_cli(), "copy-hdf5", str(i), "--output", str(o)],
+    "rust":   lambda i, o: [str(_rust_bin()), "copy-hdf5", str(i), str(o)],
+    "nodejs": lambda i, o: ["node", str(REPO / "nodejs/dist/cli.js"), "copy-hdf5", str(i), str(o)],
+    "cpp":    lambda i, o: [str(_cpp_bin()), "copy-hdf5", str(i), str(o)],
+    "go":     lambda i, o: [str(_go_bin()), "copy-hdf5", str(i), str(o)],
 }
 
 # ---------------------------------------------------------------------------
@@ -177,6 +214,28 @@ def _normalize_numbers(obj: Any) -> Any:
     return obj
 
 
+def _summarize_dataset_data(obj: Any) -> Any:
+    """Replace large extension-dataset ``data`` lists by a digest of their normalised values.
+
+    ClearBox grids are ~132k numbers each; DeepDiff on lists that size takes minutes per
+    comparison.  Hashing the (number-normalised) values keeps the comparison exact while
+    ``dtype``/``shape``/``attrs`` are still diffed field by field.
+    """
+    if isinstance(obj, dict):
+        out = {k: _summarize_dataset_data(v) for k, v in obj.items() if k != "data"}
+        if "data" in obj:
+            data = obj["data"]
+            if isinstance(data, list) and len(data) > 64 and "dtype" in obj and "shape" in obj:
+                blob = json.dumps(_normalize_numbers(data), sort_keys=True).encode()
+                out["data"] = {"sha256": hashlib.sha256(blob).hexdigest(), "len": len(data)}
+            else:
+                out["data"] = _summarize_dataset_data(data)
+        return out
+    if isinstance(obj, list):
+        return [_summarize_dataset_data(v) for v in obj]
+    return obj
+
+
 def _diff(a: dict, b: dict) -> list[str]:
     """Return human-readable differences; empty list means equal.
 
@@ -186,6 +245,8 @@ def _diff(a: dict, b: dict) -> list[str]:
     (e.g. a string where a number is expected) are still caught by Phase 1
     schema validation before _diff is ever called.
     """
+    a = _summarize_dataset_data(a)
+    b = _summarize_dataset_data(b)
     if _DEEPDIFF:
         d = DeepDiff(
             a, b,
@@ -202,6 +263,27 @@ def _diff(a: dict, b: dict) -> list[str]:
     return []
 
 
+def _without_configuration_hash(data: dict) -> dict:
+    """Return a shallow copy of an export-json dict with meta.configuration_hash
+    removed.
+
+    Every writer now unconditionally recomputes Configuration_Hash from the
+    content actually being written (CONFIGURATION_HASH_PLAN.md) — a
+    deliberate, load-bearing part of the feature, not a passthrough. That
+    means the fidelity check in phase_write_interop (which compares a
+    just-written-then-read-back file against the *original* canonical JSON
+    it was written from) will always see a different configuration_hash,
+    on purpose, for every writer language. This is the one field that check
+    must ignore; everything else must still match exactly.
+    """
+    out = dict(data)
+    if isinstance(out.get("meta"), dict):
+        meta = dict(out["meta"])
+        meta.pop("configuration_hash", None)
+        out["meta"] = meta
+    return out
+
+
 def _validate_schema(data: dict, schema: dict) -> list[str]:
     if not _JSONSCHEMA:
         return []
@@ -210,6 +292,20 @@ def _validate_schema(data: dict, schema: dict) -> list[str]:
         return []
     except jsonschema.ValidationError as exc:
         return [exc.message]
+
+
+def _ref_lang(langs: list[str]) -> str:
+    """Return Python as the fixed parity anchor.
+
+    Falls back to langs[0] with a warning only when Python is absent, so
+    a local run with --langs rust,nodejs still produces useful output instead
+    of crashing.  In CI, Python is always present.
+    """
+    if "python" in langs:
+        return "python"
+    print(f"{WARN} Python not in active set — using {langs[0]!r} as parity anchor "
+          "(two languages with the same bug can both agree; results may be unreliable)")
+    return langs[0]
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +353,7 @@ def phase_read_parity(langs: list[str], verbose: bool) -> bool:
         print(f"{SKIP} Need ≥2 languages for parity check.")
         return True
 
-    ref_lang = langs[0]
+    ref_lang = _ref_lang(langs)
     failures: list[str] = []
 
     for name, path in FIXTURES.items():
@@ -360,8 +456,8 @@ def phase_write_interop(langs: list[str], verbose: bool) -> bool:
                         print(f"{FAIL} {tag}: {exc}")
                         failures.append(tag)
 
-                # Parity: every reader must agree with the first.
-                ref_reader = langs[0]
+                # Parity: every reader must agree with the Python anchor.
+                ref_reader = _ref_lang(langs)
                 if ref_reader in reader_outputs:
                     for reader_lang, data in reader_outputs.items():
                         if reader_lang == ref_reader:
@@ -376,10 +472,16 @@ def phase_write_interop(langs: list[str], verbose: bool) -> bool:
                         elif verbose:
                             print(f"{PASS} {tag}")
 
-                # Fidelity: Python's reading must match the canonical JSON.
+                # Fidelity: Python's reading must match the canonical JSON,
+                # except meta.configuration_hash — every writer now recomputes
+                # it fresh from the content actually written, on purpose (see
+                # _without_configuration_hash).
                 if "python" in reader_outputs:
                     tag = f"{writer_lang}-writes → fidelity"
-                    fid_diffs = _diff(canonical, reader_outputs["python"])
+                    fid_diffs = _diff(
+                        _without_configuration_hash(canonical),
+                        _without_configuration_hash(reader_outputs["python"]),
+                    )
                     if fid_diffs:
                         print(f"{FAIL} {tag}:")
                         for line in fid_diffs:
@@ -432,7 +534,7 @@ def phase_correction_hash(langs: list[str], verbose: bool) -> bool:
         print(f"{SKIP} Need ≥2 languages for hash parity check.")
         return True
 
-    ref_lang = langs[0]
+    ref_lang = _ref_lang(langs)
     failures: list[str] = []
 
     for name, path in FIXTURES.items():
@@ -471,6 +573,201 @@ def phase_correction_hash(langs: list[str], verbose: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Phase 5 — Configuration hash parity
+# ---------------------------------------------------------------------------
+
+def _configuration_hash_output(lang: str, path: Path) -> dict[str, str]:
+    """Run `configuration-hash <path>` (non-quiet) and parse its 3 output lines.
+
+    Deliberately does not use `_run_text`/`--quiet`: the CLI's own contract
+    exits 1 whenever `valid: false` (a convenience for shell scripting), and
+    an externally-authored fixture like reference_config.h5 is *expected* to
+    be invalid on every language — that is not a crash. So this ignores the
+    return code entirely and instead requires the three expected
+    `stored:`/`recomputed:`/`valid:` lines to be present; their absence (as
+    opposed to `valid: false`) is what actually indicates a real failure.
+    """
+    cmd = [*BINARIES[lang](), "configuration-hash", str(path)]
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
+    fields: dict[str, str] = {}
+    for line in r.stdout.strip().splitlines():
+        key, sep, val = line.partition(":")
+        if sep:
+            fields[key.strip()] = val.strip()
+    if not {"stored", "recomputed", "valid"} <= fields.keys():
+        raise RuntimeError(
+            f"{Path(cmd[0]).name} configuration-hash: missing expected output "
+            f"(exit {r.returncode})\nstdout: {r.stdout!r}\nstderr: {r.stderr.strip()}"
+        )
+    return fields
+
+
+def phase_configuration_hash(langs: list[str], verbose: bool) -> bool:
+    """All languages must agree on the recomputed configuration hash AND the
+    is_valid conclusion, for every fixture.
+
+    This does NOT assert every fixture is valid — an externally-authored
+    fixture (e.g. reference_config.h5) is expected to be invalid on every
+    language, permanently, since MCF's own hash scheme only certifies "an
+    MCF writer touched this file last," not parity with any other producer.
+    That shared invalid verdict is itself what this phase verifies: all
+    languages independently compute the same recomputed hash and reach the
+    same valid/invalid conclusion from it.
+    """
+    print("\n=== Phase 5: Configuration Hash Parity ===")
+    if len(langs) < 2:
+        print(f"{SKIP} Need ≥2 languages for hash parity check.")
+        return True
+
+    ref_lang = _ref_lang(langs)
+    failures: list[str] = []
+
+    for name, path in FIXTURES.items():
+        results: dict[str, dict[str, str]] = {}
+        for lang in langs:
+            try:
+                results[lang] = _configuration_hash_output(lang, path)
+            except Exception as exc:
+                tag = f"{lang}/{name}"
+                print(f"{FAIL} {tag}: {exc}")
+                failures.append(tag)
+
+        if ref_lang not in results:
+            continue
+
+        ref = results[ref_lang]
+        for lang, r in results.items():
+            if lang == ref_lang:
+                continue
+            tag = f"{ref_lang} vs {lang} / {name}"
+            mismatches = []
+            if r["recomputed"] != ref["recomputed"]:
+                mismatches.append(
+                    f"recomputed: {ref_lang}={ref['recomputed']} {lang}={r['recomputed']}"
+                )
+            if r["valid"] != ref["valid"]:
+                mismatches.append(f"valid: {ref_lang}={ref['valid']} {lang}={r['valid']}")
+            if mismatches:
+                print(f"{FAIL} {tag}:")
+                for m in mismatches:
+                    print(f"  {m}")
+                failures.append(tag)
+            elif verbose:
+                print(f"{PASS} {tag} (valid={r['valid']})")
+
+    if not failures:
+        combos = len(langs) * (len(langs) - 1) // 2 * len(FIXTURES)
+        print(f"{PASS} Configuration hashes and validity match ({combos} comparisons).")
+    return not failures
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.5 — Binary copy round-trip
+# ---------------------------------------------------------------------------
+
+def phase_binary_copy(langs: list[str], verbose: bool) -> bool:
+    """Each writer copies reference_config.h5 via copy-hdf5 (full binary round-trip).
+
+    Two checks per writer × direction (forward + inverse correction grid):
+      Parity   — all reader languages produce the same correction hash for the copy.
+      Fidelity — Python’s hash of the copy matches Python’s hash of the original fixture.
+    """
+    print("\n=== Phase 3.5: Binary Copy Round-trip ===")
+
+    copy_langs = [l for l in langs if l in COPIERS]
+    if not copy_langs:
+        print(f"{SKIP} No copy-capable languages in active set.")
+        return True
+
+    # Baseline: Python’s correction hashes of the original reference fixture.
+    baselines: dict[bool, str] = {}
+    for inverse in [False, True]:
+        try:
+            baselines[inverse] = _run_text(
+                _correction_hash_cmd("python", FIXTURES["reference"], inverse=inverse)
+            )
+        except Exception as exc:
+            print(f"{FAIL} Could not establish baseline hash from original fixture: {exc}")
+            return False
+
+    failures: list[str] = []
+
+    for copy_lang in copy_langs:
+        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as hf:
+            copy_path = Path(hf.name)
+        try:
+            env = {**os.environ, "PYTHONUTF8": "1"}
+            r = subprocess.run(
+                COPIERS[copy_lang](FIXTURES["reference"], copy_path),
+                capture_output=True, text=True, encoding="utf-8", env=env,
+            )
+            if r.returncode != 0:
+                tag = f"{copy_lang}-copy"
+                print(f"{FAIL} {tag}: copy-hdf5 exited {r.returncode}\n"
+                      f"  stderr: {r.stderr.strip()}")
+                failures.append(tag)
+                continue
+
+            for inverse in [False, True]:
+                kind = "inverse" if inverse else "forward"
+
+                # Gather hashes from all reader languages.
+                hashes: dict[str, str] = {}
+                for reader_lang in langs:
+                    try:
+                        hashes[reader_lang] = _run_text(
+                            _correction_hash_cmd(reader_lang, copy_path, inverse=inverse)
+                        )
+                    except Exception as exc:
+                        tag = f"{copy_lang}-copy / {reader_lang}-reads / {kind}"
+                        print(f"{FAIL} {tag}: {exc}")
+                        failures.append(tag)
+
+                # Parity: all readers must agree with the Python anchor.
+                ref_reader = _ref_lang(langs)
+                if ref_reader in hashes:
+                    for reader_lang, h in hashes.items():
+                        if reader_lang == ref_reader:
+                            continue
+                        tag = f"{copy_lang}-copy / {ref_reader} vs {reader_lang} / {kind} parity"
+                        if h != hashes[ref_reader]:
+                            print(f"{FAIL} {tag}:")
+                            print(f"  {ref_reader}: {hashes[ref_reader]}")
+                            print(f"  {reader_lang}: {h}")
+                            failures.append(tag)
+                        elif verbose:
+                            print(f"{PASS} {tag}")
+
+                # Fidelity: Python’s hash of the copy must match Python’s hash
+                # of the original fixture.
+                if "python" in hashes:
+                    tag = f"{copy_lang}-copy / python fidelity / {kind}"
+                    if hashes["python"] != baselines[inverse]:
+                        print(f"{FAIL} {tag}:")
+                        print(f"  copy:     {hashes['python']}")
+                        print(f"  original: {baselines[inverse]}")
+                        failures.append(tag)
+                    elif verbose:
+                        print(f"{PASS} {tag}")
+
+        except Exception as exc:
+            tag = f"{copy_lang}-copy"
+            print(f"{FAIL} {tag}: {exc}")
+            failures.append(tag)
+        finally:
+            copy_path.unlink(missing_ok=True)
+
+    if not failures:
+        checks = len(copy_langs) * (max(0, len(langs) - 1) + 1) * 2
+        print(
+            f"{PASS} Binary copy round-trip: {len(copy_langs)} writer(s) × "
+            f"{len(langs)} reader(s) × 2 directions — {checks} checks passed."
+        )
+    return not failures
+
+
+# ---------------------------------------------------------------------------
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -501,6 +798,16 @@ def _parse_args() -> argparse.Namespace:
         "--skip-correction-hash",
         action="store_true",
         help="Skip Phase 4 (correction data hash parity).",
+    )
+    p.add_argument(
+        "--skip-binary-copy",
+        action="store_true",
+        help="Skip Phase 3.5 (binary copy round-trip).",
+    )
+    p.add_argument(
+        "--skip-configuration-hash",
+        action="store_true",
+        help="Skip Phase 5 (configuration hash parity).",
     )
     p.add_argument(
         "--verbose", "-v",
@@ -541,25 +848,31 @@ def main() -> None:
 
     schema = json.loads(SCHEMA_FILE.read_text())
 
-    results = []
-    if not args.skip_schema:
-        results.append(phase_schema(reachable, schema, args.verbose))
-    if not args.skip_read_parity:
-        results.append(phase_read_parity(reachable, args.verbose))
-    if not args.skip_write_interop:
-        results.append(phase_write_interop(reachable, args.verbose))
-    if not args.skip_correction_hash:
-        results.append(phase_correction_hash(reachable, args.verbose))
+    # None = skipped, True = passed, False = failed
+    results: list[tuple[str, bool | None]] = [
+        ("Phase 1 (Schema)",          None if args.skip_schema          else phase_schema(reachable, schema, args.verbose)),
+        ("Phase 2 (Read Parity)",     None if args.skip_read_parity     else phase_read_parity(reachable, args.verbose)),
+        ("Phase 3 (Write Interop)",   None if args.skip_write_interop   else phase_write_interop(reachable, args.verbose)),
+        ("Phase 3.5 (Binary Copy)",   None if args.skip_binary_copy     else phase_binary_copy(reachable, args.verbose)),
+        ("Phase 4 (Correction Hash)", None if args.skip_correction_hash else phase_correction_hash(reachable, args.verbose)),
+        ("Phase 5 (Configuration Hash)", None if args.skip_configuration_hash else phase_configuration_hash(reachable, args.verbose)),
+    ]
 
     print()
-    if all(results):
-        print("All checks passed.")
-        sys.exit(0)
-    else:
-        n_failed = sum(1 for r in results if not r)
-        print(f"{n_failed} phase(s) failed.")
+    skipped = [name for name, r in results if r is None]
+    failed  = [name for name, r in results if r is False]
+    active  = sum(1 for _, r in results if r is not None)
+
+    if skipped:
+        print(f"{SKIP} Skipped: {', '.join(skipped)}")
+    if failed:
+        print(f"{len(failed)} phase(s) failed: {', '.join(failed)}")
         sys.exit(1)
+    else:
+        print(f"All {active} active phase(s) passed.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
     main()
+    

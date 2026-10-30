@@ -1,6 +1,6 @@
 {
   "name": "machine-config-library",
-  "version": "0.1.0",
+  "version": "1.0.0-rc.1",
   "private": true,
   "description": "Machine configuration library for LPBF machine HDF5 files — Node.js/TypeScript implementation",
   "type": "module",
@@ -10,13 +10,23 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./extension-contract": {
+      "import": "./dist/extensions/contract.js",
+      "types": "./dist/extensions/contract.d.ts"
     }
   },
   "bin": {
     "machine-config": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "schema"
+  ],
   "scripts": {
+    "prebuild": "node scripts/copy-schema.mjs",
     "build": "tsc",
+    "prepack": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -28,7 +38,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "tsx": "^4.23.12",
     "typescript": "^5.5.4",
-    "vitest": "^3.0.0"
+    "vitest": "^5.0.5"
   }
 }

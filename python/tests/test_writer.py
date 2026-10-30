@@ -5,12 +5,14 @@ Strategy: parse the reference HDF5 file → write to a temp file → re-parse �
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from machine_config import MachineConfig, MachineConfigReader, MachineConfigWriter
 from machine_config.builder import MockConfigBuilder
+from machine_config.capabilities.file_version import UnsupportedFileVersion
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +38,13 @@ def test_writer_roundtrip_machine_name(roundtrip_config: MachineConfig, referenc
 
 
 def test_writer_roundtrip_configuration_hash(roundtrip_config: MachineConfig, reference_config: MachineConfig) -> None:
-    assert roundtrip_config.meta.configuration_hash == reference_config.meta.configuration_hash
+    # The writer always computes a fresh hash from the content actually being
+    # written — never a passthrough of reference_config's original,
+    # externally-authored hash — so the roundtripped file gets its own,
+    # different value, and validates against it.
+    assert len(roundtrip_config.meta.configuration_hash) == 64
+    assert roundtrip_config.meta.configuration_hash != reference_config.meta.configuration_hash
+    assert roundtrip_config.meta.is_valid is True
 
 
 def test_writer_roundtrip_build_plate(roundtrip_config: MachineConfig, reference_config: MachineConfig) -> None:
@@ -77,6 +85,16 @@ def test_writer_null_field_survives_roundtrip(tmp_path: Path) -> None:
     config2 = MachineConfigReader(out).parse()
     # power_min_nominal is None in the mock builder
     assert config2.optical_trains[0].light_source.power_min_nominal is None
+
+
+def test_writer_rejects_unknown_file_version(reference_config: MachineConfig) -> None:
+    """Dispatch must fail before any v1.0 layout is written."""
+    bad = replace(
+        reference_config,
+        meta=replace(reference_config.meta, file_version="2.0"),
+    )
+    with pytest.raises(UnsupportedFileVersion, match="2.0"):
+        MachineConfigWriter(bad)
 
 
 def test_writer_produces_schema_valid_output(

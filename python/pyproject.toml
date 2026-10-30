@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "machine-config-library"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.0",
@@ -26,6 +26,9 @@ machine-config = "machine_config.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+machine_config = ["machine_config_v1.schema.json", "py.typed"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

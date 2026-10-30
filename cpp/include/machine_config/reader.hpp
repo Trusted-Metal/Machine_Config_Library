@@ -1,0 +1,110 @@
+#pragma once
+// Public HDF5 reader: peek File_Version, then dispatch to a version adapter.
+// On-disk group paths and HDF5 attribute names live in the matching adapter.
+
+#include "machine_config/adapters.hpp"
+#include "machine_config/hash.hpp"
+#include "machine_config/models.hpp"
+#include "machine_config/capabilities/v1_0/hdf5.hpp"
+#include "machine_config/capabilities/v1_1/hdf5.hpp"
+
+#include <highfive/H5File.hpp>
+
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace machine_config {
+
+/// Read only the root File_Version attribute. Does not walk groups.
+inline std::string peekFileVersion(const std::filesystem::path& path) {
+    HighFive::File f(path.string(), HighFive::File::ReadOnly);
+    if (!f.hasAttribute("File_Version")) return "1.0";
+    std::string ver = readRequiredStr(f, "File_Version");
+    auto first = ver.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "1.0";
+    auto last = ver.find_last_not_of(" \t\r\n");
+    ver = ver.substr(first, last - first + 1);
+    return ver.empty() ? "1.0" : ver;
+}
+
+// Version -> constructor for that version's ReaderAdapter. A real registry
+// (DISPATCH_REGISTRY_PLAN.md), not a hardcoded check: adding a version means
+// adding an entry here, never editing MachineConfigReader itself.
+using ReaderRegistry =
+    std::unordered_map<std::string,
+                        std::function<std::unique_ptr<ReaderAdapter>(const std::filesystem::path&)>>;
+
+inline const ReaderRegistry& productionReaderRegistry() {
+    static const ReaderRegistry registry = {
+        {"1.0", [](const std::filesystem::path& path) -> std::unique_ptr<ReaderAdapter> {
+             return std::make_unique<capabilities::v1_0::Hdf5AdapterV1_0>(path);
+         }},
+        {"1.1", [](const std::filesystem::path& path) -> std::unique_ptr<ReaderAdapter> {
+             return std::make_unique<capabilities::v1_1::Hdf5AdapterV1_1>(path);
+         }},
+    };
+    return registry;
+}
+
+// Registry-parameterized so tests can inject a fake entry without touching
+// global state — see DISPATCH_REGISTRY_PLAN.md's shared testing pattern.
+inline std::unique_ptr<ReaderAdapter> resolveReader(
+    const std::string& version, const std::filesystem::path& path, const ReaderRegistry& registry) {
+    auto it = registry.find(version);
+    if (it == registry.end()) {
+        throw std::runtime_error(
+            "No adapter registered for File_Version \"" + version + "\"");
+    }
+    return it->second(path);
+}
+
+class MachineConfigReader {
+public:
+    explicit MachineConfigReader(std::filesystem::path path)
+        : path_(std::move(path)) {}
+
+    // Parses the file and recomputes Configuration_Hash from the content
+    // just read, comparing it to the stored value to set meta.is_valid. A
+    // mismatch is never an error — the config is always returned; see
+    // hash.hpp.
+    MachineConfig parse() const { return withValidatedHash(adapter()->parse()); }
+
+    // Like parse(), but also loads binary correction-grid data. is_valid is
+    // computed identically either way — the hash itself always excludes
+    // binary data (see hash.hpp).
+    MachineConfig parseWithBinary() const { return withValidatedHash(adapter()->parseWithBinary()); }
+
+    std::string toJson(int indent = 2, bool include_binary = false) const {
+        return adapter()->toJson(indent, include_binary);
+    }
+
+    nlohmann::json getRawGroup(const std::string& hdf5_path) const {
+        return adapter()->getRawGroup(hdf5_path);
+    }
+
+    std::vector<uint8_t> getScanFieldCorrectionBytes(size_t train_index) const {
+        return adapter()->getScanFieldCorrectionBytes(train_index);
+    }
+
+private:
+    std::filesystem::path path_;
+
+    std::unique_ptr<ReaderAdapter> adapter() const {
+        std::string ver = peekFileVersion(path_);
+        return resolveReader(ver, path_, productionReaderRegistry());
+    }
+
+    static MachineConfig withValidatedHash(MachineConfig config) {
+        std::string recomputed = computeConfigurationHash(config);
+        config.meta.is_valid = (recomputed == config.meta.configuration_hash);
+        return config;
+    }
+};
+
+}  // namespace machine_config

@@ -1,0 +1,15 @@
+{
+  "name": "mcl-nodejs-validation-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Node.js validation app — exercises machine-config-library as a real consumer would. See VALIDATION_PLAN.md.",
+  "dependencies": {
+    "machine-config-library": "file:../../../../nodejs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.5.4"
+  }
+}

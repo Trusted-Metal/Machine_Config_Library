@@ -7,25 +7,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import h5py
 import numpy as np
 import yaml
 
+from . import clearbox_legacy
+from .extension_contract import Attr, Dataset, ExtensionTree
 from .models import (
     AxisConfig,
     BuildPlate,
-    ClearBox,
     Collimator,
     LightSource,
     Machine,
     MachineConfig,
     MachineConfigMeta,
     OpticalTrain,
-    OptionalComponents,
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
 )
+from .power_characterization import forward_power_characterization_points
 from .reader import MachineConfigReader
 from .schema import SCHEMA_VERSION
 from .writer import MachineConfigWriter
@@ -69,34 +69,34 @@ def _mock_axis(bit_res: int = 20) -> AxisConfig:
     )
 
 
-def _mock_clearbox(ip: str, serial: str) -> ClearBox:
+def _mock_clearbox(ip: str, serial: str) -> ExtensionTree:
+    """One train's ClearBox group, authored the way a File_Version 1.0 file stores it."""
     grid = _gaussian_correction_grid()
-    inv  = _gaussian_correction_grid() * 0.95
-    # Convert ndarray to nested Python list (no NaNs in synthetic data)
-    correction_data:         list = grid.tolist()
-    inverse_correction_data: list = inv.tolist()
-    return ClearBox(
-        ip_address=ip,
-        serial_number=serial,
-        data_port=5001,
-        server_port=20101,
-        actual_timing_offset=-8,
-        commanded_timing_offset=50,
-        correction_data=correction_data,
-        inverse_correction_data=inverse_correction_data,
-        manufacturer=None,
-        model=None,
-        output_path="/recordings/",
-        selected_camera="Default",
-        custom_video_format="MP4",
-        video_output="HDMI",
-        show_console=False,
-        software_trigger_delay=3000,
-        volts_to_watts_algorithm="LINEAR",
-        volts_to_watts_params="50.0,100.0",
-        correction_grid_domain_shape=None,
-        inverse_grid_domain_shape=None,
-    )
+    shape = list(grid.shape)
+    tree = ExtensionTree()
+    for name, value in [
+        ("Ip_Address", ip),
+        ("Serial_Number", serial),
+        ("Output_Path", "/recordings/"),
+        ("Selected_Camera", "Default"),
+        ("Custom_Video_Format", "MP4"),
+        ("Video_Output", "HDMI"),
+        ("Volts_To_Watts_Algorithm", "LINEAR"),
+        ("Volts_To_Watts_Params", "50.0,100.0"),
+    ]:
+        tree.attrs[name] = Attr("utf8", value)
+    for name, value in [
+        ("Data_Port", 5001),
+        ("Server_Port", 20101),
+        ("Actual_Timing_Offset", -8),
+        ("Commanded_Timing_Offset", 50),
+        ("Show_Console", 0),
+        ("Software_Trigger_Delay", 3000),
+    ]:
+        tree.attrs[name] = Attr("i64", value)
+    tree.datasets["Correction_Data"] = Dataset("f64", shape, grid.ravel().tolist())
+    tree.datasets["Inverse_Correction_Data"] = Dataset("f64", shape, (grid * 0.9).ravel().tolist())
+    return tree
 
 
 def _mock_sfcf(laser_num: int) -> ScanFieldCorrectionFile:
@@ -166,8 +166,10 @@ def _mock_train(
         power_min_nominal_unit="W",
         power_bit_resolution=None,
         power_bit_resolution_unit="bits",
-        watts_to_volts_algorithm="LINEAR",
-        watts_to_volts_params="[1,100,10,1000]",
+        # Derived via the same function a real v1.0 read would use.
+        power_characterization=forward_power_characterization_points(
+            "LINEAR", "[1,100,10,1000]"
+        ),
     )
 
     collimator = Collimator(
@@ -187,7 +189,6 @@ def _mock_train(
         sample_period_unit="μs",
     )
 
-    clearbox = _mock_clearbox(f"192.168.1.{10 + index}", f"{index + 1:03d}") if include_clearbox else None
     sfcf     = _mock_sfcf(index + 1) if include_clearbox else None
 
     return OpticalTrain(
@@ -225,7 +226,6 @@ def _mock_train(
         light_source=light_source,
         collimator=collimator,
         scanner_card=scanner_card,
-        optional_components=OptionalComponents(clearbox=clearbox),
         scan_field_correction_file=sfcf,
     )
 
@@ -244,7 +244,7 @@ class MockConfigBuilder:
     build_plate_x, build_plate_y, build_plate_z : float
         Build volume dimensions in mm.
     include_clearbox : bool
-        Whether to include the Optional_Components/ClearBox group.
+        Whether to include the ClearBox extension and a ScanFieldCorrectionFile on every train.
     file_version : str
         Value to write for File_Version root attribute.
     working_distance_unit : str
@@ -307,6 +307,7 @@ class MockConfigBuilder:
             build_plate=bp,
             gas_flow_direction="Y+",
             recoat_direction="X+",
+            recoater_blade_type="Standard",
         )
         meta = MachineConfigMeta(
             schema_version=SCHEMA_VERSION,
@@ -322,26 +323,21 @@ class MockConfigBuilder:
             _mock_train(i, self.n_lasers, self.include_clearbox, self.working_distance_unit)
             for i in range(self.n_lasers)
         ]
-        return MachineConfig(meta=meta, machine=machine, optical_trains=trains)
+        config = MachineConfig(meta=meta, machine=machine, optical_trains=trains)
+        if self.include_clearbox:
+            # Each train's ClearBox is authored as a File_Version 1.0 file stores it, then shimmed.
+            groups = [
+                (t.train_id, _mock_clearbox(f"192.168.1.{10 + i}", f"{i + 1:03d}"))
+                for i, t in enumerate(trains)
+            ]
+            clearbox = clearbox_legacy.from_v1_0_trains(groups)
+            if clearbox is not None:
+                config.extensions[clearbox_legacy.EXTENSION_NAME] = clearbox
+        return config
 
     def save(self, path: str | Path) -> None:
         """Write the config to *path*.  Correction grids are Gaussian (non-zero)."""
-        config = self.build()
-        MachineConfigWriter(config).write(path)
-        # Patch ClearBox correction datasets with non-zero Gaussian data.
-        if getattr(self, "include_clearbox", True) and getattr(self, "_config_override", None) is None:
-            with h5py.File(path, "a") as f:
-                for i in range(self.n_lasers):
-                    cb_path = (
-                        f"Machine/Optical_Trains/Optical_Train_{i + 1:02d}"
-                        "/Optional_Components/ClearBox"
-                    )
-                    if cb_path in f:
-                        grid = _gaussian_correction_grid()
-                        del f[f"{cb_path}/Correction_Data"]
-                        del f[f"{cb_path}/Inverse_Correction_Data"]
-                        f.create_dataset(f"{cb_path}/Correction_Data",         data=grid)
-                        f.create_dataset(f"{cb_path}/Inverse_Correction_Data", data=grid * 0.9)
+        MachineConfigWriter(self.build()).write(path)
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +374,7 @@ class YamlConfigBuilder:
             build_plate=bp,
             gas_flow_direction=sm.get("gas_flow_direction"),
             recoat_direction=sm.get("recoat_direction"),
+            recoater_blade_type=sm.get("recoater_blade_type"),
         )
         meta = MachineConfigMeta(
             schema_version=SCHEMA_VERSION,
@@ -446,8 +443,12 @@ class YamlConfigBuilder:
             power_min_nominal_unit="W" if ls.get("power_min_nominal") is not None else None,
             power_bit_resolution=None,
             power_bit_resolution_unit=None,
-            watts_to_volts_algorithm=ls.get("watts_to_volts_algorithm"),
-            watts_to_volts_params=ls.get("watts_to_volts_params"),
+            # YAML spec keys unchanged — still the v1.0 flat shape a user
+            # authors — but the StableModel only carries power_characterization
+            # now, so forward-derive it the same way a real v1.0 read would.
+            power_characterization=forward_power_characterization_points(
+                ls.get("watts_to_volts_algorithm"), ls.get("watts_to_volts_params")
+            ),
         )
 
         col_s = spec.get("collimator", {})
@@ -492,7 +493,6 @@ class YamlConfigBuilder:
             light_source=light_source,
             collimator=collimator,
             scanner_card=scanner_card,
-            optional_components=OptionalComponents(clearbox=None),
             scan_field_correction_file=None,
         )
 

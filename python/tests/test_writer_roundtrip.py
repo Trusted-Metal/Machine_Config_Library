@@ -8,6 +8,9 @@ assert every individual field value survives the roundtrip.
 Covers:
   - Every scalar field across all seven model types
   - All 18 ClearBox scalar attributes (post-1.8a complete model)
+  - ClearBox.synchronous_sensors: one fully-populated sensor (18 scalar
+    fields + both compound datasets), plus the empty/zero-row/arbitrary-key
+    edge cases (SYNCHRONOUS_SENSOR_PLAN.md Phase 1)
   - NaN ↔ None convention for correction arrays
   - axis_configuration discriminator: "2D", "3D", "3D+Focus"
   - Machine-agnostic path: config with no ClearBox
@@ -15,28 +18,35 @@ Covers:
 """
 from __future__ import annotations
 
+import math
 from dataclasses import replace as dc_replace
 from pathlib import Path
 
 import pytest
 
 from machine_config import MachineConfigReader, MachineConfigWriter
+from machine_config.clearbox_legacy import _power_characterization_to_tree
+from machine_config.extension_contract import Attr, Dataset, ExtensionTree, Table, TableField
 from machine_config.models import (
     AxisConfig,
     BuildPlate,
-    ClearBox,
     Collimator,
     LightSource,
     Machine,
     MachineConfig,
     MachineConfigMeta,
     OpticalTrain,
-    OptionalComponents,
     ScanFieldCorrectionFile,
     Scanner,
     ScannerCard,
 )
+from machine_config.power_characterization import (
+    forward_power_characterization_coefficients,
+    forward_power_characterization_points,
+)
 from machine_config.schema import SCHEMA, SCHEMA_VERSION
+
+from clearbox_helpers import attr, clearbox, clearbox_root, constants, integer, text
 
 
 # ---------------------------------------------------------------------------
@@ -107,8 +117,9 @@ def _light_source() -> LightSource:
         power_min_nominal_unit="W",
         power_bit_resolution=None,
         power_bit_resolution_unit="bits",
-        watts_to_volts_algorithm="LINEAR",
-        watts_to_volts_params="[1,100,10,1000]",
+        power_characterization=forward_power_characterization_points(
+            "LINEAR", "[1,100,10,1000]"
+        ),
     )
 
 
@@ -133,38 +144,90 @@ def _scanner_card() -> ScannerCard:
     )
 
 
-def _clearbox(grid_size: int = 5) -> ClearBox:
-    """ClearBox with all 18 scalar attributes populated; small correction grid."""
-    grid = [
-        [[float(i + j) for _ in range(2)] for j in range(grid_size)]
-        for i in range(grid_size)
-    ]
-    inv = [
-        [[float(i + j + 1) for _ in range(2)] for j in range(grid_size)]
-        for i in range(grid_size)
-    ]
-    return ClearBox(
-        ip_address="192.168.1.100",
-        serial_number="CB-321",
-        data_port=5001,
-        server_port=20101,
-        actual_timing_offset=-8,
-        commanded_timing_offset=50,
-        correction_data=grid,
-        inverse_correction_data=inv,
-        manufacturer="ClearBoxCo",
-        model="CB-Pro",
-        output_path="/recordings/",
-        selected_camera="Default",
-        custom_video_format="MP4",
-        video_output="HDMI",
-        show_console=False,
-        software_trigger_delay=3000,
-        volts_to_watts_algorithm="LINEAR",
-        volts_to_watts_params="48.5,105.0",
-        correction_grid_domain_shape="square",
-        inverse_grid_domain_shape="square",
+def _grid_dataset(fn, size: int) -> Dataset:
+    data = [float(fn(i, j)) for i in range(size) for j in range(size) for _ in range(2)]
+    return Dataset(dtype="f64", shape=[size, size, 2], data=data)
+
+
+def _oxygen_sensor() -> ExtensionTree:
+    s = ExtensionTree()
+    for name, value in (
+        ("Sensor_Name", "ZR800 Oxygen Analyzer"),
+        ("Sensor_Output_Space", "log10(ppm)"),
+        ("Sensor_Model", "ZR810"),
+        ("Sensor_Manufacturer", "Industrial Physics"),
+        ("Sensor_Scope", "Global"),
+        ("Units_Derived_Quantity", "ppm"),
+        ("Sensor_Type", "Oxygen Sensor"),
+        ("Input_Type", "4-20 mA"),
+        ("Algorithm_Type", "Log-Linear"),
+        ("Algorithm_Equation", "log(ppm) = a*mA + b"),
+        ("Calibration_Source", "Datasheet"),
+        ("Metadata", "Synchronous Sensor because Clearbox is responsible for recording."),
+    ):
+        s.attrs[name] = Attr("utf8", value)
+    s.attrs["Enabled"] = Attr("u8", 1)
+    s.attrs["Calibration_Verified"] = Attr("u8", 0)
+    s.attrs["Port_ID"] = Attr("i32", 5)
+    s.attrs["Sensor_Output_Range_Low"] = Attr("f64", -1.0)
+    s.attrs["Sensor_Output_Range_High"] = Attr("f64", 6.0)
+    s.attrs["Sample_Period"] = Attr("f64", 5.0)
+    s.tables["Derivation_Equation_Constants"] = Table(
+        fields=[TableField("name", "utf8", 64), TableField("value", "f64")],
+        rows=2,
+        columns={"name": ["a", "b"], "value": [0.4375, -2.75]},
     )
+    s.tables["Calibration_Points"] = Table(
+        fields=[TableField("input_value", "f64"), TableField("output_value", "f64")],
+        rows=2,
+        columns={"input_value": [4.0, 20.0], "output_value": [-1.0, 6.0]},
+    )
+    return s
+
+
+def _clearbox(grid_size: int = 5) -> ExtensionTree:
+    """ClearBox extension tree in the File_Version 1.1 layout: every former scalar attribute
+    populated on ``Optical_Train_01``, the two shared values on the root, a small correction
+    grid, a Power_Characterization child and one fully-populated synchronous sensor."""
+    train = ExtensionTree()
+    for name, value in (
+        ("Ip_Address", "192.168.1.100"),
+        ("Serial_Number", "CB-321"),
+        ("Manufacturer", "ClearBoxCo"),
+        ("Model", "CB-Pro"),
+        ("Selected_Camera", "Default"),
+        ("Custom_Video_Format", "MP4"),
+        ("Video_Output", "HDMI"),
+        ("Correction_Grid_Domain_Shape", "square"),
+        ("Inverse_Grid_Domain_Shape", "square"),
+    ):
+        train.attrs[name] = Attr("utf8", value)
+    for name, value in (
+        ("Data_Port", 5001),
+        ("Server_Port", 20101),
+        ("Actual_Timing_Offset", -8),
+        ("Commanded_Timing_Offset", 50),
+        ("Show_Console", 0),
+    ):
+        train.attrs[name] = Attr("i32", value)
+    train.datasets["Correction_Data"] = _grid_dataset(lambda i, j: i + j, grid_size)
+    train.datasets["Inverse_Correction_Data"] = _grid_dataset(lambda i, j: i + j + 1, grid_size)
+    train.children["Power_Characterization"] = _power_characterization_to_tree(
+        forward_power_characterization_coefficients("LINEAR", "48.5,105.0")
+    )
+    sensors = ExtensionTree()
+    sensors.children["Oxygen Sensor"] = _oxygen_sensor()
+    train.children["Synchronous_Sensors"] = sensors
+
+    root = ExtensionTree()
+    root.attrs["Output_Path"] = Attr("utf8", "/recordings/")
+    root.attrs["Software_Trigger_Delay"] = Attr("i32", 3000)
+    root.children["Optical_Train_01"] = train
+    return root
+
+
+def _train_tree(cfg: MachineConfig) -> ExtensionTree:
+    return clearbox(cfg, 0)
 
 
 def _sfcf() -> ScanFieldCorrectionFile:
@@ -215,7 +278,6 @@ def _train(axis_cfg: str = "3D", include_clearbox: bool = True) -> OpticalTrain:
         light_source=_light_source(),
         collimator=_collimator(),
         scanner_card=_scanner_card(),
-        optional_components=OptionalComponents(clearbox=_clearbox() if include_clearbox else None),
         scan_field_correction_file=_sfcf() if include_clearbox else None,
     )
 
@@ -246,8 +308,10 @@ def _config(axis_cfg: str = "3D", include_clearbox: bool = True) -> MachineConfi
             ),
             gas_flow_direction="Y+",
             recoat_direction="X+",
+            recoater_blade_type="Standard",
         ),
         optical_trains=[_train(axis_cfg, include_clearbox)],
+        extensions={"ClearBox": _clearbox()} if include_clearbox else {},
     )
 
 
@@ -268,59 +332,28 @@ def scalar_rt(tmp_path_factory: pytest.TempPathFactory) -> MachineConfig:
 
 
 @pytest.fixture(scope="module")
-def clearbox_cb(tmp_path_factory: pytest.TempPathFactory) -> ClearBox:
-    """ClearBox from a written config; used by TestClearBoxAttributeRoundtrip."""
+def clearbox_rt(tmp_path_factory: pytest.TempPathFactory) -> MachineConfig:
+    """Config with ClearBox written and re-parsed; used by TestClearBoxAttributeRoundtrip."""
     out = tmp_path_factory.mktemp("cb_attrs") / "cb.h5"
     MachineConfigWriter(_config()).write(out)
-    return MachineConfigReader(out).parse().optical_trains[0].optional_components.clearbox  # type: ignore[return-value]
+    return MachineConfigReader(out).parse()
 
 
 @pytest.fixture(scope="module")
-def nan_cb(tmp_path_factory: pytest.TempPathFactory) -> ClearBox:
-    """ClearBox with None cells in both grids; used by TestCorrectionArrayNullNaN."""
+def nan_cb(tmp_path_factory: pytest.TempPathFactory) -> ExtensionTree:
+    """ClearBox train with NaN cells in both grids; used by TestCorrectionArrayNaN."""
     size = 3
-    fwd = [
-        [
-            [None if (i == 0 and j == 0) else float(i + j * 10) for _ in range(2)]
-            for j in range(size)
-        ]
-        for i in range(size)
-    ]
-    inv = [
-        [
-            [None if (i == 2 and j == 2) else float(i * 5 + j) for _ in range(2)]
-            for j in range(size)
-        ]
-        for i in range(size)
-    ]
-    cb_obj = ClearBox(
-        ip_address="10.0.0.1",
-        serial_number=None,
-        data_port=None,
-        server_port=None,
-        actual_timing_offset=None,
-        commanded_timing_offset=None,
-        correction_data=fwd,
-        inverse_correction_data=inv,
-        manufacturer=None,
-        model=None,
-        output_path=None,
-        selected_camera=None,
-        custom_video_format=None,
-        video_output=None,
-        show_console=None,
-        software_trigger_delay=None,
-        volts_to_watts_algorithm=None,
-        volts_to_watts_params=None,
-        correction_grid_domain_shape=None,
-        inverse_grid_domain_shape=None,
-    )
-    base = _config(include_clearbox=False)
-    patched = dc_replace(base.optical_trains[0], optional_components=OptionalComponents(clearbox=cb_obj))
-    cfg = dc_replace(base, optical_trains=[patched])
+    nan = float("nan")
+    fwd = _grid_dataset(lambda i, j: nan if (i == 0 and j == 0) else i + j * 10, size)
+    inv = _grid_dataset(lambda i, j: nan if (i == 2 and j == 2) else i * 5 + j, size)
+    train = ExtensionTree(attrs={"Ip_Address": Attr("utf8", "10.0.0.1")})
+    train.datasets["Correction_Data"] = fwd
+    train.datasets["Inverse_Correction_Data"] = inv
+    root = ExtensionTree(children={"Optical_Train_01": train})
+    cfg = dc_replace(_config(include_clearbox=False), extensions={"ClearBox": root})
     out = tmp_path_factory.mktemp("nan_test") / "nan.h5"
     MachineConfigWriter(cfg).write(out)
-    return MachineConfigReader(out).parse().optical_trains[0].optional_components.clearbox  # type: ignore[return-value]
+    return clearbox(MachineConfigReader(out).parse(), 0)
 
 
 @pytest.fixture(scope="module")
@@ -330,6 +363,7 @@ def nocb_rt(tmp_path_factory: pytest.TempPathFactory) -> MachineConfig:
         _config(include_clearbox=False),
         tmp_path_factory.mktemp("nocb") / "nocb.h5",
     )
+
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +394,11 @@ class TestScalarFieldRoundtrip:
         assert scalar_rt.meta.export_date == "2024-06-01T12:00:00.000Z"
 
     def test_meta_configuration_hash(self, scalar_rt: MachineConfig) -> None:
-        assert scalar_rt.meta.configuration_hash == "a" * 64
+        # The writer always computes a fresh hash from actual content — the
+        # input's placeholder "a" * 64 never survives to disk.
+        assert scalar_rt.meta.configuration_hash != "a" * 64
+        assert len(scalar_rt.meta.configuration_hash) == 64
+        assert scalar_rt.meta.is_valid is True
 
     # --- Machine / BuildPlate -----------------------------------------------
 
@@ -375,6 +413,9 @@ class TestScalarFieldRoundtrip:
 
     def test_machine_recoat_direction(self, scalar_rt: MachineConfig) -> None:
         assert scalar_rt.machine.recoat_direction == "X+"
+
+    def test_machine_recoater_blade_type(self, scalar_rt: MachineConfig) -> None:
+        assert scalar_rt.machine.recoater_blade_type == "Standard"
 
     def test_build_plate_x(self, scalar_rt: MachineConfig) -> None:
         assert scalar_rt.machine.build_plate.x == pytest.approx(250.0)
@@ -537,11 +578,20 @@ class TestScalarFieldRoundtrip:
     def test_light_source_power_min_nominal(self, scalar_rt: MachineConfig) -> None:
         assert scalar_rt.optical_trains[0].light_source.power_min_nominal == pytest.approx(50.0)
 
-    def test_light_source_watts_to_volts_algorithm(self, scalar_rt: MachineConfig) -> None:
-        assert scalar_rt.optical_trains[0].light_source.watts_to_volts_algorithm == "LINEAR"
+    def test_light_source_power_characterization_algorithm_type(
+        self, scalar_rt: MachineConfig
+    ) -> None:
+        pc = scalar_rt.optical_trains[0].light_source.power_characterization
+        assert pc is not None
+        assert pc.algorithm_type == "LINEAR"
 
-    def test_light_source_watts_to_volts_params(self, scalar_rt: MachineConfig) -> None:
-        assert scalar_rt.optical_trains[0].light_source.watts_to_volts_params == "[1,100,10,1000]"
+    def test_light_source_power_characterization_points(self, scalar_rt: MachineConfig) -> None:
+        pc = scalar_rt.optical_trains[0].light_source.power_characterization
+        assert pc is not None
+        assert [(p.input_value, p.output_value) for p in pc.characterization_points] == [
+            (1.0, 100.0),
+            (10.0, 1000.0),
+        ]
 
     # --- ScannerCard ---------------------------------------------------------
 
@@ -565,127 +615,119 @@ class TestScalarFieldRoundtrip:
 
 
 class TestClearBoxAttributeRoundtrip:
-    """All 18 ClearBox scalar attributes survive write → read with identical values."""
+    """Every ClearBox attribute, dataset, table and child survives write → read unchanged."""
 
-    def test_ip_address(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.ip_address == "192.168.1.100"
+    def test_extension_tree_is_bit_stable(self, clearbox_rt: MachineConfig) -> None:
+        from machine_config.extension_contract import canonical_digest
 
-    def test_serial_number(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.serial_number == "CB-321"
+        assert canonical_digest(clearbox_rt.extensions["ClearBox"]) == canonical_digest(_clearbox())
 
-    def test_data_port(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.data_port == 5001
+    def test_per_train_string_attributes(self, clearbox_rt: MachineConfig) -> None:
+        cb = clearbox(clearbox_rt, 0)
+        assert text(cb, "Ip_Address") == "192.168.1.100"
+        assert text(cb, "Serial_Number") == "CB-321"
+        assert text(cb, "Manufacturer") == "ClearBoxCo"
+        assert text(cb, "Model") == "CB-Pro"
+        assert text(cb, "Selected_Camera") == "Default"
+        assert text(cb, "Custom_Video_Format") == "MP4"
+        assert text(cb, "Video_Output") == "HDMI"
+        assert text(cb, "Correction_Grid_Domain_Shape") == "square"
+        assert text(cb, "Inverse_Grid_Domain_Shape") == "square"
 
-    def test_server_port(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.server_port == 20101
+    def test_per_train_integer_attributes(self, clearbox_rt: MachineConfig) -> None:
+        cb = clearbox(clearbox_rt, 0)
+        assert integer(cb, "Data_Port") == 5001
+        assert integer(cb, "Server_Port") == 20101
+        assert integer(cb, "Actual_Timing_Offset") == -8
+        assert integer(cb, "Commanded_Timing_Offset") == 50
+        assert integer(cb, "Show_Console") == 0
 
-    def test_actual_timing_offset(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.actual_timing_offset == -8
+    def test_shared_values_live_on_the_root(self, clearbox_rt: MachineConfig) -> None:
+        root = clearbox_root(clearbox_rt)
+        assert text(root, "Output_Path") == "/recordings/"
+        assert integer(root, "Software_Trigger_Delay") == 3000
+        assert "Output_Path" not in clearbox(clearbox_rt, 0).attrs
 
-    def test_commanded_timing_offset(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.commanded_timing_offset == 50
+    def test_power_characterization(self, clearbox_rt: MachineConfig) -> None:
+        pc = clearbox(clearbox_rt, 0).children["Power_Characterization"]
+        assert text(pc, "Algorithm_Type") == "LINEAR"
+        assert dict(constants(pc)) == {"b": 48.5, "a": 105.0}
 
-    def test_manufacturer(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.manufacturer == "ClearBoxCo"
+    def test_synchronous_sensor_present_and_named(self, clearbox_rt: MachineConfig) -> None:
+        sensors = clearbox(clearbox_rt, 0).children["Synchronous_Sensors"].children
+        assert list(sensors) == ["Oxygen Sensor"]
+        sensor = sensors["Oxygen Sensor"]
+        assert text(sensor, "Sensor_Name") == "ZR800 Oxygen Analyzer"
+        assert integer(sensor, "Port_ID") == 5
+        assert integer(sensor, "Calibration_Verified") == 0
 
-    def test_model(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.model == "CB-Pro"
+    def test_synchronous_sensor_tables_exact_values_in_order(self, clearbox_rt: MachineConfig) -> None:
+        sensor = clearbox(clearbox_rt, 0).children["Synchronous_Sensors"].children["Oxygen Sensor"]
+        consts = sensor.tables["Derivation_Equation_Constants"]
+        assert list(zip(consts.columns["name"], consts.columns["value"])) == [("a", 0.4375), ("b", -2.75)]
+        points = sensor.tables["Calibration_Points"]
+        assert list(zip(points.columns["input_value"], points.columns["output_value"])) == [
+            (4.0, -1.0),
+            (20.0, 6.0),
+        ]
 
-    def test_output_path(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.output_path == "/recordings/"
+    def test_correction_data_shape(self, clearbox_rt: MachineConfig) -> None:
+        ds = clearbox(clearbox_rt, 0).datasets["Correction_Data"]
+        assert ds.shape == [5, 5, 2]
+        assert len(ds.data) == 50
 
-    def test_selected_camera(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.selected_camera == "Default"
+    def test_inverse_correction_data_shape(self, clearbox_rt: MachineConfig) -> None:
+        assert clearbox(clearbox_rt, 0).datasets["Inverse_Correction_Data"].shape == [5, 5, 2]
 
-    def test_custom_video_format(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.custom_video_format == "MP4"
+    def test_correction_data_values(self, clearbox_rt: MachineConfig) -> None:
+        """Cell (i, j, *) = float(i + j); spot-check a few cells (row-major flat index)."""
+        data = clearbox(clearbox_rt, 0).datasets["Correction_Data"].data
 
-    def test_video_output(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.video_output == "HDMI"
+        def cell(i: int, j: int, k: int) -> float:
+            return data[(i * 5 + j) * 2 + k]
 
-    def test_show_console_false(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.show_console is False
-
-    def test_software_trigger_delay(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.software_trigger_delay == 3000
-
-    def test_volts_to_watts_algorithm(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.volts_to_watts_algorithm == "LINEAR"
-
-    def test_volts_to_watts_params(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.volts_to_watts_params == "48.5,105.0"
-
-    def test_correction_grid_domain_shape(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.correction_grid_domain_shape == "square"
-
-    def test_inverse_grid_domain_shape(self, clearbox_cb: ClearBox) -> None:
-        assert clearbox_cb.inverse_grid_domain_shape == "square"
-
-    def test_correction_data_shape(self, clearbox_cb: ClearBox) -> None:
-        assert isinstance(clearbox_cb.correction_data, list)
-        assert len(clearbox_cb.correction_data) == 5
-        assert len(clearbox_cb.correction_data[0]) == 5
-        assert len(clearbox_cb.correction_data[0][0]) == 2
-
-    def test_inverse_correction_data_shape(self, clearbox_cb: ClearBox) -> None:
-        assert isinstance(clearbox_cb.inverse_correction_data, list)
-        assert len(clearbox_cb.inverse_correction_data) == 5
-
-    def test_correction_data_values(self, clearbox_cb: ClearBox) -> None:
-        """Cell (i, j, *) = float(i + j); spot-check a few cells."""
-        assert clearbox_cb.correction_data[0][0][0] == pytest.approx(0.0)
-        assert clearbox_cb.correction_data[1][0][0] == pytest.approx(1.0)
-        assert clearbox_cb.correction_data[2][3][1] == pytest.approx(5.0)  # 2+3=5
+        assert cell(0, 0, 0) == pytest.approx(0.0)
+        assert cell(1, 0, 0) == pytest.approx(1.0)
+        assert cell(2, 3, 1) == pytest.approx(5.0)  # 2+3=5
 
 
-class TestCorrectionArrayNullNaN:
-    """None cells in the model write as IEEE 754 NaN in HDF5 and read back as None.
-    Non-None float values must be bit-exact after the roundtrip.
-    """
+class TestCorrectionArrayNaN:
+    """NaN cells in a correction grid are stored as IEEE 754 NaN and read back as NaN.
+    Finite values must be bit-exact after the roundtrip."""
 
     SIZE = 3  # 3×3×2 grid — keeps tests fast
 
-    def test_forward_null_cell(self, nan_cb: ClearBox) -> None:
-        """Cell (0,0,*) was None → must read back as None."""
-        assert nan_cb.correction_data[0][0][0] is None  # type: ignore[index]
-        assert nan_cb.correction_data[0][0][1] is None  # type: ignore[index]
+    @staticmethod
+    def _cell(cb: ExtensionTree, name: str, i: int, j: int, k: int = 0) -> float:
+        return cb.datasets[name].data[(i * TestCorrectionArrayNaN.SIZE + j) * 2 + k]
 
-    def test_forward_finite_cell_i1_j0(self, nan_cb: ClearBox) -> None:
-        """i=1, j=0 → float(1 + 0×10) = 1.0."""
-        assert nan_cb.correction_data[1][0][0] == pytest.approx(1.0)  # type: ignore[index]
+    def test_forward_nan_cell(self, nan_cb: ExtensionTree) -> None:
+        assert math.isnan(self._cell(nan_cb, "Correction_Data", 0, 0, 0))
+        assert math.isnan(self._cell(nan_cb, "Correction_Data", 0, 0, 1))
 
-    def test_forward_finite_cell_i0_j1(self, nan_cb: ClearBox) -> None:
-        """i=0, j=1 → float(0 + 1×10) = 10.0."""
-        assert nan_cb.correction_data[0][1][0] == pytest.approx(10.0)  # type: ignore[index]
+    def test_forward_finite_cells(self, nan_cb: ExtensionTree) -> None:
+        assert self._cell(nan_cb, "Correction_Data", 1, 0) == pytest.approx(1.0)  # 1 + 0*10
+        assert self._cell(nan_cb, "Correction_Data", 0, 1) == pytest.approx(10.0)  # 0 + 1*10
 
-    def test_inverse_null_cell(self, nan_cb: ClearBox) -> None:
-        """Cell (2,2,*) in the inverse grid was None → must read back as None."""
-        assert nan_cb.inverse_correction_data[2][2][0] is None  # type: ignore[index]
-        assert nan_cb.inverse_correction_data[2][2][1] is None  # type: ignore[index]
+    def test_inverse_nan_cell(self, nan_cb: ExtensionTree) -> None:
+        assert math.isnan(self._cell(nan_cb, "Inverse_Correction_Data", 2, 2, 0))
+        assert math.isnan(self._cell(nan_cb, "Inverse_Correction_Data", 2, 2, 1))
 
-    def test_inverse_finite_cell_i0_j0(self, nan_cb: ClearBox) -> None:
-        """i=0, j=0 → float(0×5 + 0) = 0.0."""
-        assert nan_cb.inverse_correction_data[0][0][0] == pytest.approx(0.0)  # type: ignore[index]
+    def test_inverse_finite_cells(self, nan_cb: ExtensionTree) -> None:
+        assert self._cell(nan_cb, "Inverse_Correction_Data", 0, 0) == pytest.approx(0.0)
+        assert self._cell(nan_cb, "Inverse_Correction_Data", 1, 2) == pytest.approx(7.0)  # 1*5 + 2
 
-    def test_inverse_finite_cell_i1_j2(self, nan_cb: ClearBox) -> None:
-        """i=1, j=2 → float(1×5 + 2) = 7.0."""
-        assert nan_cb.inverse_correction_data[1][2][0] == pytest.approx(7.0)  # type: ignore[index]
+    def test_no_other_forward_nans(self, nan_cb: ExtensionTree) -> None:
+        for i in range(self.SIZE):
+            for j in range(self.SIZE):
+                if (i, j) != (0, 0):
+                    assert not math.isnan(self._cell(nan_cb, "Correction_Data", i, j))
 
-    def test_no_other_forward_nulls(self, nan_cb: ClearBox) -> None:
-        """All non-(0,0) cells in the forward grid must not be None."""
-        for i in range(TestCorrectionArrayNullNaN.SIZE):
-            for j in range(TestCorrectionArrayNullNaN.SIZE):
-                if i == 0 and j == 0:
-                    continue
-                assert nan_cb.correction_data[i][j][0] is not None  # type: ignore[index]
-
-    def test_no_other_inverse_nulls(self, nan_cb: ClearBox) -> None:
-        """All non-(2,2) cells in the inverse grid must not be None."""
-        for i in range(TestCorrectionArrayNullNaN.SIZE):
-            for j in range(TestCorrectionArrayNullNaN.SIZE):
-                if i == 2 and j == 2:
-                    continue
-                assert nan_cb.inverse_correction_data[i][j][0] is not None  # type: ignore[index]
+    def test_no_other_inverse_nans(self, nan_cb: ExtensionTree) -> None:
+        for i in range(self.SIZE):
+            for j in range(self.SIZE):
+                if (i, j) != (2, 2):
+                    assert not math.isnan(self._cell(nan_cb, "Inverse_Correction_Data", i, j))
 
 
 class TestScannerAxisConfigurations:
@@ -738,11 +780,110 @@ class TestScannerAxisConfigurations:
         assert ax.range_of_motion == pytest.approx(120.5)
 
 
+class TestScannerInvertFlags:
+    """Invert_Actual_X/Y, Invert_Commanded_X/Y — plain bool, written (and
+    JSON-serialised) only when True; False and absent are indistinguishable
+    everywhere except immediately after a read (user-confirmed, 2026-08-21).
+    """
+
+    def test_defaults_to_false_and_omitted_from_json(self, tmp_path: Path) -> None:
+        rt = _roundtrip(_config(), tmp_path / "defaults.h5")
+        s = rt.optical_trains[0].scanner
+        assert s.invert_actual_x is False
+        assert s.invert_actual_y is False
+        assert s.invert_commanded_x is False
+        assert s.invert_commanded_y is False
+
+    def test_only_true_values_survive_as_real_hdf5_attributes(self, tmp_path: Path) -> None:
+        import h5py
+
+        cfg = _config()
+        cfg.optical_trains[0].scanner.invert_actual_x = True
+        cfg.optical_trains[0].scanner.invert_actual_y = False
+        cfg.optical_trains[0].scanner.invert_commanded_x = True
+        cfg.optical_trains[0].scanner.invert_commanded_y = False
+        out = tmp_path / "invert.h5"
+        rt = _roundtrip(cfg, out)
+
+        # Raw HDF5 inspection: only the two True-valued attributes exist at all.
+        with h5py.File(out, "r") as f:
+            attrs = f["Machine/Optical_Trains/Optical_Train_01/Scanner"].attrs
+            assert "Invert_Actual_X" in attrs
+            assert "Invert_Commanded_X" in attrs
+            assert "Invert_Actual_Y" not in attrs
+            assert "Invert_Commanded_Y" not in attrs
+
+        s = rt.optical_trains[0].scanner
+        assert s.invert_actual_x is True
+        assert s.invert_actual_y is False
+        assert s.invert_commanded_x is True
+        assert s.invert_commanded_y is False
+
+
+def _only_sensor(label: str, sensor: ExtensionTree) -> MachineConfig:
+    cfg = _config()
+    sensors = ExtensionTree(children={label: sensor})
+    clearbox(cfg, 0).children["Synchronous_Sensors"] = sensors
+    return cfg
+
+
+class TestSynchronousSensorEdgeCases:
+    """Edge cases distinct from TestClearBoxAttributeRoundtrip's happy path."""
+
+    def test_no_sensors_group_roundtrips_as_absent(self, tmp_path: Path) -> None:
+        cfg = _config()
+        del clearbox(cfg, 0).children["Synchronous_Sensors"]
+        rt = _roundtrip(cfg, tmp_path / "no_sensors.h5")
+        assert "Synchronous_Sensors" not in clearbox(rt, 0).children
+
+    def test_zero_row_tables_for_existing_sensor(self, tmp_path: Path) -> None:
+        """The sensor itself exists but both compound datasets have zero rows — proving 0-length
+        compound dataset creation/read genuinely works."""
+        sensor = ExtensionTree(attrs={"Sensor_Name": Attr("utf8", "Placeholder")})
+        sensor.tables["Derivation_Equation_Constants"] = Table(
+            fields=[TableField("name", "utf8", 64), TableField("value", "f64")],
+            rows=0,
+            columns={"name": [], "value": []},
+        )
+        sensor.tables["Calibration_Points"] = Table(
+            fields=[TableField("input_value", "f64"), TableField("output_value", "f64")],
+            rows=0,
+            columns={"input_value": [], "output_value": []},
+        )
+        rt = _roundtrip(_only_sensor("Untested Sensor", sensor), tmp_path / "zero_row.h5")
+        back = clearbox(rt, 0).children["Synchronous_Sensors"].children["Untested Sensor"]
+        assert back.tables["Derivation_Equation_Constants"].rows == 0
+        assert back.tables["Calibration_Points"].rows == 0
+        assert text(back, "Sensor_Name") == "Placeholder"
+
+    def test_arbitrary_differently_styled_key_survives_roundtrip(self, tmp_path: Path) -> None:
+        """The map key is a free-form label with no schema meaning."""
+        sensor = ExtensionTree(attrs={"Port_ID": Attr("i32", 9)})
+        rt = _roundtrip(_only_sensor("HUMIDITY_SENSOR_2", sensor), tmp_path / "arbitrary_key.h5")
+        sensors = clearbox(rt, 0).children["Synchronous_Sensors"].children
+        assert integer(sensors["HUMIDITY_SENSOR_2"], "Port_ID") == 9
+
+    def test_constant_name_too_long_for_fixed64_raises(self, tmp_path: Path) -> None:
+        """Derivation_Equation_Constants.name is a 64-byte fixed-length field. A name whose UTF-8
+        encoding exceeds 64 bytes must be rejected with a clear error at write time, not silently
+        truncated."""
+        sensor = ExtensionTree()
+        sensor.tables["Derivation_Equation_Constants"] = Table(
+            fields=[TableField("name", "utf8", 64), TableField("value", "f64")],
+            rows=1,
+            columns={"name": ["a" * 65], "value": [1.0]},
+        )
+        with pytest.raises(ValueError, match="do not fit"):
+            MachineConfigWriter(_only_sensor("Oversized Name Sensor", sensor)).write(
+                tmp_path / "oversized_name.h5"
+            )
+
+
 class TestWithoutClearBox:
     """Machine-agnostic path: a config with no ClearBox round-trips correctly."""
 
-    def test_clearbox_is_none(self, nocb_rt: MachineConfig) -> None:
-        assert nocb_rt.optical_trains[0].optional_components.clearbox is None
+    def test_no_clearbox_extension(self, nocb_rt: MachineConfig) -> None:
+        assert "ClearBox" not in nocb_rt.extensions
 
     def test_scan_field_correction_file_is_none(self, nocb_rt: MachineConfig) -> None:
         assert nocb_rt.optical_trains[0].scan_field_correction_file is None

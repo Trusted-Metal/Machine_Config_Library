@@ -1,0 +1,491 @@
+//! File_Version 1.1 HDF5 writer — on-disk layout, attribute names, and casting.
+//!
+//! Deliberately independent of `capabilities/v1_0/writer.rs` — see the
+//! matching note in `v1_1/hdf5.rs`'s module docstring.
+//!
+//! Type conventions (mirror reader helpers in reverse):
+//!   None  -> ""   (empty string — matches what the machine software writes)
+//!   bool  -> 0 or 1  (HDF5 integer attribute)
+//!   float -> f64
+//!   int   -> i64
+//!   str   -> String (h5py-equivalent VarLenUnicode)
+
+use std::path::Path;
+
+use hdf5::types::VarLenUnicode;
+use hdf5::{Dataset, File as H5File, Group};
+use ndarray::Array1;
+
+use super::hdf5::{RawCalibrationPoint, RawEquationConstant, EQUATION_CONSTANT_NAME_MAX_BYTES};
+use super::layout;
+use crate::error::{MachineConfigError, Result};
+use crate::extensions::{validate_extension_trees, write_extension_tree};
+use crate::models::*;
+use crate::writer::WriterAdapter;
+
+// ---------------------------------------------------------------------------
+// Write helpers — independent copies of the equivalent v1.0 helpers.
+// ---------------------------------------------------------------------------
+
+fn ws(grp: &Group, key: &str, val: &str) -> Result<()> {
+    let vlu: VarLenUnicode =
+        val.parse().map_err(|e| MachineConfigError::Parse(format!("VarLenUnicode: {e:?}")))?;
+    grp.new_attr::<VarLenUnicode>().create(key)?.write_scalar(&vlu)?;
+    Ok(())
+}
+
+fn wf(grp: &Group, key: &str, val: Option<f64>) -> Result<()> {
+    match val {
+        Some(v) => {
+            grp.new_attr::<f64>().create(key)?.write_scalar(&v)?;
+        }
+        None => ws(grp, key, "")?,
+    }
+    Ok(())
+}
+
+fn wi(grp: &Group, key: &str, val: Option<i64>) -> Result<()> {
+    match val {
+        Some(v) => {
+            grp.new_attr::<i64>().create(key)?.write_scalar(&v)?;
+        }
+        None => ws(grp, key, "")?,
+    }
+    Ok(())
+}
+
+fn wb(grp: &Group, key: &str, val: Option<bool>) -> Result<()> {
+    match val {
+        Some(b) => {
+            grp.new_attr::<i64>().create(key)?.write_scalar(&(b as i64))?;
+        }
+        None => ws(grp, key, "")?,
+    }
+    Ok(())
+}
+
+/// Writes an i64 attribute (`1`) only when `val` is `true`; writes nothing at
+/// all when `false` — matches v1.0's `Invert_*` convention.
+fn wb_if_true(grp: &Group, key: &str, val: bool) -> Result<()> {
+    if val {
+        grp.new_attr::<i64>().create(key)?.write_scalar(&1i64)?;
+    }
+    Ok(())
+}
+
+fn ws_ds(ds: &Dataset, key: &str, val: &str) -> Result<()> {
+    let vlu: VarLenUnicode =
+        val.parse().map_err(|e| MachineConfigError::Parse(format!("VarLenUnicode: {e:?}")))?;
+    ds.new_attr::<VarLenUnicode>().create(key)?.write_scalar(&vlu)?;
+    Ok(())
+}
+
+fn wi_ds(ds: &Dataset, key: &str, val: i64) -> Result<()> {
+    ds.new_attr::<i64>().create(key)?.write_scalar(&val)?;
+    Ok(())
+}
+
+fn write_extra_value(grp: &Group, key: &str, val: &serde_json::Value) -> Result<()> {
+    match val {
+        serde_json::Value::String(s) => ws(grp, key, s)?,
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                grp.new_attr::<i64>().create(key)?.write_scalar(&i)?;
+            } else if let Some(f) = n.as_f64() {
+                grp.new_attr::<f64>().create(key)?.write_scalar(&f)?;
+            } else {
+                ws(grp, key, &val.to_string())?;
+            }
+        }
+        serde_json::Value::Bool(b) => {
+            grp.new_attr::<i64>().create(key)?.write_scalar(&(*b as i64))?;
+        }
+        other => ws(grp, key, &other.to_string())?,
+    }
+    Ok(())
+}
+
+/// Opens `name` under `parent` if it already exists, otherwise creates it.
+/// Used for `Extensions` (and `Extensions/ClearBox`), which may need to be
+/// reached from two independent call sites (ClearBox and OPCUA) depending on
+/// which features are present in a given config.
+fn ensure_group(parent: &Group, name: &str) -> Result<Group> {
+    match parent.group(name) {
+        Ok(g) => Ok(g),
+        Err(_) => Ok(parent.create_group(name)?),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public writer
+// ---------------------------------------------------------------------------
+
+/// File_Version 1.1 HDF5 writer. Public [`crate::writer::MachineConfigWriter`] dispatches here.
+pub struct Hdf5WriterV1_1<'a> {
+    config: &'a MachineConfig,
+}
+
+impl<'a> Hdf5WriterV1_1<'a> {
+    pub fn new(config: &'a MachineConfig) -> Self {
+        Self { config }
+    }
+
+    /// Writes the config to `path`, creating or overwriting the file.
+    pub fn write<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        self.validate_extensions()?;
+        let f = H5File::create(path)?;
+        let root = f.group("/")?;
+        self.write_root_attrs(&root)?;
+
+        let machine_grp = f.create_group("Machine")?;
+        self.write_machine_attrs(&machine_grp)?;
+        let trains_grp = machine_grp.create_group("Optical_Trains")?;
+
+        self.write_optical_trains(&trains_grp)?;
+
+        if !self.config.extensions.is_empty() {
+            let extensions_grp = ensure_group(&f.group("/")?, layout::ROOT_EXTENSIONS)?;
+            for (name, tree) in &self.config.extensions {
+                write_extension_tree(&extensions_grp, name, tree)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Runs before the output file is created, so a rejected config never leaves a partial file.
+    fn validate_extensions(&self) -> Result<()> {
+        validate_extension_trees(&self.config.extensions)
+    }
+
+    // ------------------------------------------------------------------
+    // Root attributes -> MachineConfigMeta
+    // ------------------------------------------------------------------
+
+    fn write_root_attrs(&self, root: &Group) -> Result<()> {
+        let m = &self.config.meta;
+        ws(root, "machine_name", &m.machine_name)?;
+        ws(root, "manufacturer", &m.manufacturer)?;
+        ws(root, "model", &m.model)?;
+        ws(root, "serial_number", &m.serial_number)?;
+        ws(root, "File_Version", &m.file_version)?;
+        ws(root, "Export_Date", &m.export_date)?;
+        ws(root, "Configuration_Hash", &m.configuration_hash)?;
+        for (k, v) in &m.extra {
+            write_extra_value(root, k, v)?;
+        }
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Machine group -> Machine
+    // ------------------------------------------------------------------
+
+    fn write_machine_attrs(&self, grp: &Group) -> Result<()> {
+        let ma = &self.config.machine;
+        ws(grp, "ID", ma.id.as_deref().unwrap_or(""))?;
+        ws(grp, "Machine_Name", &ma.machine_name)?;
+        ws(grp, "Manufacturer", &ma.manufacturer)?;
+        ws(grp, "Model", &ma.model)?;
+        ws(grp, "Serial_Number", &ma.serial_number)?;
+        wf(grp, "Build_Plate_X_Dimension", ma.build_plate_x)?;
+        ws(grp, "Build_Plate_X_Dimension_unit", ma.build_plate_x_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Build_Plate_Y_Dimension", ma.build_plate_y)?;
+        ws(grp, "Build_Plate_Y_Dimension_unit", ma.build_plate_y_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Build_Plate_Z_Dimension", ma.build_plate_z)?;
+        ws(grp, "Build_Plate_Z_Dimension_unit", ma.build_plate_z_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Build_Plate_Corner_Radius", ma.build_plate_radius)?;
+        ws(
+            grp,
+            "Build_Plate_Corner_Radius_unit",
+            ma.build_plate_radius_unit.as_deref().unwrap_or(""),
+        )?;
+        ws(grp, "Gas_Flow_Direction", ma.gas_flow_direction.as_deref().unwrap_or(""))?;
+        ws(grp, "Recoat_Direction", ma.recoat_direction.as_deref().unwrap_or(""))?;
+        ws(grp, "Recoater_Blade_Type", ma.recoater_blade_type.as_deref().unwrap_or(""))?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Optical trains
+    // ------------------------------------------------------------------
+
+    fn write_optical_trains(&self, trains_grp: &Group) -> Result<()> {
+        for (i, train) in self.config.optical_trains.iter().enumerate() {
+            let tid = layout::train_id(i);
+            let train_grp = trains_grp.create_group(&tid)?;
+            self.write_train_attrs(&train_grp, train)?;
+
+            self.write_scanner(&train_grp.create_group(layout::GROUP_SCANNER)?, &train.scanner)?;
+            self.write_light_source(
+                &train_grp.create_group(layout::GROUP_LIGHT_SOURCE)?,
+                &train.light_source,
+            )?;
+            self.write_collimator(
+                &train_grp.create_group(layout::GROUP_COLLIMATOR)?,
+                &train.collimator,
+            )?;
+            self.write_scanner_card(
+                &train_grp.create_group(layout::GROUP_SCANNER_CARD)?,
+                &train.scanner_card,
+            )?;
+
+            if let Some(sfcf) = &train.scan_field_correction_file {
+                self.write_sfcf(&train_grp, sfcf)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Train-level scalar attrs
+    // ------------------------------------------------------------------
+
+    fn write_train_attrs(&self, grp: &Group, t: &OpticalTrain) -> Result<()> {
+        ws(grp, "ID", t.id.as_deref().unwrap_or(""))?;
+        ws(grp, "Beam_Profile_Type", t.beam_profile_type.as_deref().unwrap_or(""))?;
+        ws(grp, "Beam_Waist_Definition", t.beam_waist_definition.as_deref().unwrap_or(""))?;
+        wf(grp, "Beam_Waist_Major", t.beam_waist_major)?;
+        ws(grp, "Beam_Waist_Major_unit", t.beam_waist_major_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Beam_Waist_Minor", t.beam_waist_minor)?;
+        ws(grp, "Beam_Waist_Minor_unit", t.beam_waist_minor_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Beam_Waist_Offset_Z", t.beam_waist_offset_z)?;
+        ws(grp, "Beam_Waist_Offset_Z_unit", t.beam_waist_offset_z_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Build_Plane_Offset_Major", t.build_plane_offset_major)?;
+        ws(
+            grp,
+            "Build_Plane_Offset_Major_unit",
+            t.build_plane_offset_major_unit.as_deref().unwrap_or(""),
+        )?;
+        wf(grp, "Build_Plane_Offset_Minor", t.build_plane_offset_minor)?;
+        ws(
+            grp,
+            "Build_Plane_Offset_Minor_unit",
+            t.build_plane_offset_minor_unit.as_deref().unwrap_or(""),
+        )?;
+        wf(grp, "Collimator_Focal_Length", t.collimator_focal_length)?;
+        ws(
+            grp,
+            "Collimator_Focal_Length_unit",
+            t.collimator_focal_length_unit.as_deref().unwrap_or(""),
+        )?;
+        wf(grp, "M2_Major", t.m2_major)?;
+        wf(grp, "M2_Minor", t.m2_minor)?;
+        wf(grp, "Major_Axis_Angle", t.major_axis_angle)?;
+        ws(grp, "Major_Axis_Angle_unit", t.major_axis_angle_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Rayleigh_Length_Major", t.rayleigh_length_major)?;
+        ws(
+            grp,
+            "Rayleigh_Length_Major_unit",
+            t.rayleigh_length_major_unit.as_deref().unwrap_or(""),
+        )?;
+        wf(grp, "Rayleigh_Length_Minor", t.rayleigh_length_minor)?;
+        ws(
+            grp,
+            "Rayleigh_Length_Minor_unit",
+            t.rayleigh_length_minor_unit.as_deref().unwrap_or(""),
+        )?;
+        ws(grp, "Scanner_Number", t.scanner_number.as_deref().unwrap_or(""))?;
+        wb(grp, "Thermal_Lensing_Test_Passed", t.thermal_lensing_passed)?;
+        wf(grp, "Thermal_Lensing_Focal_Plane_Shift", t.thermal_lensing_focal_plane_shift)?;
+        ws(
+            grp,
+            "Thermal_Lensing_Focal_Plane_Shift_unit",
+            t.thermal_lensing_focal_plane_shift_unit.as_deref().unwrap_or(""),
+        )?;
+        wf(grp, "Thermal_Lensing_Threshold", t.thermal_lensing_threshold)?;
+        ws(
+            grp,
+            "Thermal_Lensing_Threshold_unit",
+            t.thermal_lensing_threshold_unit.as_deref().unwrap_or(""),
+        )?;
+        Ok(())
+    }
+
+    fn write_scanner(&self, grp: &Group, s: &Scanner) -> Result<()> {
+        ws(grp, "Manufacturer", &s.manufacturer)?;
+        ws(grp, "Model", &s.model)?;
+        ws(grp, "Serial_Number", &s.serial_number)?;
+        wf(grp, "Working_Distance", s.working_distance)?;
+        ws(grp, "Working_Distance_unit", s.working_distance_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Scan_Field_Size_X", s.scan_field_x)?;
+        ws(grp, "Scan_Field_Size_X_unit", s.scan_field_x_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Scan_Field_Size_Y", s.scan_field_y)?;
+        ws(grp, "Scan_Field_Size_Y_unit", s.scan_field_y_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Scan_Field_Size_Z", s.scan_field_z)?;
+        ws(grp, "Scan_Field_Size_Z_unit", s.scan_field_z_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Scan_Head_Offset_X", s.scan_head_offset_x)?;
+        ws(grp, "Scan_Head_Offset_X_unit", s.scan_head_offset_x_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Scan_Head_Offset_Y", s.scan_head_offset_y)?;
+        ws(grp, "Scan_Head_Offset_Y_unit", s.scan_head_offset_y_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Scan_Head_Offset_Z", s.scan_head_offset_z)?;
+        ws(grp, "Scan_Head_Offset_Z_unit", s.scan_head_offset_z_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Scan_Head_Rotation", s.scan_head_rotation)?;
+        ws(grp, "Scan_Head_Rotation_unit", s.scan_head_rotation_unit.as_deref().unwrap_or(""))?;
+        ws(grp, "Axis_Configuration", s.axis_configuration.as_deref().unwrap_or(""))?;
+        wb_if_true(grp, "Invert_Actual_X", s.invert_actual_x)?;
+        wb_if_true(grp, "Invert_Actual_Y", s.invert_actual_y)?;
+        wb_if_true(grp, "Invert_Commanded_X", s.invert_commanded_x)?;
+        wb_if_true(grp, "Invert_Commanded_Y", s.invert_commanded_y)?;
+
+        self.write_axis(&grp.create_group("X_Axis")?, &s.x_axis)?;
+        self.write_axis(&grp.create_group("Y_Axis")?, &s.y_axis)?;
+        if let Some(z) = &s.z_axis {
+            self.write_axis(&grp.create_group("Z_Axis")?, z)?;
+        }
+        if let Some(focus) = &s.focus {
+            self.write_axis(&grp.create_group("Focus")?, focus)?;
+        }
+        Ok(())
+    }
+
+    /// Change 5: `Tuning_Parameters`/`Tuning_Type` are never written in
+    /// v1.1, regardless of what's on the model.
+    fn write_axis(&self, grp: &Group, ax: &AxisConfig) -> Result<()> {
+        wi(grp, "Actual_Bit_Resolution", ax.actual_bit_resolution)?;
+        ws(grp, "Actual_Bit_Resolution_unit", ax.actual_bit_resolution_unit.as_deref().unwrap_or(""))?;
+        wi(grp, "Commanded_Bit_Resolution", ax.commanded_bit_resolution)?;
+        ws(
+            grp,
+            "Commanded_Bit_Resolution_unit",
+            ax.commanded_bit_resolution_unit.as_deref().unwrap_or(""),
+        )?;
+        ws(grp, "Control_Type", ax.control_type.as_deref().unwrap_or(""))?;
+        wf(grp, "Range_Of_Motion", ax.range_of_motion)?;
+        ws(grp, "Range_Of_Motion_unit", ax.range_of_motion_unit.as_deref().unwrap_or(""))?;
+        ws(grp, "Smoothing_Kernel", ax.smoothing_kernel.as_deref().unwrap_or(""))?;
+        wf(grp, "Smoothing_Parameters", ax.smoothing_parameters)?;
+        Ok(())
+    }
+
+    /// Always writes a complete, present group — schema-complete over
+    /// omitted, even when `pc` is `None` or its lists are empty. See
+    /// `docs/migrations/v1_0_to_v1_1.md` Change 3's derivation rules.
+    fn write_power_characterization(
+        &self,
+        grp: &Group,
+        pc: Option<&PowerCharacterization>,
+    ) -> Result<()> {
+        ws(grp, "Algorithm_Type", pc.and_then(|p| p.algorithm_type.as_deref()).unwrap_or(""))?;
+        ws(grp, "Algorithm_Equation", pc.and_then(|p| p.algorithm_equation.as_deref()).unwrap_or(""))?;
+        ws(grp, "Input_Type", pc.and_then(|p| p.input_type.as_deref()).unwrap_or(""))?;
+        ws(
+            grp,
+            "Units_Derived_Quantity",
+            pc.and_then(|p| p.units_derived_quantity.as_deref()).unwrap_or(""),
+        )?;
+
+        // UTF-8 — same shared convention as SynchronousSensor's own
+        // Derivation_Equation_Constants (see `RawEquationConstant`'s doc
+        // comment in `v1_1/hdf5.rs`).
+        let empty: Vec<EquationConstant> = Vec::new();
+        let constants = pc.map(|p| &p.derivation_equation_constants).unwrap_or(&empty);
+        let const_rows: Vec<RawEquationConstant> = constants
+            .iter()
+            .map(|c| -> Result<RawEquationConstant> {
+                Ok(RawEquationConstant {
+                    name: c.name.parse().map_err(|e| {
+                        MachineConfigError::Parse(format!(
+                            "Derivation_Equation_Constants name {:?} does not fit in a \
+                             {EQUATION_CONSTANT_NAME_MAX_BYTES}-byte FixedUnicode field: {e:?}",
+                            c.name
+                        ))
+                    })?,
+                    value: c.value,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let const_arr = Array1::from(const_rows);
+        grp.new_dataset_builder()
+            .with_data(&const_arr)
+            .create(layout::DS_DERIVATION_EQUATION_CONSTANTS)?;
+
+        let empty_points: Vec<CalibrationPoint> = Vec::new();
+        let points = pc.map(|p| &p.characterization_points).unwrap_or(&empty_points);
+        let point_rows: Vec<RawCalibrationPoint> = points
+            .iter()
+            .map(|p| RawCalibrationPoint { input_value: p.input_value, output_value: p.output_value })
+            .collect();
+        let point_arr = Array1::from(point_rows);
+        grp.new_dataset_builder()
+            .with_data(&point_arr)
+            .create(layout::DS_CHARACTERIZATION_POINTS)?;
+
+        Ok(())
+    }
+
+    fn write_light_source(&self, grp: &Group, ls: &LightSource) -> Result<()> {
+        ws(grp, "Manufacturer", &ls.manufacturer)?;
+        ws(grp, "Model", &ls.model)?;
+        ws(grp, "Serial_Number", &ls.serial_number)?;
+        wf(grp, "Light_Wavelength", ls.wavelength)?;
+        ws(grp, "Light_Wavelength_unit", ls.wavelength_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Power_Max_Nominal", ls.power_max_nominal)?;
+        ws(grp, "Power_Max_Nominal_unit", ls.power_max_nominal_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Power_Max_Actual", ls.power_max_actual)?;
+        ws(grp, "Power_Max_Actual_unit", ls.power_max_actual_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Power_Min_Actual", ls.power_min_actual)?;
+        ws(grp, "Power_Min_Actual_unit", ls.power_min_actual_unit.as_deref().unwrap_or(""))?;
+        wf(grp, "Power_Min_Nominal", ls.power_min_nominal)?;
+        ws(grp, "Power_Min_Nominal_unit", ls.power_min_nominal_unit.as_deref().unwrap_or(""))?;
+        // Power_Bit_Resolution is always stored as a string in real HDF5 files.
+        let pbr_str = ls.power_bit_resolution.map(|v| v.to_string()).unwrap_or_default();
+        ws(grp, "Power_Bit_Resolution", &pbr_str)?;
+        ws(grp, "Power_Bit_Resolution_unit", ls.power_bit_resolution_unit.as_deref().unwrap_or(""))?;
+        // Change 4: Watts_To_Volts_Algorithm/Params are not written in v1.1 —
+        // power_characterization is the only StableModel representation of
+        // this concept now (POWER_CHARACTERIZATION_UNIFICATION_PLAN.md), so
+        // there's nothing else to fall back to deriving from.
+        self.write_power_characterization(
+            &grp.create_group(layout::GROUP_POWER_CHARACTERIZATION)?,
+            ls.power_characterization.as_ref(),
+        )?;
+        Ok(())
+    }
+
+    fn write_collimator(&self, grp: &Group, c: &Collimator) -> Result<()> {
+        ws(grp, "Manufacturer", &c.manufacturer)?;
+        ws(grp, "Model", &c.model)?;
+        ws(grp, "Serial_Number", &c.serial_number)?;
+        wf(grp, "Focal_Length", c.focal_length)?;
+        ws(grp, "Focal_Length_unit", c.focal_length_unit.as_deref().unwrap_or(""))?;
+        Ok(())
+    }
+
+    fn write_scanner_card(&self, grp: &Group, sc: &ScannerCard) -> Result<()> {
+        ws(grp, "Manufacturer", &sc.manufacturer)?;
+        ws(grp, "Model", &sc.model)?;
+        ws(grp, "Serial_Number", &sc.serial_number)?;
+        ws(grp, "Communication_Protocol", sc.communication_protocol.as_deref().unwrap_or(""))?;
+        wf(grp, "Sample_Period", sc.sample_period)?;
+        ws(grp, "Sample_Period_unit", sc.sample_period_unit.as_deref().unwrap_or(""))?;
+        Ok(())
+    }
+
+    fn write_sfcf(&self, train_grp: &Group, sfcf: &ScanFieldCorrectionFile) -> Result<()> {
+        let data: Vec<u8> = match &sfcf.raw_bytes {
+            Some(b) => b.clone(),
+            None => vec![0u8; sfcf.file_size.max(1) as usize],
+        };
+        let arr = Array1::from(data);
+        let ds = train_grp
+            .new_dataset_builder()
+            .with_data(&arr)
+            .create(layout::DS_SCAN_FIELD_CORRECTION_FILE)?;
+        ws_ds(&ds, "document_name", &sfcf.document_name)?;
+        ws_ds(&ds, "document_id", &sfcf.document_id)?;
+        wi_ds(&ds, "file_size", sfcf.file_size)?;
+        ws_ds(&ds, "valid_as_of_date", &sfcf.valid_as_of_date)?;
+        ws_ds(&ds, "document_created_at", sfcf.document_created_at.as_deref().unwrap_or(""))?;
+        ws_ds(&ds, "document_type", sfcf.document_type.as_deref().unwrap_or(""))?;
+        ws_ds(&ds, "original_uri", sfcf.original_uri.as_deref().unwrap_or(""))?;
+        Ok(())
+    }
+
+}
+
+impl<'a> WriterAdapter for Hdf5WriterV1_1<'a> {
+    fn write(&self, path: &Path) -> Result<()> {
+        self.write(path)
+    }
+}

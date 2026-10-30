@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::{Parser, Subcommand};
+use machine_config::extension_contract::DatasetData;
 use machine_config::models::MachineConfig;
 use machine_config::reader::MachineConfigReader;
 use machine_config::writer::MachineConfigWriter;
@@ -61,6 +62,27 @@ enum Command {
         #[arg(long)]
         inverse: bool,
     },
+    /// Copy an HDF5 machine config file, preserving all binary data
+    /// (correction grids, fc3 bytes).  Used by cross_check Phase 3.5.
+    CopyHdf5 {
+        /// Path to the source .h5 file.
+        input: PathBuf,
+        /// Path to write the copied .h5 file (created or overwritten).
+        output: PathBuf,
+    },
+    /// Recompute the configuration hash and compare it to the stored value.
+    ///
+    /// Never errors on a mismatch (the file is always fully readable) unless
+    /// `--quiet` is *not* passed, in which case a mismatch exits 1 — a
+    /// CLI-only convenience for scripting; the library API itself never
+    /// raises.
+    ConfigurationHash {
+        /// Path to the .h5 file.
+        path: PathBuf,
+        /// Print only the bare recomputed hex digest (for scripting).
+        #[arg(long)]
+        quiet: bool,
+    },
 }
 
 fn main() {
@@ -88,16 +110,45 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::CorrectionHash { path, train, inverse } => {
             let reader = MachineConfigReader::open(&path)?;
-            let cd = if inverse {
-                reader.get_inverse_correction_data(train)?
-            } else {
-                reader.get_correction_data(train)?
+            let config = reader.parse()?;
+            let dataset = if inverse { "Inverse_Correction_Data" } else { "Correction_Data" };
+            let train_id = format!("Optical_Train_{:02}", train + 1);
+            let grid = config
+                .extensions
+                .get("ClearBox")
+                .and_then(|t| t.children.get(&train_id))
+                .and_then(|t| t.datasets.get(dataset))
+                .ok_or_else(|| format!("no ClearBox {dataset} for {train_id}"))?;
+            let DatasetData::F64(values) = &grid.data else {
+                return Err(format!("ClearBox {dataset} for {train_id} is not float64").into());
             };
             // Hash as flat little-endian f64 bytes — explicit endianness for
             // cross-platform and cross-language determinism.
-            let bytes: Vec<u8> = cd.data.iter().flat_map(|&v| v.to_le_bytes()).collect();
+            let bytes: Vec<u8> = values.iter().flat_map(|&v| v.to_le_bytes()).collect();
             let digest = Sha256::digest(&bytes);
             println!("{digest:x}");
+        }
+        Command::CopyHdf5 { input, output } => {
+            let reader = MachineConfigReader::open(&input)?;
+            let config = reader.parse_with_binary()?;
+            MachineConfigWriter::new(&config).write(&output)?;
+        }
+        Command::ConfigurationHash { path, quiet } => {
+            let reader = MachineConfigReader::open(&path)?;
+            let config = reader.parse()?;
+            let stored = config.meta.configuration_hash.clone();
+            let recomputed = machine_config::hash::compute_configuration_hash(&config);
+            let valid = config.meta.is_valid.unwrap_or(false);
+            if quiet {
+                println!("{recomputed}");
+            } else {
+                println!("stored: {stored}");
+                println!("recomputed: {recomputed}");
+                println!("valid: {valid}");
+                if !valid {
+                    process::exit(1);
+                }
+            }
         }
     }
     Ok(())

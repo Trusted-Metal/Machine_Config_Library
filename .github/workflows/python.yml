@@ -3,24 +3,20 @@ name: Python
 on:
   workflow_dispatch:
   push:
-    branches: ["main"]
-    paths:
-      - "python/**"
-      - "fixtures/**"
-      - ".github/workflows/python.yml"
+    branches: ["main", "release"]
   pull_request:
-    paths:
-      - "python/**"
-      - "fixtures/**"
-      - ".github/workflows/python.yml"
+
+permissions:
+  contents: read
 
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Test (Python ${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.12"]
 
     steps:
@@ -35,7 +31,13 @@ jobs:
       - name: Install package and dependencies
         run: pip install -e "python/[dev]"
 
+      - name: Check capability catalog codegen is up to date
+        run: |
+          pip install pyyaml jinja2
+          python tools/generate_capabilities.py --check
+
       - name: Verify golden file checksum
+        shell: bash
         run: |
           ACTUAL=$(sha256sum fixtures/reference_output.json | cut -d' ' -f1)
           EXPECTED=$(tr -d '[:space:]' < fixtures/reference_output.sha256)
@@ -55,16 +57,33 @@ jobs:
         run: machine-config validate fixtures/reference_config.h5
 
       - name: Export reference fixture to JSON (CLI)
-        run: machine-config export-json fixtures/reference_config.h5 --output /tmp/reference_output_ci.json
+        run: machine-config export-json fixtures/reference_config.h5 --output "${{ runner.temp }}/reference_output_ci.json"
+
+      - name: Full workflow example (smoke test)
+        run: python examples/full_workflow/python/main.py
 
       - name: Confirm exported JSON matches golden file
+        shell: bash
         run: |
           python - <<'EOF'
-          import json, pathlib, sys
-          golden = json.loads(pathlib.Path("fixtures/reference_output.json").read_text())
-          ci_out = json.loads(pathlib.Path("/tmp/reference_output_ci.json").read_text())
+          import json, os, pathlib, sys
+
+          def strip(v):
+              # The golden keeps extension datasets' metadata only (grids are ~27 MB of data).
+              if isinstance(v, dict):
+                  for ds in (v.get("datasets") or {}).values():
+                      if isinstance(ds, dict):
+                          ds.pop("data", None)
+                  for x in v.values():
+                      strip(x)
+              elif isinstance(v, list):
+                  for x in v:
+                      strip(x)
+              return v
+
+          golden = strip(json.loads(pathlib.Path("fixtures/reference_output.json").read_text()))
+          ci_out = strip(json.loads(pathlib.Path(os.environ["RUNNER_TEMP"]).joinpath("reference_output_ci.json").read_text()))
           if golden != ci_out:
-              import pprint
               print("FAIL: CLI export does not match committed golden file.")
               sys.exit(1)
           print("CLI export matches golden file.")
@@ -73,6 +92,25 @@ jobs:
       - name: Upload exported JSON as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: reference_output_py${{ matrix.python-version }}
-          path: /tmp/reference_output_ci.json
+          name: reference_output_py${{ matrix.python-version }}_${{ matrix.os }}
+          path: ${{ runner.temp }}/reference_output_ci.json
           retention-days: 14
+
+  build:
+    name: Build wheel
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build frontend
+        run: pip install build
+
+      - name: Build wheel and sdist
+        run: python -m build
+        working-directory: python

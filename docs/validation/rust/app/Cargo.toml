@@ -1,0 +1,17 @@
+[workspace]
+# Deliberately its own standalone workspace, not a member of the repo root's
+# ["rust"] workspace — this app is meant to behave like a real external
+# consumer with its own independent build/lockfile, mirroring how the ported
+# Node.js app is its own separate npm project rather than being built as part
+# of nodejs/'s own package.
+
+[package]
+name = "mcl_rust_validation"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+machine-config = { path = "../../../../rust" }
+sha2 = "0.10"
+hex = "0.4"
+tempfile = "3"

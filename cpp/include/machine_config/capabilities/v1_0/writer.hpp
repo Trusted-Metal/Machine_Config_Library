@@ -1,0 +1,347 @@
+#pragma once
+// File_Version 1.0 HDF5 writer — on-disk layout, attribute names, and casting.
+// Public MachineConfigWriter dispatches here after reading File_Version from the model.
+
+#include "machine_config/adapters.hpp"
+#include "machine_config/clearbox_legacy.hpp"
+#include "machine_config/models.hpp"
+#include "machine_config/power_characterization.hpp"
+#include "machine_config/capabilities/v1_0/compound_types.hpp"
+#include "machine_config/capabilities/v1_0/layout.hpp"
+#include "machine_config/extensions_hdf5.hpp"
+
+#include <highfive/H5File.hpp>
+
+#include <cstring>
+#include <filesystem>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+namespace machine_config {
+
+// ---------------------------------------------------------------------------
+// Attribute-writing helpers (inverses of reader.hpp read helpers)
+// ---------------------------------------------------------------------------
+
+// VarLen UTF-8 string attribute — matches Python h5py default string type.
+template <typename Loc>
+inline void ws(Loc& loc, const std::string& key, const std::string& val) {
+    loc.template createAttribute<std::string>(key, HighFive::DataSpace::Scalar()).write(val);
+}
+
+// float64 attribute; nullopt → "".
+template <typename Loc>
+inline void wf(Loc& loc, const std::string& key, std::optional<double> val) {
+    if (val)
+        loc.template createAttribute<double>(key, HighFive::DataSpace::Scalar()).write(*val);
+    else
+        ws(loc, key, "");
+}
+
+// int64 attribute; nullopt → "".
+template <typename Loc>
+inline void wi(Loc& loc, const std::string& key, std::optional<int64_t> val) {
+    if (val)
+        loc.template createAttribute<int64_t>(key, HighFive::DataSpace::Scalar()).write(*val);
+    else
+        ws(loc, key, "");
+}
+
+// bool → int64 0/1; nullopt → "".
+template <typename Loc>
+inline void wb(Loc& loc, const std::string& key, std::optional<bool> val) {
+    if (val) {
+        int64_t v = *val ? 1LL : 0LL;
+        loc.template createAttribute<int64_t>(key, HighFive::DataSpace::Scalar()).write(v);
+    } else {
+        ws(loc, key, "");
+    }
+}
+
+// Writes an int64 attribute (1) only when val is true; writes nothing at
+// all when val is false — unlike wb, there is no "absent" placeholder
+// written for the false case. Used for Scanner's four invert_* fields,
+// which never appear in any output unless true (user-confirmed,
+// 2026-08-21): a write->read round-trip is deliberately lossy for an
+// explicit false, which becomes indistinguishable from "never set".
+template <typename Loc>
+inline void wbIfTrue(Loc& loc, const std::string& key, bool val) {
+    if (val) {
+        loc.template createAttribute<int64_t>(key, HighFive::DataSpace::Scalar()).write(int64_t{1});
+    }
+}
+
+// Write extra attrs back preserving type (string / int / float).
+template <typename Loc>
+inline void writeExtra(Loc& loc, const ExtraAttrs& extra) {
+    for (auto it = extra.begin(); it != extra.end(); ++it) {
+        const std::string& k = it.key();
+        const auto& v = it.value();
+        if (v.is_string())
+            ws(loc, k, v.template get<std::string>());
+        else if (v.is_number_integer()) {
+            int64_t iv = v.template get<int64_t>();
+            loc.template createAttribute<int64_t>(k, HighFive::DataSpace::Scalar()).write(iv);
+        } else if (v.is_number_float()) {
+            double dv = v.template get<double>();
+            loc.template createAttribute<double>(k, HighFive::DataSpace::Scalar()).write(dv);
+        } else if (v.is_boolean()) {
+            int64_t bv = v.template get<bool>() ? 1LL : 0LL;
+            loc.template createAttribute<int64_t>(k, HighFive::DataSpace::Scalar()).write(bv);
+        } else {
+            ws(loc, k, v.dump());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hdf5WriterV1_0
+// ---------------------------------------------------------------------------
+
+namespace capabilities::v1_0 {
+
+class Hdf5WriterV1_0 : public WriterAdapter {
+public:
+    explicit Hdf5WriterV1_0(const MachineConfig& cfg) : cfg_(cfg) {}
+
+    void write(std::filesystem::path path) const override {
+        validateExtensions();
+        const auto clearBox = clearBoxGroups();
+        HighFive::File f(path.string(),
+            HighFive::File::ReadWrite | HighFive::File::Create | HighFive::File::Truncate);
+        writeRootAttrs(f);
+        auto mgrp = f.createGroup("Machine");
+        writeMachineAttrs(mgrp);
+        auto ogrp = mgrp.createGroup("Optical_Trains");
+        for (size_t i = 0; i < cfg_.optical_trains.size(); ++i) {
+            auto tg = ogrp.createGroup(trainId(i));
+            auto cb = clearBox.find(trainId(i));
+            writeTrain(tg, cfg_.optical_trains[i], cb != clearBox.end() ? &cb->second : nullptr);
+        }
+        auto legacy = cfg_.extensions.find(LEGACY_OPCUA_EXTENSION_NAME);
+        if (legacy != cfg_.extensions.end())
+            extension::writeExtensionTree(f.getId(), ROOT_OPCUA, legacy->second);
+    }
+
+private:
+    const MachineConfig& cfg_;
+
+    // Runs before the output file is created, so a rejected config never leaves a partial file
+    // behind. File_Version 1.0 can only hold the legacy OPCUA/ extension and ClearBox (split per train).
+    void validateExtensions() const {
+        for (const auto& [name, tree] : cfg_.extensions) {
+            extension::validate(tree, name);
+            if (name != LEGACY_OPCUA_EXTENSION_NAME && name != clearbox_legacy::EXTENSION_NAME)
+                throw std::runtime_error("File_Version 1.0 has no Extensions group; cannot write extension \"" + name + "\"");
+        }
+    }
+
+    void writeRootAttrs(HighFive::File& f) const {
+        const auto& m = cfg_.meta;
+        ws(f, "machine_name",       m.machine_name);
+        ws(f, "manufacturer",       m.manufacturer);
+        ws(f, "model",              m.model);
+        ws(f, "serial_number",      m.serial_number);
+        ws(f, "File_Version",       m.file_version);
+        ws(f, "Export_Date",        m.export_date);
+        ws(f, "Configuration_Hash", m.configuration_hash);
+        writeExtra(f, m.extra);
+    }
+
+    void writeMachineAttrs(HighFive::Group& grp) const {
+        const auto& ma = cfg_.machine;
+        ws(grp, "ID",                            ma.id.value_or(""));
+        ws(grp, "Machine_Name",                  ma.machine_name);
+        ws(grp, "Manufacturer",                  ma.manufacturer);
+        ws(grp, "Model",                         ma.model);
+        ws(grp, "Serial_Number",                 ma.serial_number);
+        wf(grp, "Build_Plate_X_Dimension",       ma.build_plate_x);
+        ws(grp, "Build_Plate_X_Dimension_unit",  ma.build_plate_x_unit.value_or(""));
+        wf(grp, "Build_Plate_Y_Dimension",       ma.build_plate_y);
+        ws(grp, "Build_Plate_Y_Dimension_unit",  ma.build_plate_y_unit.value_or(""));
+        wf(grp, "Build_Plate_Z_Dimension",       ma.build_plate_z);
+        ws(grp, "Build_Plate_Z_Dimension_unit",  ma.build_plate_z_unit.value_or(""));
+        wf(grp, "Build_Plate_Corner_Radius",     ma.build_plate_radius);
+        ws(grp, "Build_Plate_Corner_Radius_unit",ma.build_plate_radius_unit.value_or(""));
+        ws(grp, "Gas_Flow_Direction",            ma.gas_flow_direction.value_or(""));
+        ws(grp, "Recoat_Direction",              ma.recoat_direction.value_or(""));
+        ws(grp, "Recoater_Blade_Type",           ma.recoater_blade_type.value_or(""));
+    }
+
+    void writeTrain(HighFive::Group& grp, const OpticalTrain& t,
+                    const extension::Tree* clearBox) const {
+        ws(grp, "ID",                                 t.id.value_or(""));
+        ws(grp, "Beam_Profile_Type",                  t.beam_profile_type.value_or(""));
+        ws(grp, "Beam_Waist_Definition",              t.beam_waist_definition.value_or(""));
+        wf(grp, "Beam_Waist_Major",                   t.beam_waist_major);
+        ws(grp, "Beam_Waist_Major_unit",              t.beam_waist_major_unit.value_or(""));
+        wf(grp, "Beam_Waist_Minor",                   t.beam_waist_minor);
+        ws(grp, "Beam_Waist_Minor_unit",              t.beam_waist_minor_unit.value_or(""));
+        wf(grp, "Beam_Waist_Offset_Z",                t.beam_waist_offset_z);
+        ws(grp, "Beam_Waist_Offset_Z_unit",           t.beam_waist_offset_z_unit.value_or(""));
+        wf(grp, "Build_Plane_Offset_Major",           t.build_plane_offset_major);
+        ws(grp, "Build_Plane_Offset_Major_unit",      t.build_plane_offset_major_unit.value_or(""));
+        wf(grp, "Build_Plane_Offset_Minor",           t.build_plane_offset_minor);
+        ws(grp, "Build_Plane_Offset_Minor_unit",      t.build_plane_offset_minor_unit.value_or(""));
+        wf(grp, "Collimator_Focal_Length",            t.collimator_focal_length);
+        ws(grp, "Collimator_Focal_Length_unit",       t.collimator_focal_length_unit.value_or(""));
+        wf(grp, "M2_Major",                           t.m2_major);
+        wf(grp, "M2_Minor",                           t.m2_minor);
+        wf(grp, "Major_Axis_Angle",                   t.major_axis_angle);
+        ws(grp, "Major_Axis_Angle_unit",              t.major_axis_angle_unit.value_or(""));
+        wf(grp, "Rayleigh_Length_Major",              t.rayleigh_length_major);
+        ws(grp, "Rayleigh_Length_Major_unit",         t.rayleigh_length_major_unit.value_or(""));
+        wf(grp, "Rayleigh_Length_Minor",              t.rayleigh_length_minor);
+        ws(grp, "Rayleigh_Length_Minor_unit",         t.rayleigh_length_minor_unit.value_or(""));
+        ws(grp, "Scanner_Number",                     t.scanner_number.value_or(""));
+        wb(grp, "Thermal_Lensing_Test_Passed",        t.thermal_lensing_passed);
+        wf(grp, "Thermal_Lensing_Focal_Plane_Shift",       t.thermal_lensing_focal_plane_shift);
+        ws(grp, "Thermal_Lensing_Focal_Plane_Shift_unit",  t.thermal_lensing_focal_plane_shift_unit.value_or(""));
+        wf(grp, "Thermal_Lensing_Threshold",          t.thermal_lensing_threshold);
+        ws(grp, "Thermal_Lensing_Threshold_unit",     t.thermal_lensing_threshold_unit.value_or(""));
+
+        auto sg = grp.createGroup("Scanner");      writeScanner(sg, t.scanner);
+        auto lg = grp.createGroup("Light_Source"); writeLightSource(lg, t.light_source);
+        auto cg = grp.createGroup("Collimator");   writeCollimator(cg, t.collimator);
+        auto kg = grp.createGroup("Scanner_Card"); writeScannerCard(kg, t.scanner_card);
+
+        if (clearBox) writeClearBoxGroup(grp, *clearBox);
+        if (t.scan_field_correction_file)
+            writeSfcf(grp, *t.scan_field_correction_file);
+    }
+
+    void writeAxis(HighFive::Group& grp, const AxisConfig& ax) const {
+        wi(grp, "Actual_Bit_Resolution",        ax.actual_bit_resolution);
+        ws(grp, "Actual_Bit_Resolution_unit",   ax.actual_bit_resolution_unit.value_or(""));
+        wi(grp, "Commanded_Bit_Resolution",     ax.commanded_bit_resolution);
+        ws(grp, "Commanded_Bit_Resolution_unit",ax.commanded_bit_resolution_unit.value_or(""));
+        ws(grp, "Control_Type",                 ax.control_type.value_or(""));
+        wf(grp, "Range_Of_Motion",              ax.range_of_motion);
+        ws(grp, "Range_Of_Motion_unit",         ax.range_of_motion_unit.value_or(""));
+        ws(grp, "Smoothing_Kernel",             ax.smoothing_kernel.value_or(""));
+        wf(grp, "Smoothing_Parameters",         ax.smoothing_parameters);
+        ws(grp, "Tuning_Parameters",            ax.tuning_parameters.value_or(""));
+        ws(grp, "Tuning_Type",                  ax.tuning_type.value_or(""));
+    }
+
+    void writeScanner(HighFive::Group& grp, const Scanner& s) const {
+        ws(grp, "Manufacturer",            s.manufacturer);
+        ws(grp, "Model",                   s.model);
+        ws(grp, "Serial_Number",           s.serial_number);
+        wf(grp, "Working_Distance",        s.working_distance);
+        ws(grp, "Working_Distance_unit",   s.working_distance_unit.value_or(""));
+        wf(grp, "Scan_Field_Size_X",       s.scan_field_x);
+        ws(grp, "Scan_Field_Size_X_unit",  s.scan_field_x_unit.value_or(""));
+        wf(grp, "Scan_Field_Size_Y",       s.scan_field_y);
+        ws(grp, "Scan_Field_Size_Y_unit",  s.scan_field_y_unit.value_or(""));
+        wf(grp, "Scan_Field_Size_Z",       s.scan_field_z);
+        ws(grp, "Scan_Field_Size_Z_unit",  s.scan_field_z_unit.value_or(""));
+        wf(grp, "Scan_Head_Offset_X",      s.scan_head_offset_x);
+        ws(grp, "Scan_Head_Offset_X_unit", s.scan_head_offset_x_unit.value_or(""));
+        wf(grp, "Scan_Head_Offset_Y",      s.scan_head_offset_y);
+        ws(grp, "Scan_Head_Offset_Y_unit", s.scan_head_offset_y_unit.value_or(""));
+        wf(grp, "Scan_Head_Offset_Z",      s.scan_head_offset_z);
+        ws(grp, "Scan_Head_Offset_Z_unit", s.scan_head_offset_z_unit.value_or(""));
+        wf(grp, "Scan_Head_Rotation",      s.scan_head_rotation);
+        ws(grp, "Scan_Head_Rotation_unit", s.scan_head_rotation_unit.value_or(""));
+        ws(grp, "Axis_Configuration",      s.axis_configuration.value_or(""));
+        wbIfTrue(grp, "Invert_Actual_X",      s.invert_actual_x);
+        wbIfTrue(grp, "Invert_Actual_Y",      s.invert_actual_y);
+        wbIfTrue(grp, "Invert_Commanded_X",   s.invert_commanded_x);
+        wbIfTrue(grp, "Invert_Commanded_Y",   s.invert_commanded_y);
+        auto xg = grp.createGroup("X_Axis"); writeAxis(xg, s.x_axis);
+        auto yg = grp.createGroup("Y_Axis"); writeAxis(yg, s.y_axis);
+        if (s.z_axis) { auto zg = grp.createGroup("Z_Axis"); writeAxis(zg, *s.z_axis); }
+        if (s.focus)  { auto fg = grp.createGroup("Focus");  writeAxis(fg, *s.focus);  }
+    }
+
+    void writeLightSource(HighFive::Group& grp, const LightSource& ls) const {
+        ws(grp, "Manufacturer",               ls.manufacturer);
+        ws(grp, "Model",                      ls.model);
+        ws(grp, "Serial_Number",              ls.serial_number);
+        wf(grp, "Light_Wavelength",           ls.wavelength);
+        ws(grp, "Light_Wavelength_unit",      ls.wavelength_unit.value_or(""));
+        wf(grp, "Power_Max_Nominal",          ls.power_max_nominal);
+        ws(grp, "Power_Max_Nominal_unit",     ls.power_max_nominal_unit.value_or(""));
+        wf(grp, "Power_Max_Actual",           ls.power_max_actual);
+        ws(grp, "Power_Max_Actual_unit",      ls.power_max_actual_unit.value_or(""));
+        wf(grp, "Power_Min_Actual",           ls.power_min_actual);
+        ws(grp, "Power_Min_Actual_unit",      ls.power_min_actual_unit.value_or(""));
+        wf(grp, "Power_Min_Nominal",          ls.power_min_nominal);
+        ws(grp, "Power_Min_Nominal_unit",     ls.power_min_nominal_unit.value_or(""));
+        // Real HDF5 files store Power_Bit_Resolution as a string (see §3.11).
+        std::string pbr = ls.power_bit_resolution
+            ? nlohmann::json(*ls.power_bit_resolution).dump()
+            : std::string{};
+        ws(grp, "Power_Bit_Resolution",       pbr);
+        ws(grp, "Power_Bit_Resolution_unit",  ls.power_bit_resolution_unit.value_or(""));
+        auto [algorithm, params] = backwardFlatFieldsPoints(ls.power_characterization);
+        ws(grp, "Watts_To_Volts_Algorithm",   algorithm.value_or(""));
+        ws(grp, "Watts_To_Volts_Params",      params.value_or(""));
+    }
+
+    void writeCollimator(HighFive::Group& grp, const Collimator& c) const {
+        ws(grp, "Manufacturer",      c.manufacturer);
+        ws(grp, "Model",             c.model);
+        ws(grp, "Serial_Number",     c.serial_number);
+        wf(grp, "Focal_Length",      c.focal_length);
+        ws(grp, "Focal_Length_unit", c.focal_length_unit.value_or(""));
+    }
+
+    void writeScannerCard(HighFive::Group& grp, const ScannerCard& sc) const {
+        ws(grp, "Manufacturer",            sc.manufacturer);
+        ws(grp, "Model",                   sc.model);
+        ws(grp, "Serial_Number",           sc.serial_number);
+        ws(grp, "Communication_Protocol",  sc.communication_protocol.value_or(""));
+        wf(grp, "Sample_Period",           sc.sample_period);
+        ws(grp, "Sample_Period_unit",      sc.sample_period_unit.value_or(""));
+    }
+
+    // Each optical train's verbatim File_Version 1.0 ClearBox group, keyed by train id. Runs before
+    // the output file is created, so a tree File_Version 1.0 cannot hold never leaves a partial
+    // file behind.
+    std::map<std::string, extension::Tree> clearBoxGroups() const {
+        auto it = cfg_.extensions.find(clearbox_legacy::EXTENSION_NAME);
+        if (it == cfg_.extensions.end()) return {};
+        auto groups = clearbox_legacy::toV10Trains(it->second);
+        for (const auto& [id, tree] : groups) {
+            (void)tree;
+            bool matched = false;
+            for (size_t i = 0; i < cfg_.optical_trains.size(); ++i)
+                if (trainId(i) == id) matched = true;
+            if (!matched)
+                throw std::runtime_error("ClearBox: " + id + " has no matching optical train");
+        }
+        return groups;
+    }
+
+    void writeClearBoxGroup(HighFive::Group& grp, const extension::Tree& tree) const {
+        auto og = grp.createGroup("Optional_Components");
+        extension::writeExtensionTree(og.getId(), GROUP_CLEARBOX, tree);
+    }
+
+    void writeSfcf(HighFive::Group& train_grp, const ScanFieldCorrectionFile& sfcf) const {
+        std::vector<uint8_t> data;
+        if (sfcf.raw_bytes)
+            data = *sfcf.raw_bytes;
+        else
+            data.resize(static_cast<size_t>(sfcf.file_size > 0 ? sfcf.file_size : 1), 0);
+        auto ds = train_grp.createDataSet<uint8_t>(
+            "scan_field_correction_file", HighFive::DataSpace({data.size()}));
+        H5Dwrite(ds.getId(), H5T_NATIVE_UINT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, data.data());
+        ws(ds, "document_name",       sfcf.document_name);
+        ws(ds, "document_id",         sfcf.document_id);
+        ds.template createAttribute<int64_t>(
+            "file_size", HighFive::DataSpace::Scalar()).write(sfcf.file_size);
+        ws(ds, "valid_as_of_date",    sfcf.valid_as_of_date);
+        ws(ds, "document_created_at", sfcf.document_created_at.value_or(""));
+        ws(ds, "document_type",       sfcf.document_type.value_or(""));
+        ws(ds, "original_uri",        sfcf.original_uri.value_or(""));
+    }
+
+};
+
+}  // namespace capabilities::v1_0
+
+} // namespace machine_config

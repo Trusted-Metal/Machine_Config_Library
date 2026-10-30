@@ -1,0 +1,756 @@
+#pragma once
+// Machine Config Library — C++ data models.
+// Mirrors python/src/machine_config/models.py and rust/src/models.rs.
+// Type mapping: §4.6 of IMPLEMENTATION_PLAN.md.
+//
+// JSON field names and structure are authoritative from Python _config_to_dict().
+// Key layout decisions:
+//   - Machine is FLAT (build_plate fields inlined, not nested); canonical field
+//     name is "build_plate_radius" (not "build_plate_corner_radius").
+//   - raw_bytes / opcua are OMITTED
+//     (not serialised as null) when absent.  All other optional fields -> JSON null.
+//   - Grid cells use std::optional<double>: nullopt = HDF5 NaN / out-of-field.
+//   - CorrectionData (flat buffer) is for binary ops only; not serialised to JSON.
+
+#include "machine_config/extension_contract.hpp"
+#include <nlohmann/json.hpp>
+
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace machine_config {
+
+// ---------------------------------------------------------------------------
+// Internal serialisation helpers
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+// Serialise std::optional<T> as JSON null when empty, value otherwise.
+template <typename T>
+inline nlohmann::json opt_to_j(const std::optional<T>& v) {
+    return v ? nlohmann::json(*v) : nlohmann::json(nullptr);
+}
+
+// Read an optional field: returns nullopt when the key is missing or null.
+template <typename T>
+inline std::optional<T> j_to_opt(const nlohmann::json& j, const char* key) {
+    auto it = j.find(key);
+    if (it == j.end() || it->is_null()) return std::nullopt;
+    return it->get<T>();
+}
+
+} // namespace detail
+
+// ---------------------------------------------------------------------------
+// Type aliases
+// ---------------------------------------------------------------------------
+
+// Arbitrary non-schema HDF5 attributes preserved verbatim.
+using ExtraAttrs = nlohmann::json;
+
+// ---------------------------------------------------------------------------
+// Structs — defined bottom-up (inner before outer)
+// ---------------------------------------------------------------------------
+
+// Metadata for the embedded .fc3 scan-field correction file.
+// HDF5 source: a Dataset (not a Group) at .../scan_field_correction_file.
+struct ScanFieldCorrectionFile {
+    std::string document_name;
+    std::string document_id;
+    std::int64_t file_size{0};
+    std::string valid_as_of_date;
+    std::optional<std::string> document_created_at;
+    std::optional<std::string> document_type;
+    std::optional<std::string> original_uri;
+    // raw_bytes: populated only when include_binary=true; base64-encoded in JSON.
+    // Omitted from JSON entirely when absent.
+    std::optional<std::vector<std::uint8_t>> raw_bytes;
+};
+
+// One named constant used to derive an equation (e.g. `a`/`b` for a
+// Log-Linear fit, `c0`..`cN` for a polynomial fit). Stored on disk as a
+// 64-byte fixed-length UTF-8 string (see SYNCHRONOUS_SENSOR_PLAN.md's
+// "Compound dataset string convention") — name here is a plain
+// std::string; the fixed-width conversion happens only at the HDF5 adapter
+// layer (capabilities::v1_0's EquationConstantRow).
+struct EquationConstant {
+    std::string name;
+    double value{0.0};
+};
+
+// One raw calibration pair. input_value is in whatever unit
+// SynchronousSensor::input_type implies; output_value is in whatever unit
+// SynchronousSensor::sensor_output_space implies (no per-row unit tag) —
+// see SYNCHRONOUS_SENSOR_PLAN.md's "Why compound datasets" for the
+// convention.
+struct CalibrationPoint {
+    double input_value{0.0};
+    double output_value{0.0};
+};
+
+// v1.1 addition (Changes 3/4): a structured algorithm + equation + constants
+// + characterization points describing a power conversion. Shared, identical
+// struct for both ClearBox::power_characterization (ClearBox's Volts->Watts
+// fit; migrated data has real derivation_equation_constants but zero
+// characterization_points) and LightSource::power_characterization
+// (Light_Source's Volts->Watts fit; migrated data is the inverse — zero
+// derivation_equation_constants, real characterization_points) — same kind
+// of thing at two different HDF5 paths, not the same instance. See
+// docs/migrations/v1_0_to_v1_1.md Changes 3/4 for the full derivation rules.
+struct PowerCharacterization {
+    std::optional<std::string> algorithm_type;
+    std::optional<std::string> algorithm_equation;
+    std::optional<std::string> input_type;
+    std::optional<std::string> units_derived_quantity;
+    std::vector<EquationConstant> derivation_equation_constants;
+    std::vector<CalibrationPoint> characterization_points;
+};
+
+struct Collimator {
+    std::string manufacturer;
+    std::string model;
+    std::string serial_number;
+    std::optional<double>      focal_length;
+    std::optional<std::string> focal_length_unit;
+};
+
+struct ScannerCard {
+    std::string manufacturer;
+    std::string model;
+    std::string serial_number;
+    std::optional<std::string> communication_protocol;
+    std::optional<double>      sample_period;
+    std::optional<std::string> sample_period_unit;
+};
+
+// One scanner axis tuning sub-group (X_Axis, Y_Axis, Z_Axis, Focus).
+struct AxisConfig {
+    std::optional<std::int64_t> actual_bit_resolution;
+    std::optional<std::string>  actual_bit_resolution_unit;
+    std::optional<std::int64_t> commanded_bit_resolution;
+    std::optional<std::string>  commanded_bit_resolution_unit;
+    std::optional<std::string>  control_type;
+    std::optional<double>       range_of_motion;
+    std::optional<std::string>  range_of_motion_unit;
+    std::optional<std::string>  smoothing_kernel;
+    std::optional<double>       smoothing_parameters;
+    std::optional<std::string>  tuning_parameters;
+    std::optional<std::string>  tuning_type;
+};
+
+struct Scanner {
+    std::string manufacturer;
+    std::string model;
+    std::string serial_number;
+    std::optional<double>      working_distance;
+    std::optional<std::string> working_distance_unit;
+    std::optional<double>      scan_field_x;
+    std::optional<std::string> scan_field_x_unit;
+    std::optional<double>      scan_field_y;
+    std::optional<std::string> scan_field_y_unit;
+    std::optional<double>      scan_field_z;
+    std::optional<std::string> scan_field_z_unit;
+    std::optional<double>      scan_head_offset_x;
+    std::optional<std::string> scan_head_offset_x_unit;
+    std::optional<double>      scan_head_offset_y;
+    std::optional<std::string> scan_head_offset_y_unit;
+    std::optional<double>      scan_head_offset_z;
+    std::optional<std::string> scan_head_offset_z_unit;
+    std::optional<double>      scan_head_rotation;
+    std::optional<std::string> scan_head_rotation_unit;
+    // "2D" / "3D" / "3D+Focus"; constraint enforced by reader, not here.
+    std::optional<std::string> axis_configuration;
+    AxisConfig x_axis;
+    AxisConfig y_axis;
+    std::optional<AxisConfig> z_axis;
+    std::optional<AxisConfig> focus;
+    // Plain bool, not std::optional<bool> — deliberately different from
+    // every other bool field in this schema. Defaults to false whether the
+    // on-disk attribute is absent or explicitly 0 (user-confirmed,
+    // 2026-08-21). Never serialised (or written back to HDF5) unless
+    // true — a write->read round-trip is deliberately lossy for an
+    // explicit false, which becomes indistinguishable from "never set".
+    bool invert_actual_x{false};
+    bool invert_actual_y{false};
+    bool invert_commanded_x{false};
+    bool invert_commanded_y{false};
+};
+
+struct LightSource {
+    std::string manufacturer;
+    std::string model;
+    std::string serial_number;
+    std::optional<double>      wavelength;
+    std::optional<std::string> wavelength_unit;
+    std::optional<double>      power_max_nominal;
+    std::optional<std::string> power_max_nominal_unit;
+    std::optional<double>      power_max_actual;
+    std::optional<std::string> power_max_actual_unit;
+    std::optional<double>      power_min_actual;
+    std::optional<std::string> power_min_actual_unit;
+    std::optional<double>      power_min_nominal;
+    std::optional<std::string> power_min_nominal_unit;
+    // HDF5 stores this attribute as a string; the reader parses it to double.
+    std::optional<double>      power_bit_resolution;
+    std::optional<std::string> power_bit_resolution_unit;
+    // The only representation of the watts<->volts conversion concept, for
+    // files of either version — same shift in responsibility described on
+    // ClearBox::power_characterization above. Omitted from JSON when
+    // nullopt, same reasoning as ClearBox::synchronous_sensors.
+    std::optional<PowerCharacterization> power_characterization;
+};
+
+struct OpticalTrain {
+    std::string train_id;
+    std::optional<std::string> id; // UUID on the train group, often empty
+    std::optional<std::string> beam_profile_type;
+    std::optional<std::string> beam_waist_definition;
+    std::optional<double>      beam_waist_major;
+    std::optional<std::string> beam_waist_major_unit;
+    std::optional<double>      beam_waist_minor;
+    std::optional<std::string> beam_waist_minor_unit;
+    std::optional<double>      beam_waist_offset_z;
+    std::optional<std::string> beam_waist_offset_z_unit;
+    std::optional<double>      build_plane_offset_major;
+    std::optional<std::string> build_plane_offset_major_unit;
+    std::optional<double>      build_plane_offset_minor;
+    std::optional<std::string> build_plane_offset_minor_unit;
+    // Train-level duplicate of collimator.focal_length.
+    std::optional<double>      collimator_focal_length;
+    std::optional<std::string> collimator_focal_length_unit;
+    std::optional<double>      m2_major;
+    std::optional<double>      m2_minor;
+    std::optional<double>      major_axis_angle;
+    std::optional<std::string> major_axis_angle_unit;
+    std::optional<double>      rayleigh_length_major;
+    std::optional<std::string> rayleigh_length_major_unit;
+    std::optional<double>      rayleigh_length_minor;
+    std::optional<std::string> rayleigh_length_minor_unit;
+    std::optional<std::string> scanner_number;
+    std::optional<bool>        thermal_lensing_passed; // HDF5 int 0/1
+    std::optional<double>      thermal_lensing_focal_plane_shift;
+    std::optional<std::string> thermal_lensing_focal_plane_shift_unit;
+    std::optional<double>      thermal_lensing_threshold;
+    std::optional<std::string> thermal_lensing_threshold_unit;
+    Scanner            scanner;
+    LightSource        light_source;
+    Collimator         collimator;
+    ScannerCard        scanner_card;
+    std::optional<ScanFieldCorrectionFile> scan_field_correction_file;
+};
+
+// Machine-level attributes.  Build-plate fields are INLINED here (not nested)
+// to match the flat "machine" object in the canonical JSON schema (§0.2, §3.10).
+struct Machine {
+    std::optional<std::string> id;
+    std::string machine_name;
+    std::string manufacturer;
+    std::string model;
+    std::string serial_number;
+    std::optional<double>      build_plate_x;
+    std::optional<std::string> build_plate_x_unit;
+    std::optional<double>      build_plate_y;
+    std::optional<std::string> build_plate_y_unit;
+    std::optional<double>      build_plate_z;
+    std::optional<std::string> build_plate_z_unit;
+    std::optional<double>      build_plate_radius;
+    std::optional<std::string> build_plate_radius_unit;
+    std::optional<std::string> gas_flow_direction;
+    std::optional<std::string> recoat_direction;
+    std::optional<std::string> recoater_blade_type;
+};
+
+struct MachineConfigMeta {
+    std::string schema_version;
+    std::string machine_name;
+    std::string manufacturer;
+    std::string model;
+    std::string serial_number;
+    std::string file_version;
+    std::string export_date;
+    std::string configuration_hash;
+    // TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+    // Not real schema fields, never serialized — see to_json(MachineConfigMeta)
+    // below, which never lists them. Only the mock v1.1 reader/writer
+    // (test-only, not part of this header set) ever populates them.
+    std::optional<std::string> facility_id;
+    std::optional<std::string> config_author;
+    // Reader-computed, in-memory only: set once a MachineConfigReader has
+    // recomputed the configuration hash and compared it to the on-disk
+    // value; nullopt until then. Never set by a writer. Never wired into
+    // to_json/from_json below (passive exclusion, same as facility_id/
+    // config_author above) — never written to HDF5, never part of the
+    // interop contract. A mismatch is never an error: the file remains
+    // fully readable either way (see hash.hpp).
+    std::optional<bool> is_valid;
+    ExtraAttrs extra; // non-typed root HDF5 attrs; empty object when none
+};
+
+struct MachineConfig {
+    MachineConfigMeta         meta;
+    Machine                   machine;
+    std::vector<OpticalTrain> optical_trains;
+    // Opaque extension trees keyed by group name under Extensions/. Core reads and writes them
+    // verbatim (see docs/EXTENSION_CONTRACT.md). ClearBox is one of them, always in the
+    // File_Version 1.1 layout (see clearbox_legacy.hpp).
+    // here. Omitted from JSON entirely when empty.
+    std::map<std::string, extension::Tree> extensions;
+};
+
+// ---------------------------------------------------------------------------
+// JSON serialisation (to_json / from_json)
+// Follows ADL pattern; defined inline to keep this a header-only library.
+// Field ordering in JSON output is alphabetical (nlohmann default) which may
+// differ from Python insertion order; cross_check uses value comparison.
+// ---------------------------------------------------------------------------
+
+// --- ScanFieldCorrectionFile ---
+
+inline void to_json(nlohmann::json& j, const ScanFieldCorrectionFile& s) {
+    j = {
+        {"document_created_at", detail::opt_to_j(s.document_created_at)},
+        {"document_id",         s.document_id},
+        {"document_name",       s.document_name},
+        {"document_type",       detail::opt_to_j(s.document_type)},
+        {"file_size",           s.file_size},
+        {"original_uri",        detail::opt_to_j(s.original_uri)},
+        {"valid_as_of_date",    s.valid_as_of_date},
+    };
+    // raw_bytes: base64-encoded string when present; omitted otherwise.
+    // Base64 encoding implemented in the reader when include_binary=true (§4.11).
+    if (s.raw_bytes.has_value())
+        j["raw_bytes"] = nullptr; // placeholder; replaced in §4.11
+}
+
+inline void from_json(const nlohmann::json& j, ScanFieldCorrectionFile& s) {
+    j.at("document_name").get_to(s.document_name);
+    j.at("document_id").get_to(s.document_id);
+    j.at("file_size").get_to(s.file_size);
+    j.at("valid_as_of_date").get_to(s.valid_as_of_date);
+    s.document_created_at = detail::j_to_opt<std::string>(j, "document_created_at");
+    s.document_type       = detail::j_to_opt<std::string>(j, "document_type");
+    s.original_uri        = detail::j_to_opt<std::string>(j, "original_uri");
+    // raw_bytes base64 decode implemented in the writer (§4.14).
+}
+
+// --- EquationConstant / CalibrationPoint / PowerCharacterization ---
+
+inline void to_json(nlohmann::json& j, const EquationConstant& c) {
+    j = {{"name", c.name}, {"value", c.value}};
+}
+
+inline void from_json(const nlohmann::json& j, EquationConstant& c) {
+    j.at("name").get_to(c.name);
+    j.at("value").get_to(c.value);
+}
+
+inline void to_json(nlohmann::json& j, const CalibrationPoint& c) {
+    j = {{"input_value", c.input_value}, {"output_value", c.output_value}};
+}
+
+inline void from_json(const nlohmann::json& j, CalibrationPoint& c) {
+    j.at("input_value").get_to(c.input_value);
+    j.at("output_value").get_to(c.output_value);
+}
+
+inline void to_json(nlohmann::json& j, const PowerCharacterization& p) {
+    j = {
+        {"algorithm_type",                detail::opt_to_j(p.algorithm_type)},
+        {"algorithm_equation",            detail::opt_to_j(p.algorithm_equation)},
+        {"input_type",                    detail::opt_to_j(p.input_type)},
+        {"units_derived_quantity",        detail::opt_to_j(p.units_derived_quantity)},
+        {"derivation_equation_constants", p.derivation_equation_constants},
+        {"characterization_points",       p.characterization_points},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, PowerCharacterization& p) {
+    p.algorithm_type         = detail::j_to_opt<std::string>(j, "algorithm_type");
+    p.algorithm_equation     = detail::j_to_opt<std::string>(j, "algorithm_equation");
+    p.input_type             = detail::j_to_opt<std::string>(j, "input_type");
+    p.units_derived_quantity = detail::j_to_opt<std::string>(j, "units_derived_quantity");
+    p.derivation_equation_constants.clear();
+    if (j.contains("derivation_equation_constants"))
+        j.at("derivation_equation_constants").get_to(p.derivation_equation_constants);
+    p.characterization_points.clear();
+    if (j.contains("characterization_points"))
+        j.at("characterization_points").get_to(p.characterization_points);
+}
+
+// --- Collimator ---
+
+inline void to_json(nlohmann::json& j, const Collimator& c) {
+    j = {
+        {"focal_length",      detail::opt_to_j(c.focal_length)},
+        {"focal_length_unit", detail::opt_to_j(c.focal_length_unit)},
+        {"manufacturer",      c.manufacturer},
+        {"model",             c.model},
+        {"serial_number",     c.serial_number},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, Collimator& c) {
+    j.at("manufacturer").get_to(c.manufacturer);
+    j.at("model").get_to(c.model);
+    j.at("serial_number").get_to(c.serial_number);
+    c.focal_length      = detail::j_to_opt<double>(j, "focal_length");
+    c.focal_length_unit = detail::j_to_opt<std::string>(j, "focal_length_unit");
+}
+
+// --- ScannerCard ---
+
+inline void to_json(nlohmann::json& j, const ScannerCard& s) {
+    j = {
+        {"communication_protocol", detail::opt_to_j(s.communication_protocol)},
+        {"manufacturer",           s.manufacturer},
+        {"model",                  s.model},
+        {"sample_period",          detail::opt_to_j(s.sample_period)},
+        {"sample_period_unit",     detail::opt_to_j(s.sample_period_unit)},
+        {"serial_number",          s.serial_number},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, ScannerCard& s) {
+    j.at("manufacturer").get_to(s.manufacturer);
+    j.at("model").get_to(s.model);
+    j.at("serial_number").get_to(s.serial_number);
+    s.communication_protocol = detail::j_to_opt<std::string>(j, "communication_protocol");
+    s.sample_period          = detail::j_to_opt<double>(j, "sample_period");
+    s.sample_period_unit     = detail::j_to_opt<std::string>(j, "sample_period_unit");
+}
+
+// --- AxisConfig ---
+
+inline void to_json(nlohmann::json& j, const AxisConfig& a) {
+    j = {
+        {"actual_bit_resolution",       detail::opt_to_j(a.actual_bit_resolution)},
+        {"actual_bit_resolution_unit",  detail::opt_to_j(a.actual_bit_resolution_unit)},
+        {"commanded_bit_resolution",    detail::opt_to_j(a.commanded_bit_resolution)},
+        {"commanded_bit_resolution_unit",detail::opt_to_j(a.commanded_bit_resolution_unit)},
+        {"control_type",                detail::opt_to_j(a.control_type)},
+        {"range_of_motion",             detail::opt_to_j(a.range_of_motion)},
+        {"range_of_motion_unit",        detail::opt_to_j(a.range_of_motion_unit)},
+        {"smoothing_kernel",            detail::opt_to_j(a.smoothing_kernel)},
+        {"smoothing_parameters",        detail::opt_to_j(a.smoothing_parameters)},
+        {"tuning_parameters",           detail::opt_to_j(a.tuning_parameters)},
+        {"tuning_type",                 detail::opt_to_j(a.tuning_type)},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, AxisConfig& a) {
+    a.actual_bit_resolution       = detail::j_to_opt<std::int64_t>(j, "actual_bit_resolution");
+    a.actual_bit_resolution_unit  = detail::j_to_opt<std::string>(j, "actual_bit_resolution_unit");
+    a.commanded_bit_resolution    = detail::j_to_opt<std::int64_t>(j, "commanded_bit_resolution");
+    a.commanded_bit_resolution_unit = detail::j_to_opt<std::string>(j, "commanded_bit_resolution_unit");
+    a.control_type        = detail::j_to_opt<std::string>(j, "control_type");
+    a.range_of_motion     = detail::j_to_opt<double>(j, "range_of_motion");
+    a.range_of_motion_unit= detail::j_to_opt<std::string>(j, "range_of_motion_unit");
+    a.smoothing_kernel    = detail::j_to_opt<std::string>(j, "smoothing_kernel");
+    a.smoothing_parameters= detail::j_to_opt<double>(j, "smoothing_parameters");
+    a.tuning_parameters   = detail::j_to_opt<std::string>(j, "tuning_parameters");
+    a.tuning_type         = detail::j_to_opt<std::string>(j, "tuning_type");
+}
+
+// --- Scanner ---
+
+inline void to_json(nlohmann::json& j, const Scanner& s) {
+    j = {
+        {"axis_configuration",      detail::opt_to_j(s.axis_configuration)},
+        {"focus",                   detail::opt_to_j(s.focus)},
+        {"manufacturer",            s.manufacturer},
+        {"model",                   s.model},
+        {"scan_field_x",            detail::opt_to_j(s.scan_field_x)},
+        {"scan_field_x_unit",       detail::opt_to_j(s.scan_field_x_unit)},
+        {"scan_field_y",            detail::opt_to_j(s.scan_field_y)},
+        {"scan_field_y_unit",       detail::opt_to_j(s.scan_field_y_unit)},
+        {"scan_field_z",            detail::opt_to_j(s.scan_field_z)},
+        {"scan_field_z_unit",       detail::opt_to_j(s.scan_field_z_unit)},
+        {"scan_head_offset_x",      detail::opt_to_j(s.scan_head_offset_x)},
+        {"scan_head_offset_x_unit", detail::opt_to_j(s.scan_head_offset_x_unit)},
+        {"scan_head_offset_y",      detail::opt_to_j(s.scan_head_offset_y)},
+        {"scan_head_offset_y_unit", detail::opt_to_j(s.scan_head_offset_y_unit)},
+        {"scan_head_offset_z",      detail::opt_to_j(s.scan_head_offset_z)},
+        {"scan_head_offset_z_unit", detail::opt_to_j(s.scan_head_offset_z_unit)},
+        {"scan_head_rotation",      detail::opt_to_j(s.scan_head_rotation)},
+        {"scan_head_rotation_unit", detail::opt_to_j(s.scan_head_rotation_unit)},
+        {"serial_number",           s.serial_number},
+        {"working_distance",        detail::opt_to_j(s.working_distance)},
+        {"working_distance_unit",   detail::opt_to_j(s.working_distance_unit)},
+        {"x_axis",                  s.x_axis},
+        {"y_axis",                  s.y_axis},
+        {"z_axis",                  detail::opt_to_j(s.z_axis)},
+    };
+    // Omitted entirely (not serialised as false) unless true — deliberately
+    // different from every other bool field above (user-confirmed,
+    // 2026-08-21).
+    if (s.invert_actual_x) j["invert_actual_x"] = true;
+    if (s.invert_actual_y) j["invert_actual_y"] = true;
+    if (s.invert_commanded_x) j["invert_commanded_x"] = true;
+    if (s.invert_commanded_y) j["invert_commanded_y"] = true;
+}
+
+inline void from_json(const nlohmann::json& j, Scanner& s) {
+    j.at("manufacturer").get_to(s.manufacturer);
+    j.at("model").get_to(s.model);
+    j.at("serial_number").get_to(s.serial_number);
+    s.working_distance       = detail::j_to_opt<double>(j, "working_distance");
+    s.working_distance_unit  = detail::j_to_opt<std::string>(j, "working_distance_unit");
+    s.scan_field_x           = detail::j_to_opt<double>(j, "scan_field_x");
+    s.scan_field_x_unit      = detail::j_to_opt<std::string>(j, "scan_field_x_unit");
+    s.scan_field_y           = detail::j_to_opt<double>(j, "scan_field_y");
+    s.scan_field_y_unit      = detail::j_to_opt<std::string>(j, "scan_field_y_unit");
+    s.scan_field_z           = detail::j_to_opt<double>(j, "scan_field_z");
+    s.scan_field_z_unit      = detail::j_to_opt<std::string>(j, "scan_field_z_unit");
+    s.scan_head_offset_x     = detail::j_to_opt<double>(j, "scan_head_offset_x");
+    s.scan_head_offset_x_unit= detail::j_to_opt<std::string>(j, "scan_head_offset_x_unit");
+    s.scan_head_offset_y     = detail::j_to_opt<double>(j, "scan_head_offset_y");
+    s.scan_head_offset_y_unit= detail::j_to_opt<std::string>(j, "scan_head_offset_y_unit");
+    s.scan_head_offset_z     = detail::j_to_opt<double>(j, "scan_head_offset_z");
+    s.scan_head_offset_z_unit= detail::j_to_opt<std::string>(j, "scan_head_offset_z_unit");
+    s.scan_head_rotation     = detail::j_to_opt<double>(j, "scan_head_rotation");
+    s.scan_head_rotation_unit= detail::j_to_opt<std::string>(j, "scan_head_rotation_unit");
+    s.axis_configuration     = detail::j_to_opt<std::string>(j, "axis_configuration");
+    j.at("x_axis").get_to(s.x_axis);
+    j.at("y_axis").get_to(s.y_axis);
+    if (j.contains("z_axis") && !j.at("z_axis").is_null())
+        s.z_axis = j.at("z_axis").get<AxisConfig>();
+    if (j.contains("focus") && !j.at("focus").is_null())
+        s.focus = j.at("focus").get<AxisConfig>();
+    s.invert_actual_x = j.value("invert_actual_x", false);
+    s.invert_actual_y = j.value("invert_actual_y", false);
+    s.invert_commanded_x = j.value("invert_commanded_x", false);
+    s.invert_commanded_y = j.value("invert_commanded_y", false);
+}
+
+// --- LightSource ---
+
+inline void to_json(nlohmann::json& j, const LightSource& l) {
+    j = {
+        {"manufacturer",              l.manufacturer},
+        {"model",                     l.model},
+        {"power_bit_resolution",      detail::opt_to_j(l.power_bit_resolution)},
+        {"power_bit_resolution_unit", detail::opt_to_j(l.power_bit_resolution_unit)},
+        {"power_max_actual",          detail::opt_to_j(l.power_max_actual)},
+        {"power_max_actual_unit",     detail::opt_to_j(l.power_max_actual_unit)},
+        {"power_max_nominal",         detail::opt_to_j(l.power_max_nominal)},
+        {"power_max_nominal_unit",    detail::opt_to_j(l.power_max_nominal_unit)},
+        {"power_min_actual",          detail::opt_to_j(l.power_min_actual)},
+        {"power_min_actual_unit",     detail::opt_to_j(l.power_min_actual_unit)},
+        {"power_min_nominal",         detail::opt_to_j(l.power_min_nominal)},
+        {"power_min_nominal_unit",    detail::opt_to_j(l.power_min_nominal_unit)},
+        {"serial_number",             l.serial_number},
+        {"wavelength",                detail::opt_to_j(l.wavelength)},
+        {"wavelength_unit",           detail::opt_to_j(l.wavelength_unit)},
+    };
+    // v1.1 addition — omitted entirely when absent, same reasoning as
+    // ClearBox::power_characterization.
+    if (l.power_characterization.has_value())
+        j["power_characterization"] = *l.power_characterization;
+}
+
+inline void from_json(const nlohmann::json& j, LightSource& l) {
+    j.at("manufacturer").get_to(l.manufacturer);
+    j.at("model").get_to(l.model);
+    j.at("serial_number").get_to(l.serial_number);
+    l.wavelength              = detail::j_to_opt<double>(j, "wavelength");
+    l.wavelength_unit         = detail::j_to_opt<std::string>(j, "wavelength_unit");
+    l.power_max_nominal       = detail::j_to_opt<double>(j, "power_max_nominal");
+    l.power_max_nominal_unit  = detail::j_to_opt<std::string>(j, "power_max_nominal_unit");
+    l.power_max_actual        = detail::j_to_opt<double>(j, "power_max_actual");
+    l.power_max_actual_unit   = detail::j_to_opt<std::string>(j, "power_max_actual_unit");
+    l.power_min_actual        = detail::j_to_opt<double>(j, "power_min_actual");
+    l.power_min_actual_unit   = detail::j_to_opt<std::string>(j, "power_min_actual_unit");
+    l.power_min_nominal       = detail::j_to_opt<double>(j, "power_min_nominal");
+    l.power_min_nominal_unit  = detail::j_to_opt<std::string>(j, "power_min_nominal_unit");
+    l.power_bit_resolution    = detail::j_to_opt<double>(j, "power_bit_resolution");
+    l.power_bit_resolution_unit= detail::j_to_opt<std::string>(j, "power_bit_resolution_unit");
+    if (j.contains("power_characterization") && !j.at("power_characterization").is_null())
+        l.power_characterization = j.at("power_characterization").get<PowerCharacterization>();
+    else
+        l.power_characterization = std::nullopt;
+}
+
+// --- OpticalTrain ---
+
+inline void to_json(nlohmann::json& j, const OpticalTrain& t) {
+    j = {
+        {"beam_profile_type",                    detail::opt_to_j(t.beam_profile_type)},
+        {"beam_waist_definition",                detail::opt_to_j(t.beam_waist_definition)},
+        {"beam_waist_major",                     detail::opt_to_j(t.beam_waist_major)},
+        {"beam_waist_major_unit",                detail::opt_to_j(t.beam_waist_major_unit)},
+        {"beam_waist_minor",                     detail::opt_to_j(t.beam_waist_minor)},
+        {"beam_waist_minor_unit",                detail::opt_to_j(t.beam_waist_minor_unit)},
+        {"beam_waist_offset_z",                  detail::opt_to_j(t.beam_waist_offset_z)},
+        {"beam_waist_offset_z_unit",             detail::opt_to_j(t.beam_waist_offset_z_unit)},
+        {"build_plane_offset_major",             detail::opt_to_j(t.build_plane_offset_major)},
+        {"build_plane_offset_major_unit",        detail::opt_to_j(t.build_plane_offset_major_unit)},
+        {"build_plane_offset_minor",             detail::opt_to_j(t.build_plane_offset_minor)},
+        {"build_plane_offset_minor_unit",        detail::opt_to_j(t.build_plane_offset_minor_unit)},
+        {"collimator",                           t.collimator},
+        {"collimator_focal_length",              detail::opt_to_j(t.collimator_focal_length)},
+        {"collimator_focal_length_unit",         detail::opt_to_j(t.collimator_focal_length_unit)},
+        {"id",                                   detail::opt_to_j(t.id)},
+        {"light_source",                         t.light_source},
+        {"m2_major",                             detail::opt_to_j(t.m2_major)},
+        {"m2_minor",                             detail::opt_to_j(t.m2_minor)},
+        {"major_axis_angle",                     detail::opt_to_j(t.major_axis_angle)},
+        {"major_axis_angle_unit",                detail::opt_to_j(t.major_axis_angle_unit)},
+        {"rayleigh_length_major",                detail::opt_to_j(t.rayleigh_length_major)},
+        {"rayleigh_length_major_unit",           detail::opt_to_j(t.rayleigh_length_major_unit)},
+        {"rayleigh_length_minor",                detail::opt_to_j(t.rayleigh_length_minor)},
+        {"rayleigh_length_minor_unit",           detail::opt_to_j(t.rayleigh_length_minor_unit)},
+        {"scan_field_correction_file",           detail::opt_to_j(t.scan_field_correction_file)},
+        {"scanner",                              t.scanner},
+        {"scanner_card",                         t.scanner_card},
+        {"scanner_number",                       detail::opt_to_j(t.scanner_number)},
+        {"thermal_lensing_focal_plane_shift",    detail::opt_to_j(t.thermal_lensing_focal_plane_shift)},
+        {"thermal_lensing_focal_plane_shift_unit",detail::opt_to_j(t.thermal_lensing_focal_plane_shift_unit)},
+        {"thermal_lensing_passed",               detail::opt_to_j(t.thermal_lensing_passed)},
+        {"thermal_lensing_threshold",            detail::opt_to_j(t.thermal_lensing_threshold)},
+        {"thermal_lensing_threshold_unit",       detail::opt_to_j(t.thermal_lensing_threshold_unit)},
+        {"train_id",                             t.train_id},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, OpticalTrain& t) {
+    j.at("train_id").get_to(t.train_id);
+    t.id                    = detail::j_to_opt<std::string>(j, "id");
+    t.beam_profile_type     = detail::j_to_opt<std::string>(j, "beam_profile_type");
+    t.beam_waist_definition = detail::j_to_opt<std::string>(j, "beam_waist_definition");
+    t.beam_waist_major      = detail::j_to_opt<double>(j, "beam_waist_major");
+    t.beam_waist_major_unit = detail::j_to_opt<std::string>(j, "beam_waist_major_unit");
+    t.beam_waist_minor      = detail::j_to_opt<double>(j, "beam_waist_minor");
+    t.beam_waist_minor_unit = detail::j_to_opt<std::string>(j, "beam_waist_minor_unit");
+    t.beam_waist_offset_z        = detail::j_to_opt<double>(j, "beam_waist_offset_z");
+    t.beam_waist_offset_z_unit   = detail::j_to_opt<std::string>(j, "beam_waist_offset_z_unit");
+    t.build_plane_offset_major   = detail::j_to_opt<double>(j, "build_plane_offset_major");
+    t.build_plane_offset_major_unit = detail::j_to_opt<std::string>(j, "build_plane_offset_major_unit");
+    t.build_plane_offset_minor   = detail::j_to_opt<double>(j, "build_plane_offset_minor");
+    t.build_plane_offset_minor_unit = detail::j_to_opt<std::string>(j, "build_plane_offset_minor_unit");
+    t.collimator_focal_length    = detail::j_to_opt<double>(j, "collimator_focal_length");
+    t.collimator_focal_length_unit= detail::j_to_opt<std::string>(j, "collimator_focal_length_unit");
+    t.m2_major              = detail::j_to_opt<double>(j, "m2_major");
+    t.m2_minor              = detail::j_to_opt<double>(j, "m2_minor");
+    t.major_axis_angle      = detail::j_to_opt<double>(j, "major_axis_angle");
+    t.major_axis_angle_unit = detail::j_to_opt<std::string>(j, "major_axis_angle_unit");
+    t.rayleigh_length_major      = detail::j_to_opt<double>(j, "rayleigh_length_major");
+    t.rayleigh_length_major_unit = detail::j_to_opt<std::string>(j, "rayleigh_length_major_unit");
+    t.rayleigh_length_minor      = detail::j_to_opt<double>(j, "rayleigh_length_minor");
+    t.rayleigh_length_minor_unit = detail::j_to_opt<std::string>(j, "rayleigh_length_minor_unit");
+    t.scanner_number             = detail::j_to_opt<std::string>(j, "scanner_number");
+    t.thermal_lensing_passed     = detail::j_to_opt<bool>(j, "thermal_lensing_passed");
+    t.thermal_lensing_focal_plane_shift      = detail::j_to_opt<double>(j, "thermal_lensing_focal_plane_shift");
+    t.thermal_lensing_focal_plane_shift_unit = detail::j_to_opt<std::string>(j, "thermal_lensing_focal_plane_shift_unit");
+    t.thermal_lensing_threshold      = detail::j_to_opt<double>(j, "thermal_lensing_threshold");
+    t.thermal_lensing_threshold_unit = detail::j_to_opt<std::string>(j, "thermal_lensing_threshold_unit");
+    j.at("scanner").get_to(t.scanner);
+    j.at("light_source").get_to(t.light_source);
+    j.at("collimator").get_to(t.collimator);
+    j.at("scanner_card").get_to(t.scanner_card);
+    if (j.contains("scan_field_correction_file") && !j.at("scan_field_correction_file").is_null())
+        t.scan_field_correction_file = j.at("scan_field_correction_file").get<ScanFieldCorrectionFile>();
+}
+
+// --- Machine (flat — no nested build_plate sub-object) ---
+
+inline void to_json(nlohmann::json& j, const Machine& m) {
+    j = {
+        {"build_plate_radius",      detail::opt_to_j(m.build_plate_radius)},
+        {"build_plate_radius_unit", detail::opt_to_j(m.build_plate_radius_unit)},
+        {"build_plate_x",           detail::opt_to_j(m.build_plate_x)},
+        {"build_plate_x_unit",      detail::opt_to_j(m.build_plate_x_unit)},
+        {"build_plate_y",           detail::opt_to_j(m.build_plate_y)},
+        {"build_plate_y_unit",      detail::opt_to_j(m.build_plate_y_unit)},
+        {"build_plate_z",           detail::opt_to_j(m.build_plate_z)},
+        {"build_plate_z_unit",      detail::opt_to_j(m.build_plate_z_unit)},
+        {"gas_flow_direction",      detail::opt_to_j(m.gas_flow_direction)},
+        {"id",                      detail::opt_to_j(m.id)},
+        {"machine_name",            m.machine_name},
+        {"manufacturer",            m.manufacturer},
+        {"model",                   m.model},
+        {"recoat_direction",        detail::opt_to_j(m.recoat_direction)},
+        {"recoater_blade_type",     detail::opt_to_j(m.recoater_blade_type)},
+        {"serial_number",           m.serial_number},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, Machine& m) {
+    j.at("machine_name").get_to(m.machine_name);
+    j.at("manufacturer").get_to(m.manufacturer);
+    j.at("model").get_to(m.model);
+    j.at("serial_number").get_to(m.serial_number);
+    m.id                   = detail::j_to_opt<std::string>(j, "id");
+    m.build_plate_x        = detail::j_to_opt<double>(j, "build_plate_x");
+    m.build_plate_x_unit   = detail::j_to_opt<std::string>(j, "build_plate_x_unit");
+    m.build_plate_y        = detail::j_to_opt<double>(j, "build_plate_y");
+    m.build_plate_y_unit   = detail::j_to_opt<std::string>(j, "build_plate_y_unit");
+    m.build_plate_z        = detail::j_to_opt<double>(j, "build_plate_z");
+    m.build_plate_z_unit   = detail::j_to_opt<std::string>(j, "build_plate_z_unit");
+    m.build_plate_radius   = detail::j_to_opt<double>(j, "build_plate_radius");
+    m.build_plate_radius_unit = detail::j_to_opt<std::string>(j, "build_plate_radius_unit");
+    m.gas_flow_direction   = detail::j_to_opt<std::string>(j, "gas_flow_direction");
+    m.recoat_direction     = detail::j_to_opt<std::string>(j, "recoat_direction");
+    m.recoater_blade_type  = detail::j_to_opt<std::string>(j, "recoater_blade_type");
+}
+
+// --- MachineConfigMeta ---
+
+inline void to_json(nlohmann::json& j, const MachineConfigMeta& m) {
+    j = {
+        {"configuration_hash", m.configuration_hash},
+        {"export_date",        m.export_date},
+        {"extra",              m.extra},
+        {"file_version",       m.file_version},
+        {"machine_name",       m.machine_name},
+        {"manufacturer",       m.manufacturer},
+        {"model",              m.model},
+        {"schema_version",     m.schema_version},
+        {"serial_number",      m.serial_number},
+    };
+}
+
+inline void from_json(const nlohmann::json& j, MachineConfigMeta& m) {
+    j.at("schema_version").get_to(m.schema_version);
+    j.at("machine_name").get_to(m.machine_name);
+    j.at("manufacturer").get_to(m.manufacturer);
+    j.at("model").get_to(m.model);
+    j.at("serial_number").get_to(m.serial_number);
+    j.at("file_version").get_to(m.file_version);
+    j.at("export_date").get_to(m.export_date);
+    j.at("configuration_hash").get_to(m.configuration_hash);
+    m.extra = (j.contains("extra") && j.at("extra").is_object())
+              ? j.at("extra") : nlohmann::json::object();
+}
+
+// --- MachineConfig ---
+// extensions: omitted from JSON entirely when empty.
+
+inline void to_json(nlohmann::json& j, const MachineConfig& m) {
+    j = {
+        {"machine",        m.machine},
+        {"meta",           m.meta},
+        {"optical_trains", m.optical_trains},
+    };
+    if (!m.extensions.empty())
+        j["extensions"] = m.extensions;
+}
+
+inline void from_json(const nlohmann::json& j, MachineConfig& m) {
+    j.at("meta").get_to(m.meta);
+    j.at("machine").get_to(m.machine);
+    j.at("optical_trains").get_to(m.optical_trains);
+    m.extensions.clear();
+    if (j.contains("extensions") && j.at("extensions").is_object())
+        for (const auto& [name, tree] : j.at("extensions").items())
+            m.extensions[name] = tree.get<extension::Tree>();
+}
+
+} // namespace machine_config

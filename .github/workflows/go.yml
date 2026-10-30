@@ -1,0 +1,87 @@
+name: Go
+
+# Builds and tests the Go library: Ubuntu (apt HDF5) and Windows (MSYS2 MinGW64 HDF5).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "release"]
+    paths:
+      - "go/**"
+      - "fixtures/**"
+      - "schema/**"
+      - ".github/workflows/go.yml"
+  pull_request:
+    paths:
+      - "go/**"
+      - "fixtures/**"
+      - "schema/**"
+      - ".github/workflows/go.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache-dependency-path: go/go.sum
+
+      - name: Install libhdf5 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libhdf5-dev pkg-config
+
+      # MSYS2 MINGW64 provides MinGW-compatible HDF5 headers, .a, .dll, and pkg-config.
+      - name: Install MSYS2 MinGW64 HDF5 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          path-type: inherit
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-hdf5
+            mingw-w64-x86_64-pkg-config
+
+      # Adds the actual MSYS2 mingw64/bin to Windows PATH for subsequent steps (HDF5 DLLs).
+      - name: Add MSYS2 MinGW64 bin to PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: echo "$(cygpath -w /mingw64/bin)" >> "$GITHUB_PATH"
+
+      - name: Proto gate (CGo dense attrs, Linux)
+        if: runner.os == 'Linux'
+        run: CGO_ENABLED=1 go run ./proto/proto_cgo_read_root_attrs/
+        working-directory: go
+
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
+        run: CGO_ENABLED=1 go test ./... -count=1
+        working-directory: go
+
+      # go.exe is a native Windows binary; it can't resolve gcc from the POSIX-format PATH
+      # set by the MSYS2 shell.  cygpath -w converts the POSIX path to a Windows path that
+      # go.exe can exec directly, regardless of where setup-msys2 installed MSYS2.
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export CGO_ENABLED=1
+          export CC=$(cygpath -w /mingw64/bin/gcc.exe)
+          export CXX=$(cygpath -w /mingw64/bin/g++.exe)
+          cd go
+          go test ./... -count=1

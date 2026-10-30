@@ -2,6 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from machine_config.extension_contract import ExtensionTree
+
 
 @dataclass
 class ScanFieldCorrectionFile:
@@ -16,38 +18,47 @@ class ScanFieldCorrectionFile:
 
 
 @dataclass
-class ClearBox:
-    ip_address: str
-    serial_number: Optional[str]
-    data_port: Optional[int]
-    server_port: Optional[int]
-    actual_timing_offset: Optional[int]
-    commanded_timing_offset: Optional[int]
-    correction_data: list[list[list[float | None]]] | None
-    inverse_correction_data: list[list[list[float | None]]] | None
-    manufacturer: Optional[str]
-    model: Optional[str]
-    output_path: Optional[str]
-    selected_camera: Optional[str]
-    custom_video_format: Optional[str]
-    video_output: Optional[str]
-    show_console: Optional[bool]                         # HDF5 int 0/1
-    software_trigger_delay: Optional[int]
-    volts_to_watts_algorithm: Optional[str]
-    volts_to_watts_params: Optional[str]
-    correction_grid_domain_shape: Optional[str]
-    inverse_grid_domain_shape: Optional[str]
+class EquationConstant:
+    """One named equation constant for a SynchronousSensor's algorithm_equation
+    (e.g. a/b for a Log-Linear fit: log(ppm) = a*mA + b). HDF5 source: one row
+    of the Derivation_Equation_Constants compound dataset. A named row rather
+    than a positional array so a reader never has to infer which index means
+    what from algorithm_type alone, and so adding a constant is an additive
+    row rather than an ordering hazard.
+    """
+    name: str
+    value: float
 
 
 @dataclass
-class OptionalComponents:
-    """Optional add-on hardware that may or may not be installed on an optical train.
+class CalibrationPoint:
+    """One calibration sample pair for a SynchronousSensor. HDF5 source: one
+    row of the Calibration_Points compound dataset.
 
-    Maps to the ``Optional_Components`` HDF5 group under each ``Optical_Train_NN``.
-    Fields are ``None`` when the corresponding hardware is not present.
-    New optional components are added here as the schema grows.
+    ``input_value`` is in the sensor's input_type unit; ``output_value`` is in
+    the sensor's sensor_output_space unit (**not** units_derived_quantity) —
+    every row of a given sensor's calibration curve is in the same units by
+    construction. Confirmed against the ZR800 reference example: both points
+    satisfy algorithm_equation exactly in log-space
+    (0.4375 * 4 - 2.75 == -1.0, 0.4375 * 20 - 2.75 == 6.0), not linear ppm.
     """
-    clearbox: Optional[ClearBox] = None
+    input_value: float
+    output_value: float
+
+
+@dataclass
+class PowerCharacterization:
+    """A structured algorithm + equation + constants + characterization points describing a power
+    conversion. ``LightSource.power_characterization`` uses it; ClearBox's own
+    Power_Characterization is an opaque extension tree and is not modelled here. See
+    ``docs/migrations/v1_0_to_v1_1.md`` Changes 3/4 for the derivation rules.
+    """
+    algorithm_type: Optional[str]
+    algorithm_equation: Optional[str]
+    input_type: Optional[str]
+    units_derived_quantity: Optional[str]
+    derivation_equation_constants: list[EquationConstant]
+    characterization_points: list[CalibrationPoint]
 
 
 @dataclass
@@ -110,6 +121,17 @@ class Scanner:
     y_axis: AxisConfig
     z_axis: Optional[AxisConfig] = None
     focus: Optional[AxisConfig] = None
+    # Plain bool, not Optional[bool] — deliberately different from every
+    # other bool field in this schema. Defaults to False whether the on-disk
+    # attribute is absent or explicitly 0; the API never distinguishes those
+    # two cases (user-confirmed, 2026-08-21). Read faithfully, but never
+    # appears in any output (MCF or JSON) unless True — a write→read
+    # round-trip is deliberately lossy for an explicit False, which becomes
+    # indistinguishable from "never set".
+    invert_actual_x: bool = False
+    invert_actual_y: bool = False
+    invert_commanded_x: bool = False
+    invert_commanded_y: bool = False
 
     def __post_init__(self) -> None:
         cfg = self.axis_configuration
@@ -151,8 +173,9 @@ class LightSource:
     power_min_nominal_unit: Optional[str]
     power_bit_resolution: Optional[float]                # HDF5 stores as string; parsed via _read_float
     power_bit_resolution_unit: Optional[str]
-    watts_to_volts_algorithm: Optional[str]
-    watts_to_volts_params: Optional[str]
+    # The only representation of this concept, for files of either version
+    # (v1.0's flat Watts_To_Volts_Algorithm/Params is a lossless encoding of it).
+    power_characterization: Optional[PowerCharacterization] = None
 
 
 @dataclass
@@ -191,7 +214,6 @@ class OpticalTrain:
     light_source: LightSource
     collimator: Collimator                                        # required; see Rule 7
     scanner_card: ScannerCard                                     # required; see Rule 7
-    optional_components: OptionalComponents                       # always present; contents vary
     scan_field_correction_file: Optional[ScanFieldCorrectionFile]
 
 
@@ -217,6 +239,7 @@ class Machine:
     build_plate: BuildPlate
     gas_flow_direction: Optional[str]
     recoat_direction: Optional[str]
+    recoater_blade_type: Optional[str] = None
 
 
 @dataclass
@@ -229,46 +252,20 @@ class MachineConfigMeta:
     file_version: str
     export_date: str
     configuration_hash: str
+    # TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+    # Not a real schema field and not part of any planned version — exercises the
+    # ADDITION category only. Never wired into _config_to_dict() or the JSON schema.
+    facility_id: Optional[str] = None
+    config_author: Optional[str] = None
+    # Reader-computed, in-memory only: True/False once a MachineConfigReader has
+    # recomputed the configuration hash and compared it to the on-disk value;
+    # None until then. Never set by a writer or by MockConfigBuilder/
+    # YamlConfigBuilder. Deliberately excluded from _config_to_dict()/to_json()
+    # and from the JSON schema — never written to HDF5, never part of the
+    # interop contract. A mismatch is not an error: the file remains fully
+    # readable either way (see machine_config.hash).
+    is_valid: Optional[bool] = None
     extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed root HDF5 attrs
-
-
-@dataclass
-class OpcuaClientConfig:
-    server_url: str
-    auth_mode: str
-    security_mode: str
-    security_policy: str
-    bfs_max_depth: int
-    publish_interval: int
-    sampling_interval: int
-    session_timeout: int
-    extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed HDF5 attrs
-
-
-@dataclass
-class OpcuaPipeConfig:
-    pipe_enabled: bool                   # HDF5 int 0/1
-    buffer_size: int
-    extra: dict[str, Any] = field(default_factory=dict)  # preserves any non-typed HDF5 attrs
-
-
-@dataclass
-class OpcuaTrigger:
-    id: Optional[str] = None
-    signal: Optional[str] = None
-    subsystem: Optional[str] = None
-    rule_enabled: Optional[bool] = None  # HDF5 int 0/1
-    start_value: Optional[str] = None
-    stop_value: Optional[str] = None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class OpcuaConfig:
-    client: OpcuaClientConfig
-    pipe: OpcuaPipeConfig
-    triggers: dict[str, OpcuaTrigger]
-    triggers_enabled: Optional[bool] = None  # HDF5 float 0.0/1.0 on OPCUA/Triggers group
 
 
 @dataclass
@@ -276,4 +273,6 @@ class MachineConfig:
     meta: MachineConfigMeta
     machine: Machine
     optical_trains: list[OpticalTrain]
-    opcua: Optional[OpcuaConfig] = None
+    # Opaque extension trees keyed by group name under ``Extensions/``; read and written verbatim
+    # by core (see machine_config.extension_contract). ClearBox is modelled in core, never listed here.
+    extensions: dict[str, ExtensionTree] = field(default_factory=dict)

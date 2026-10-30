@@ -68,6 +68,7 @@ def test_yaml_builder_roundtrip(tmp_path: Path) -> None:
             "build_plate_y": 280,
             "gas_flow_direction": "Y+",
             "recoat_direction": "X+",
+            "recoater_blade_type": "Standard",
         },
         "optical_trains": [
             {
@@ -96,6 +97,7 @@ def test_yaml_builder_roundtrip(tmp_path: Path) -> None:
     assert config.optical_trains[0].scanner.working_distance == pytest.approx(670.0)
     assert config.optical_trains[0].scanner.scan_head_offset_x == pytest.approx(-87.5)
     assert config.optical_trains[0].light_source.power_max_nominal == pytest.approx(1000.0)
+    assert config.machine.recoater_blade_type == "Standard"
 
 
 # ---------------------------------------------------------------------------

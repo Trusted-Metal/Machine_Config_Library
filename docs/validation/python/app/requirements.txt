@@ -1,0 +1,2 @@
+machine-config-library==0.2.0rc4
+numpy

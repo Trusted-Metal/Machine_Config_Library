@@ -28,7 +28,8 @@
     "build_plate_radius": 125.0,
     "build_plate_radius_unit": "mm",
     "gas_flow_direction": "Y+",
-    "recoat_direction": "X+"
+    "recoat_direction": "X+",
+    "recoater_blade_type": null
   },
   "optical_trains": [
     {
@@ -140,8 +141,35 @@
         "power_min_nominal_unit": "W",
         "power_bit_resolution": null,
         "power_bit_resolution_unit": "bits",
-        "watts_to_volts_algorithm": "LINEAR",
-        "watts_to_volts_params": "[1,102.56666666666666,3,305.5333333333333,6,617.9,9,929.9333333333334,10,1028]"
+        "power_characterization": {
+          "algorithm_type": "LINEAR",
+          "algorithm_equation": "W = a*V + b",
+          "input_type": null,
+          "units_derived_quantity": null,
+          "derivation_equation_constants": [],
+          "characterization_points": [
+            {
+              "input_value": 1.0,
+              "output_value": 102.56666666666666
+            },
+            {
+              "input_value": 3.0,
+              "output_value": 305.5333333333333
+            },
+            {
+              "input_value": 6.0,
+              "output_value": 617.9
+            },
+            {
+              "input_value": 9.0,
+              "output_value": 929.9333333333334
+            },
+            {
+              "input_value": 10.0,
+              "output_value": 1028.0
+            }
+          ]
+        }
       },
       "collimator": {
         "manufacturer": "IPG",
@@ -157,28 +185,6 @@
         "communication_protocol": "SL2-100",
         "sample_period": 10.0,
         "sample_period_unit": "μs"
-      },
-      "optional_components": {
-        "clearbox": {
-          "ip_address": "192.168.1.10",
-          "serial_number": "001",
-          "data_port": 5001,
-          "server_port": 20101,
-          "actual_timing_offset": -8,
-          "commanded_timing_offset": 50,
-          "manufacturer": null,
-          "model": null,
-          "output_path": "/recordings/",
-          "selected_camera": "Default",
-          "custom_video_format": "MP4",
-          "video_output": "HDMI",
-          "show_console": false,
-          "software_trigger_delay": 3000,
-          "volts_to_watts_algorithm": "LINEAR",
-          "volts_to_watts_params": "50.5,107.5",
-          "correction_grid_domain_shape": null,
-          "inverse_grid_domain_shape": null
-        }
       },
       "scan_field_correction_file": {
         "document_name": "Story6.17.3.1_Laser_1_VMM.fc3",
@@ -299,8 +305,35 @@
         "power_min_nominal_unit": "W",
         "power_bit_resolution": null,
         "power_bit_resolution_unit": "bits",
-        "watts_to_volts_algorithm": "LINEAR",
-        "watts_to_volts_params": "[1,101.93333333333332,3,300.7,6,609.6666666666666,9,909.7333333333332,10,1006.3333333333334]"
+        "power_characterization": {
+          "algorithm_type": "LINEAR",
+          "algorithm_equation": "W = a*V + b",
+          "input_type": null,
+          "units_derived_quantity": null,
+          "derivation_equation_constants": [],
+          "characterization_points": [
+            {
+              "input_value": 1.0,
+              "output_value": 101.93333333333332
+            },
+            {
+              "input_value": 3.0,
+              "output_value": 300.7
+            },
+            {
+              "input_value": 6.0,
+              "output_value": 609.6666666666666
+            },
+            {
+              "input_value": 9.0,
+              "output_value": 909.7333333333332
+            },
+            {
+              "input_value": 10.0,
+              "output_value": 1006.3333333333334
+            }
+          ]
+        }
       },
       "collimator": {
         "manufacturer": "IPG",
@@ -317,28 +350,6 @@
         "sample_period": 10.0,
         "sample_period_unit": "μs"
       },
-      "optional_components": {
-        "clearbox": {
-          "ip_address": "192.168.1.11",
-          "serial_number": "002",
-          "data_port": 5001,
-          "server_port": 20101,
-          "actual_timing_offset": -8,
-          "commanded_timing_offset": 50,
-          "manufacturer": null,
-          "model": null,
-          "output_path": "/recordings/",
-          "selected_camera": "Default",
-          "custom_video_format": "MP4",
-          "video_output": "HDMI",
-          "show_console": false,
-          "software_trigger_delay": 3000,
-          "volts_to_watts_algorithm": "LINEAR",
-          "volts_to_watts_params": "48.5,105",
-          "correction_grid_domain_shape": null,
-          "inverse_grid_domain_shape": null
-        }
-      },
       "scan_field_correction_file": {
         "document_name": "Story6.17.3.1_Laser_2_VMM.fc3",
         "document_id": "f3d5b12d-9ae4-411b-b48e-e52eff2d0530",
@@ -349,5 +360,372 @@
         "original_uri": "/app/files/Machines/scan-field-corrections/file-1772040896118-756977660.fc3"
       }
     }
-  ]
+  ],
+  "extensions": {
+    "ClearBox": {
+      "attrs": {
+        "Output_Path": {
+          "dtype": "utf8",
+          "value": "/recordings/"
+        },
+        "Software_Trigger_Delay": {
+          "dtype": "i32",
+          "value": 3000
+        }
+      },
+      "children": {
+        "Optical_Train_01": {
+          "attrs": {
+            "Actual_Timing_Offset": {
+              "dtype": "i32",
+              "value": -8
+            },
+            "Commanded_Timing_Offset": {
+              "dtype": "i32",
+              "value": 50
+            },
+            "Correction_Grid_Domain_Shape": {
+              "dtype": "utf8",
+              "value": ""
+            },
+            "Custom_Video_Format": {
+              "dtype": "utf8",
+              "value": "MP4"
+            },
+            "Data_Port": {
+              "dtype": "i32",
+              "value": 5001
+            },
+            "Inverse_Grid_Domain_Shape": {
+              "dtype": "utf8",
+              "value": ""
+            },
+            "Ip_Address": {
+              "dtype": "utf8",
+              "value": "192.168.1.10"
+            },
+            "Manufacturer": {
+              "dtype": "utf8",
+              "value": ""
+            },
+            "Model": {
+              "dtype": "utf8",
+              "value": ""
+            },
+            "Selected_Camera": {
+              "dtype": "utf8",
+              "value": "Default"
+            },
+            "Serial_Number": {
+              "dtype": "utf8",
+              "value": "001"
+            },
+            "Server_Port": {
+              "dtype": "i32",
+              "value": 20101
+            },
+            "Show_Console": {
+              "dtype": "i32",
+              "value": 0
+            },
+            "Video_Output": {
+              "dtype": "utf8",
+              "value": "HDMI"
+            }
+          },
+          "children": {
+            "Power_Characterization": {
+              "attrs": {
+                "Algorithm_Type": {
+                  "dtype": "utf8",
+                  "value": "LINEAR"
+                },
+                "Algorithm_Equation": {
+                  "dtype": "utf8",
+                  "value": "W = a*V + b"
+                },
+                "Input_Type": {
+                  "dtype": "utf8",
+                  "value": ""
+                },
+                "Units_Derived_Quantity": {
+                  "dtype": "utf8",
+                  "value": ""
+                }
+              },
+              "children": {},
+              "datasets": {},
+              "tables": {
+                "Derivation_Equation_Constants": {
+                  "fields": [
+                    {
+                      "name": "name",
+                      "dtype": "utf8",
+                      "size": 64
+                    },
+                    {
+                      "name": "value",
+                      "dtype": "f64"
+                    }
+                  ],
+                  "rows": 2,
+                  "columns": {
+                    "name": [
+                      "b",
+                      "a"
+                    ],
+                    "value": [
+                      50.5,
+                      107.5
+                    ]
+                  },
+                  "attrs": {}
+                },
+                "Characterization_Points": {
+                  "fields": [
+                    {
+                      "name": "input_value",
+                      "dtype": "f64"
+                    },
+                    {
+                      "name": "output_value",
+                      "dtype": "f64"
+                    }
+                  ],
+                  "rows": 0,
+                  "columns": {
+                    "input_value": [],
+                    "output_value": []
+                  },
+                  "attrs": {}
+                }
+              }
+            }
+          },
+          "datasets": {
+            "Correction_Data": {
+              "dtype": "f64",
+              "shape": [
+                257,
+                257,
+                2
+              ],
+              "attrs": {
+                "dimensions": {
+                  "dtype": "utf8",
+                  "value": "H,W,D"
+                },
+                "dtype": {
+                  "dtype": "utf8",
+                  "value": "float64"
+                },
+                "shape": {
+                  "dtype": "utf8",
+                  "value": "257x257x2"
+                }
+              }
+            },
+            "Inverse_Correction_Data": {
+              "dtype": "f64",
+              "shape": [
+                257,
+                257,
+                2
+              ],
+              "attrs": {
+                "dimensions": {
+                  "dtype": "utf8",
+                  "value": "H,W,D"
+                },
+                "dtype": {
+                  "dtype": "utf8",
+                  "value": "float64"
+                },
+                "shape": {
+                  "dtype": "utf8",
+                  "value": "257x257x2"
+                }
+              }
+            }
+          }
+        },
+        "Optical_Train_02": {
+          "attrs": {
+            "Actual_Timing_Offset": {
+              "dtype": "i32",
+              "value": -8
+            },
+            "Commanded_Timing_Offset": {
+              "dtype": "i32",
+              "value": 50
+            },
+            "Correction_Grid_Domain_Shape": {
+              "dtype": "utf8",
+              "value": ""
+            },
+            "Custom_Video_Format": {
+              "dtype": "utf8",
+              "value": "MP4"
+            },
+            "Data_Port": {
+              "dtype": "i32",
+              "value": 5001
+            },
+            "Inverse_Grid_Domain_Shape": {
+              "dtype": "utf8",
+              "value": ""
+            },
+            "Ip_Address": {
+              "dtype": "utf8",
+              "value": "192.168.1.11"
+            },
+            "Manufacturer": {
+              "dtype": "utf8",
+              "value": ""
+            },
+            "Model": {
+              "dtype": "utf8",
+              "value": ""
+            },
+            "Selected_Camera": {
+              "dtype": "utf8",
+              "value": "Default"
+            },
+            "Serial_Number": {
+              "dtype": "utf8",
+              "value": "002"
+            },
+            "Server_Port": {
+              "dtype": "i32",
+              "value": 20101
+            },
+            "Show_Console": {
+              "dtype": "i32",
+              "value": 0
+            },
+            "Video_Output": {
+              "dtype": "utf8",
+              "value": "HDMI"
+            }
+          },
+          "children": {
+            "Power_Characterization": {
+              "attrs": {
+                "Algorithm_Type": {
+                  "dtype": "utf8",
+                  "value": "LINEAR"
+                },
+                "Algorithm_Equation": {
+                  "dtype": "utf8",
+                  "value": "W = a*V + b"
+                },
+                "Input_Type": {
+                  "dtype": "utf8",
+                  "value": ""
+                },
+                "Units_Derived_Quantity": {
+                  "dtype": "utf8",
+                  "value": ""
+                }
+              },
+              "children": {},
+              "datasets": {},
+              "tables": {
+                "Derivation_Equation_Constants": {
+                  "fields": [
+                    {
+                      "name": "name",
+                      "dtype": "utf8",
+                      "size": 64
+                    },
+                    {
+                      "name": "value",
+                      "dtype": "f64"
+                    }
+                  ],
+                  "rows": 2,
+                  "columns": {
+                    "name": [
+                      "b",
+                      "a"
+                    ],
+                    "value": [
+                      48.5,
+                      105.0
+                    ]
+                  },
+                  "attrs": {}
+                },
+                "Characterization_Points": {
+                  "fields": [
+                    {
+                      "name": "input_value",
+                      "dtype": "f64"
+                    },
+                    {
+                      "name": "output_value",
+                      "dtype": "f64"
+                    }
+                  ],
+                  "rows": 0,
+                  "columns": {
+                    "input_value": [],
+                    "output_value": []
+                  },
+                  "attrs": {}
+                }
+              }
+            }
+          },
+          "datasets": {
+            "Correction_Data": {
+              "dtype": "f64",
+              "shape": [
+                257,
+                257,
+                2
+              ],
+              "attrs": {
+                "dimensions": {
+                  "dtype": "utf8",
+                  "value": "H,W,D"
+                },
+                "dtype": {
+                  "dtype": "utf8",
+                  "value": "float64"
+                },
+                "shape": {
+                  "dtype": "utf8",
+                  "value": "257x257x2"
+                }
+              }
+            },
+            "Inverse_Correction_Data": {
+              "dtype": "f64",
+              "shape": [
+                257,
+                257,
+                2
+              ],
+              "attrs": {
+                "dimensions": {
+                  "dtype": "utf8",
+                  "value": "H,W,D"
+                },
+                "dtype": {
+                  "dtype": "utf8",
+                  "value": "float64"
+                },
+                "shape": {
+                  "dtype": "utf8",
+                  "value": "257x257x2"
+                }
+              }
+            }
+          }
+        }
+      },
+      "datasets": {}
+    }
+  }
 }

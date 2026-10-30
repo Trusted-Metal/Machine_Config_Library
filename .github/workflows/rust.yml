@@ -3,18 +3,11 @@ name: Rust
 on:
   workflow_dispatch:
   push:
-    branches: ["main"]
-    paths:
-      - "rust/**"
-      - "fixtures/**"
-      - "schema/**"
-      - ".github/workflows/rust.yml"
+    branches: ["main", "release"]
   pull_request:
-    paths:
-      - "rust/**"
-      - "fixtures/**"
-      - "schema/**"
-      - ".github/workflows/rust.yml"
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -28,20 +21,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No apt-get for libhdf5 — hdf5-metno compiles libhdf5 from source
-      # via the `static` feature.  First cold run takes ~2-3 min; subsequent
-      # runs use the Swatinem cache below.
+      - name: Install HDF5 (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      - name: Install HDF5 via vcpkg (Windows)
+        if: runner.os == 'Windows'
+        run: vcpkg install hdf5:x64-windows
+
+      - name: Set HDF5_DIR and add DLLs to PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          echo "HDF5_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows" >> $env:GITHUB_ENV
+          "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin" | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_PATH
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          # "." not "rust": the real workspace root (and its Cargo.lock) is
+          # the repo root (Cargo.toml's [workspace] members = ["rust"]),
+          # not the rust/ member directory — pointing this at "rust" hashed
+          # a stale, unused duplicate lockfile for the cache key instead of
+          # the one Cargo actually resolves against. Target dir is
+          # overridden explicitly since .cargo/config.toml redirects it to
+          # rust/target (kept there for CI/tools/cross_check.py paths).
+          workspaces: ". -> rust/target"
 
       - name: Run unit and integration tests
         run: cargo test
         working-directory: rust
+
+      # Verification only — not a distribution step. A bare .crate file isn't
+      # cargo-installable the way a wheel/tgz is pip/npm-installable (it only
+      # means something inside a registry index); this exists purely to
+      # catch real packaging-manifest problems early (file inclusion rules,
+      # metadata), the same way `cargo publish` itself would, without
+      # actually publishing anywhere. The real "how to depend on this" story
+      # for Rust is the git-tag dependency already documented in
+      # docs/rust.md's Installation section — see VALIDATION_PLAN.md and the
+      # conversation this was scoped in for the full reasoning.
+      - name: Verify cargo package (packaging + isolated rebuild, not published)
+        # --workspace so the path dependency on mcf-extension-contract resolves against the sibling crate being packaged.
+        run: cargo package --workspace
 
       - name: Build release binary
         run: cargo build --release
@@ -50,10 +75,14 @@ jobs:
       # Export the reference fixture to JSON and hash all correction grids.
       # Both outputs are uploaded as artifacts so the compare job can verify
       # that Linux and Windows produce byte-identical results.
+      - name: Full workflow example (smoke test)
+        run: cargo run --example full_workflow
+        working-directory: rust
+
       - name: Smoke-test CLI and export reference fixture
         shell: bash
         run: |
-          bin="./target/release/machine-config-cli"
+          bin="target/release/machine-config-cli"
           [[ "$RUNNER_OS" == "Windows" ]] && bin="${bin}.exe"
           "${bin}" export-json ../fixtures/reference_config.h5 > "$RUNNER_TEMP/rust_output.json"
           echo "Exported $(wc -c < "$RUNNER_TEMP/rust_output.json") bytes"

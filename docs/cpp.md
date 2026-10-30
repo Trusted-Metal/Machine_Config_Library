@@ -1,0 +1,507 @@
+# C++ — Machine Config Library
+
+The C++ library lives in `cpp/include/machine_config/` and is **header-only**. Any C++17
+project that links HighFive (HDF5 wrapper), nlohmann/json, and HDF5 ≥ 1.12 can include the
+headers directly with no compilation step. All types live in the `machine_config` namespace.
+
+← [Back to index](../USAGE.md)
+
+---
+
+## Contents
+
+- [Build and install](#build-and-install)
+- [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file)
+- [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json)
+- [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5)
+- [Use case 6 — Generate a synthetic test config](#use-case-6--generate-a-synthetic-test-config)
+- [Use case 8 — Read OPCUA telemetry configuration](#use-case-8--read-opcua-telemetry-configuration)
+- [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays)
+- [Use case 10 — Validate a config against the JSON schema](#use-case-10--validate-a-config-against-the-json-schema)
+- [CLI reference](#cli-reference)
+- [Quickstart example](#quickstart-example)
+- [Full workflow example](#full-workflow-example)
+- [Running the C++ test suite](#running-the-c-test-suite)
+- [Validation results](#validation-results)
+- [Capability API (stable model facade)](#capability-api-stable-model-facade)
+
+> Use cases 3, 5, and 7 (`config_from_dict`, `ConfigEditor`, `YamlConfigBuilder`) are
+> Python-only conveniences with no C++ port.
+
+---
+
+## Capability API (stable model facade)
+
+Preferred for applications. Include `machine_config/capabilities/file.hpp`
+(dispatch). The v1.0 adapter lives in `capabilities/v1_0/`. Full-model
+get/set with `SetMode::Merge` (default) / `SetMode::Replace`:
+
+```cpp
+#include "machine_config/capabilities/file.hpp"
+
+using machine_config::capabilities::openMachineConfig;
+using machine_config::capabilities::SetMode;
+
+auto opened = openMachineConfig("machine.h5");
+auto file = std::static_pointer_cast<machine_config::capabilities::MachineConfigFileV1_0>(
+    opened.value());
+auto scanner = file->getScanner(0).value();
+scanner.working_distance = 680.0;
+file->setScanner(0, scanner);  // SetMode::Merge by default
+std::string out = "out.h5";
+file->save(&out);
+file->close();
+```
+
+See [USAGE.md](../USAGE.md) and `schema/capabilities/`.
+
+---
+
+## Build and install
+
+**Prerequisites**: CMake ≥ 3.20, a C++17 compiler (MSVC 19+, GCC 11+, Clang 14+), and HDF5
+≥ 1.12 (vcpkg on Windows; build from source on Linux — see [cpp.yml](../.github/workflows/cpp.yml)).
+
+```powershell
+# PowerShell — Windows (vcpkg provides HDF5)
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release `
+  "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+cmake --build cpp/build --config Release
+```
+
+```bash
+# Linux — after building HDF5 1.14.6 from source (see cpp.yml)
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/path/to/hdf5-install \
+  -DHDF5_ROOT=/path/to/hdf5-install
+cmake --build cpp/build
+```
+
+After building, the CLI is at:
+- Windows: `cpp/build/Release/machine_config_cli.exe`
+- Linux:   `cpp/build/machine_config_cli`
+
+All other dependencies (HighFive, nlohmann/json, CLI11, Catch2, json-schema-validator) are
+fetched automatically via CMake `FetchContent`.
+
+### As a dependency via FetchContent
+
+The library is header-only — consumers only need CMake, a C++17 compiler, and HDF5 on their system:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(machine_config
+  GIT_REPOSITORY https://github.com/Trusted-Metal/Machine_Config_Library.git
+  GIT_TAG        v0.2.0-rc.1
+  SOURCE_SUBDIR  cpp)
+FetchContent_MakeAvailable(machine_config)
+target_link_libraries(your_target PRIVATE machine_config)
+```
+
+Track main (locks to HEAD on first configure; re-run cmake to advance):
+```cmake
+FetchContent_Declare(machine_config
+  GIT_REPOSITORY https://github.com/Trusted-Metal/Machine_Config_Library.git
+  GIT_TAG        main
+  SOURCE_SUBDIR  cpp)
+```
+
+---
+
+## Use case 1 — Parse a machine config file
+
+```cpp
+#include "machine_config/reader.hpp"
+using namespace machine_config;
+
+MachineConfigReader reader{"fixtures/reference_config.h5"};
+auto config = reader.parse();   // scalars + metadata only
+
+std::cout << config.meta.machine_name << "\n";        // TM-LPBF-02: AconityMIDI+_OG
+std::cout << config.meta.configuration_hash << "\n";  // 64-char hex
+std::cout << config.optical_trains.size() << "\n";    // 2
+
+for (size_t i = 0; i < config.optical_trains.size(); ++i) {
+    const auto& s = config.optical_trains[i].scanner;
+    std::cout << "Train " << (i + 1)
+              << ": WD=" << s.working_distance.value_or(0.0)
+              << "  offset=(" << s.scan_head_offset_x.value_or(0.0)
+              << ", " << s.scan_head_offset_y.value_or(0.0) << ")\n";
+}
+
+// OPCUA — carried verbatim as the opaque "TM_OPCUA" extension when the file has the group
+if (config.extensions.count("TM_OPCUA")) {
+    std::cout << config.extensions.at("TM_OPCUA").children.size() << " groups\n";
+}
+```
+
+---
+
+## Use case 2 — Export to canonical JSON
+
+```cpp
+#include "machine_config/reader.hpp"
+using namespace machine_config;
+
+MachineConfigReader reader{"fixtures/reference_config.h5"};
+
+// Scalar + metadata only (default), 2-space indent
+std::string json = reader.toJson();
+std::cout << json << "\n";
+
+// Write to a file
+std::ofstream{"output.json"} << json;
+
+// Compact (no indentation)
+std::string compact = reader.toJson(/*indent=*/0);
+```
+
+> **Binary data**: ClearBox grids are extension datasets (use case 9) and are included in
+> `toJson()`. Use `getScanFieldCorrectionBytes()` for the raw `.fc3` bytes.
+
+---
+
+## Use case 4 — Write a config back to HDF5
+
+```cpp
+#include "machine_config/reader.hpp"
+#include "machine_config/writer.hpp"
+using namespace machine_config;
+
+MachineConfigReader reader{"fixtures/reference_config.h5"};
+auto config = reader.parse();
+
+// All fields are plain value types — mutate directly
+config.optical_trains[0].scanner.scan_head_offset_x = -91.5;
+config.optical_trains[0].scanner.scan_head_offset_y =  24.0;
+
+MachineConfigWriter{config}.write("output.h5");
+
+// Verify the roundtrip
+auto reread = MachineConfigReader{"output.h5"}.parse();
+assert(config.meta.machine_name == reread.meta.machine_name);
+assert(reread.optical_trains[0].scanner.scan_head_offset_x == -91.5);
+```
+
+> **Binary data in the writer**: the ClearBox grids travel inside `config.extensions`, so they are
+> written back verbatim. Only the scan-field correction bytes need `parseWithBinary()`; otherwise the
+> writer writes a zero-filled placeholder for them.
+
+---
+
+## Use case 6 — Generate a synthetic test config
+
+`MockConfigBuilder` mirrors Python's and Rust's builders — same defaults, per-train geometry,
+and Gaussian correction-grid formula (peak ≈ 2.0 at centre).
+
+```cpp
+#include "machine_config/builder.hpp"
+#include "machine_config/reader.hpp"
+using namespace machine_config;
+
+// 2-laser config with ClearBox (default)
+MockConfigBuilder{}.save("test_config.h5");
+
+// Customise before saving
+MockConfigBuilder b;
+b.laser_count      = 1;
+b.machine_name     = "TestMachine";
+b.build_plate_x    = 400.0;
+b.include_clearbox = false;
+b.save("custom_config.h5");
+
+// Build into memory without writing
+auto config = MockConfigBuilder{}.build();
+assert(config.optical_trains.size() == 2);
+assert(config.meta.machine_name == "MockMachine");
+
+// Verify the correction grid (ClearBox is an extension tree; see use case 9)
+auto cfg = MachineConfigReader{"test_config.h5"}.parse();
+const auto& ds = cfg.extensions.at("ClearBox").children.at("Optical_Train_01").datasets.at("Correction_Data");
+assert((ds.shape == std::vector<std::uint64_t>{257, 257, 2}));
+double peak = std::get<std::vector<double>>(ds.data)[(128 * 257 + 128) * 2 + 0];  // ≈ 2.0 (Gaussian peak)
+assert(peak > 1.9 && peak < 2.1);
+```
+
+---
+
+## Use case 8 — Read OPCUA telemetry configuration
+
+Core no longer models OPC UA: the group is returned verbatim as the opaque `extensions["TM_OPCUA"]`
+tree (see `docs/EXTENSION_CONTRACT.md`) for a separate extension library to interpret.
+
+```cpp
+#include "machine_config/reader.hpp"
+using namespace machine_config;
+
+MachineConfigReader reader{"fixtures/reference_config_opcua.h5"};
+auto config = reader.parse();
+
+if (auto it = config.extensions.find("TM_OPCUA"); it != config.extensions.end()) {
+    const extension::Tree& opc = it->second;
+    const auto& url = opc.children.at("Client").attrs.at("Server_URL");   // {dtype "utf8", value}
+    std::cout << std::get<std::string>(url.value) << "\n";
+    for (const auto& [name, trigger] : opc.children.at("Triggers").children)
+        std::cout << name << "\n";
+    std::cout << extension::canonicalDigest(opc) << "\n";   // identical in every language
+}
+
+// getRawGroup() — raw attribute map for any HDF5 path; {} if absent, never throws
+auto client_attrs = reader.getRawGroup("OPCUA/Client");
+std::cout << client_attrs["Server_URL"].get<std::string>() << "\n";
+
+auto missing = reader.getRawGroup("does/not/exist");  // {}
+assert(missing.empty());
+```
+
+---
+
+## Use case 9 — Access ClearBox correction arrays
+
+ClearBox is not a typed model in core: it is the opaque `ClearBox` extension tree
+(`config.extensions["ClearBox"]`, an `extension::Tree`), in the File_Version 1.1 layout for both file
+versions (see [EXTENSION_CONTRACT.md](EXTENSION_CONTRACT.md#clearbox)). Each train is a child
+`Optical_Train_NN` with `Correction_Data` / `Inverse_Correction_Data` datasets: a flat row-major
+`std::vector<double>` plus a `shape`; NaN values indicate out-of-field cells.
+
+```cpp
+#include "machine_config/reader.hpp"
+using namespace machine_config;
+
+MachineConfigReader reader{"fixtures/reference_config.h5"};
+auto config = reader.parse();
+
+const auto& root  = config.extensions.at("ClearBox");
+const auto& train = root.children.at("Optical_Train_01");
+
+// Forward grid, train 0 — flat buffer + shape, NaN preserved
+const auto& cd = train.datasets.at("Correction_Data");
+assert((cd.shape == std::vector<std::uint64_t>{257, 257, 2}));
+const auto& data = std::get<std::vector<double>>(cd.data);
+
+// Row-major: offset = (i * shape[1] + j) * shape[2] + k
+size_t d1 = cd.shape[1], d2 = cd.shape[2];
+double centre_x = data[(128 * d1 + 128) * d2 + 0];
+double centre_y = data[(128 * d1 + 128) * d2 + 1];
+if (!std::isnan(centre_x))
+    std::cout << "Centre correction x=" << centre_x << "\n";
+
+// Inverse grid
+const auto& icd = train.datasets.at("Inverse_Correction_Data");
+
+// Per-train scalars are extension attrs (with their stored dtypes); shared values are on the root.
+auto ip = std::get<std::string>(train.attrs.at("Ip_Address").value);
+auto out = std::get<std::string>(root.attrs.at("Output_Path").value);
+
+// Raw .fc3 bytes
+auto bytes = reader.getScanFieldCorrectionBytes(0);  // std::vector<uint8_t>
+std::cout << "fc3 size: " << bytes.size() << " bytes\n";  // 1138799 for train 0
+```
+
+---
+
+## Use case 10 — Validate a config against the JSON schema
+
+`machine_config/schema.hpp` exposes a `validate()` free function backed by
+[pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) against
+`schema/machine_config_v1.schema.json` (draft 7 keywords).
+
+```cpp
+#include "machine_config/reader.hpp"
+#include "machine_config/schema.hpp"  // requires SCHEMA_DIR compile definition
+using namespace machine_config;
+
+// Validate reader output for a real fixture
+auto j = nlohmann::json::parse(MachineConfigReader{"fixtures/reference_config.h5"}.toJson());
+auto errors = validate(j);
+if (errors.empty()) {
+    std::cout << "Valid\n";
+} else {
+    for (const auto& e : errors)
+        std::cerr << e << "\n";
+}
+
+// An empty object fails (missing meta/machine/optical_trains)
+assert(!validate(nlohmann::json::object()).empty());
+```
+
+> `schema.hpp` requires `SCHEMA_DIR` to be defined as a compile-time string pointing to the
+> directory containing `machine_config_v1.schema.json`. The CMake build sets this automatically
+> for test executables; consumers must define it in their own build.
+
+---
+
+## CLI reference
+
+```powershell
+# PowerShell — Windows Release build
+$cli = ".\cpp\build\Release\machine_config_cli.exe"
+
+& $cli export-json fixtures/reference_config.h5
+& $cli export-json fixtures/reference_config.h5 > output.json
+& $cli write-hdf5 output.json reconstructed.h5
+& $cli copy-hdf5 fixtures/reference_config.h5 copy.h5
+& $cli correction-hash fixtures/reference_config.h5 --train 0
+& $cli correction-hash fixtures/reference_config.h5 --train 1 --inverse
+```
+
+```bash
+# Linux
+cli="cpp/build/machine_config_cli"
+"$cli" export-json fixtures/reference_config.h5
+"$cli" write-hdf5 output.json reconstructed.h5
+"$cli" copy-hdf5 fixtures/reference_config.h5 copy.h5
+"$cli" correction-hash fixtures/reference_config.h5 --train 0
+
+# Windows (Git Bash)
+cli="cpp/build/Debug/machine_config_cli.exe"
+```
+
+> `correction-hash` output is byte-identical to Python, Rust, and Node.js for the same
+> file/train/direction. `copy-hdf5` is unique to C++ and preserves correction grids and
+> `.fc3` bytes verbatim without deserialising through the model.
+
+---
+
+## Quickstart example
+
+```powershell
+# PowerShell — build first, then run
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release `
+  "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+cmake --build cpp/build --config Release
+.\cpp\build\Release\quickstart.exe
+```
+
+```bash
+# Linux
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build cpp/build
+cpp/build/quickstart
+
+# Windows (Git Bash) — Debug build already present after tests
+cpp/build/Debug/quickstart.exe
+```
+
+Expected output:
+
+```
+=== Machine Config Quickstart ===
+
+Machine name   : ExampleDummy-2Train
+Optical trains : 2
+  Train 0  wd=670 mm  offset x=-87.5, y=23.5
+           clearbox: present
+  Train 1  wd=670 mm  offset x=87.5, y=-23.5
+           clearbox: present
+Correction grid: [257, 257, 2]   (train 0)
+
+Written to     : mc_quickstart_tmp.h5
+
+PASS
+```
+
+Source: [examples/quickstart/cpp/main.cpp](../examples/quickstart/cpp/main.cpp)
+
+---
+
+## Full workflow example
+
+```powershell
+# PowerShell
+.\cpp\build\Release\full_workflow.exe
+```
+
+```bash
+# Linux
+cpp/build/full_workflow
+
+# Windows (Git Bash)
+cpp/build/Debug/full_workflow.exe
+```
+
+Expected output:
+
+```
+=== Full Workflow: Calibration Adjustment ===
+
+Machine : ExampleDummy-2Train
+Trains  : 2
+
+Before calibration:
+  Train 1  offset x=-87.5, y=23.5
+           correction grid 257x257x2
+  Train 2  offset x=87.5, y=-23.5
+           correction grid 257x257x2
+
+Written to : mc_full_workflow_tmp.h5
+
+After calibration:
+  Train 1  offset x=-91.5, y=24
+  Train 2  offset x=91.5, y=-24
+
+PASS
+```
+
+Source: [examples/full_workflow/cpp/main.cpp](../examples/full_workflow/cpp/main.cpp)
+
+---
+
+## Running the C++ test suite
+
+```powershell
+# PowerShell — from repo root
+cmake --build cpp/build --config Debug
+ctest --test-dir cpp/build -C Debug --output-on-failure
+```
+
+```bash
+# Linux — from repo root
+cmake --build cpp/build
+ctest --test-dir cpp/build --output-on-failure
+
+# Windows (Git Bash)
+cmake --build cpp/build --config Debug
+ctest --test-dir cpp/build -C Debug --output-on-failure
+```
+
+Expected: `100% tests passed, 0 tests failed out of 79`
+
+| File | Tests | Coverage |
+|---|---|---|
+| `test_models.cpp` | 6 | JSON serialisation, nlohmann ADL round-trips |
+| `test_reader.cpp` | 43 | Root attrs, machine, optical trains, scanner, ClearBox scalars, binary data, OPCUA group as an extension, synthetic fixture, `getRawGroup()` |
+| `test_writer.cpp` | 8 | Scalar roundtrip, extension-carrying roundtrip, schema spot-check |
+| `test_builder.cpp` | 6 | 1/2-laser roundtrip, plate dims, correction grid shape + value, no-clearbox |
+| `test_schema.cpp` | 3 | Reference fixture validates, MockBuilder output validates, empty object fails |
+| `test_capabilities.cpp` | 8 | Stable model facade: open/create, `SetMode`, `fileVersion`, `save` |
+| `test_adapter_migration.cpp` | 5 | Mock v1.1 adapter (AV-09–11): isolation, roundtrip, forward/backward migration |
+
+---
+
+## Validation results
+
+20 / 20 scenarios pass on this SDK. See the full table in
+[docs/validation/cpp/PASS_FAIL.md](../docs/validation/cpp/PASS_FAIL.md) and verbatim output
+in [docs/validation/cpp/results.md](../docs/validation/cpp/results.md).
+
+Two real, pre-existing library gaps were found and fixed during this validation pass — both
+in the build/packaging surface, not runtime behavior:
+- **No umbrella public header existed.** `#include <machine_config/machine_config.hpp>` — the
+  single include the static tarball and S-09 both require — never existed; every real
+  consumer used several separate includes. Created it (deliberately excluding `schema.hpp`,
+  which requires a consumer-supplied `SCHEMA_DIR` — schema validation stays opt-in).
+- **A `CMAKE_SOURCE_DIR`/`PROJECT_SOURCE_DIR` bug** broke the moment `cpp/` was consumed via
+  `add_subdirectory` from an external project — exactly what any real from-source install
+  does. Fixed; the main test suite (354 assertions, 79 test cases) reconfirmed green.
+
+**C++ packaging (§10 of `VALIDATION_PLAN.md`) is also done, but not as originally planned.**
+§10 originally described a fully self-contained static tarball bundling HDF5 itself; that was
+changed to a "thin", `find_package`-based package instead — the shape a future vcpkg port
+would actually need, since vcpkg ports declare dependencies rather than bundling them. Verified
+locally as a genuinely fresh external consumer (no reference to this repo's source tree). Full
+reasoning, the two real CMake errors hit while building it, and the verbatim consumer-run
+output are in [docs/validation/cpp/tarball/results.md](../docs/validation/cpp/tarball/results.md).
+The CI packaging step (§10 Step 5) is not yet added.
+
+For the master cross-language matrix see [docs/validation/README.md](../docs/validation/README.md).

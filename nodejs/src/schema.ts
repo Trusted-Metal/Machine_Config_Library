@@ -13,8 +13,8 @@ const AjvClass: new (opts?: Record<string, unknown>) => AjvInstance = _require('
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Relative to this source file: nodejs/src/ → ../../schema/
-const SCHEMA_PATH = join(__dirname, '../../schema/machine_config_v1.schema.json');
+// Relative to compiled output: nodejs/dist/ → ../schema/
+const SCHEMA_PATH = join(__dirname, '../schema/machine_config_v1.schema.json');
 
 export const SCHEMA_VERSION = 'v1';
 

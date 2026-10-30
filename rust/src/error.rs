@@ -36,7 +36,11 @@ pub enum MachineConfigError {
     /// A required HDF5 group or dataset was absent from the file.
     #[error("Required HDF5 path missing: {0}")]
     MissingGroup(String),
-}
+
+    /// An extension tree violates the extension contract, or cannot be stored in this
+    /// `File_Version` (see `extensions.rs`).
+    #[error("Invalid extension: {0}")]
+    InvalidExtension(String),}
 
 /// Shorthand `Result` used throughout the crate.
 pub type Result<T> = std::result::Result<T, MachineConfigError>;

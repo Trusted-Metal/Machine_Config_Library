@@ -1,18 +1,22 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { createRequire } from 'node:module';
+
+const _require = createRequire(import.meta.url);
+const { version } = _require('../package.json') as { version: string };
 
 const program = new Command();
 
 program
   .name('machine-config')
   .description('Machine Config Library — Node.js CLI')
-  .version('0.1.0');
+  .version(version);
 
 program
   .command('export-json <file>')
   .description('Export an HDF5 machine-config file to canonical JSON')
   .option('--indent <n>', 'JSON indentation (0 for compact)', '2')
-  .option('--include-binary', 'Include correction_data and raw_bytes arrays')
+  .option('--include-binary', 'Include the .fc3 raw_bytes')
   .action(async (file: string, opts: { indent: string; includeBinary?: boolean }) => {
     const { MachineConfigReader } = await import('./reader.js');
     const reader = new MachineConfigReader(file);
@@ -29,7 +33,14 @@ program
   .action(async (jsonPath: string, outputPath: string) => {
     const { readFileSync } = await import('node:fs');
     const { MachineConfigWriter } = await import('./writer.js');
+    const { extensionTreeFromJson } = await import('./extensions/json.js');
     const data = JSON.parse(readFileSync(jsonPath, 'utf8'));
+    // Extension trees travel in their JSON form (bigint-free, typed arrays as lists); rebuild them.
+    if (data.extensions !== undefined) {
+      for (const [name, tree] of Object.entries(data.extensions)) {
+        data.extensions[name] = extensionTreeFromJson(tree as Parameters<typeof extensionTreeFromJson>[0]);
+      }
+    }
     const writer = new MachineConfigWriter(data);
     await writer.write(outputPath);
   });
@@ -44,19 +55,56 @@ program
     const { MachineConfigReader } = await import('./reader.js');
     const reader = new MachineConfigReader(file);
     const train = parseInt(opts.train, 10);
-    const cd = opts.inverse
-      ? await reader.getInverseCorrectionData(train)
-      : await reader.getCorrectionData(train);
+    const config = await reader.parse();
+    const name = opts.inverse ? 'Inverse_Correction_Data' : 'Correction_Data';
+    const trainId = `Optical_Train_${String(train + 1).padStart(2, '0')}`;
+    const grid = config.extensions?.['ClearBox']?.children[trainId]?.datasets[name];
+    if (grid === undefined) throw new Error(`no ClearBox ${name} for ${trainId}`);
+    if (grid.dtype !== 'f64') throw new Error(`ClearBox ${name} for ${trainId} is not float64`);
+    const data = grid.data as Float64Array;
 
     // Explicit little-endian float64 bytes — cross-platform/cross-language
     // determinism, matching the Python and Rust correction-hash commands.
-    const bytes = Buffer.allocUnsafe(cd.data.length * 8);
-    for (let i = 0; i < cd.data.length; i++) {
-      bytes.writeDoubleLE(cd.data[i], i * 8);
+    const bytes = Buffer.allocUnsafe(data.length * 8);
+    for (let i = 0; i < data.length; i++) {
+      bytes.writeDoubleLE(data[i], i * 8);
     }
 
     const digest = createHash('sha256').update(bytes).digest('hex');
     process.stdout.write(digest + '\n');
+  });
+
+program
+  .command('configuration-hash <file>')
+  .description('Recompute the configuration hash and compare it to the stored value')
+  .option('--quiet', 'Print only the bare recomputed hex digest (for scripting)')
+  .action(async (file: string, opts: { quiet?: boolean }) => {
+    const { MachineConfigReader } = await import('./reader.js');
+    const { computeConfigurationHash } = await import('./hash.js');
+    const config = await new MachineConfigReader(file).parse();
+    const stored = config.meta.configuration_hash;
+    const recomputed = computeConfigurationHash(config);
+    const valid = config.meta.is_valid ?? false;
+    if (opts.quiet) {
+      process.stdout.write(recomputed + '\n');
+    } else {
+      process.stdout.write(`stored: ${stored}\n`);
+      process.stdout.write(`recomputed: ${recomputed}\n`);
+      process.stdout.write(`valid: ${valid}\n`);
+      if (!valid) {
+        process.exitCode = 1;
+      }
+    }
+  });
+
+program
+  .command('copy-hdf5 <input> <output>')
+  .description('Copy an HDF5 machine config file, preserving all binary data (correction grids, fc3 bytes)')
+  .action(async (input: string, output: string) => {
+    const { MachineConfigReader } = await import('./reader.js');
+    const { MachineConfigWriter } = await import('./writer.js');
+    const config = await new MachineConfigReader(input).parse({ includeBinary: true });
+    await new MachineConfigWriter(config).write(output);
   });
 
 program.parse();

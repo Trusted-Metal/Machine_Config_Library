@@ -1,0 +1,79 @@
+{
+  "branches": [
+    "release",
+    {
+      "name": "main",
+      "prerelease": "rc"
+    }
+  ],
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits",
+        "releaseRules": [
+          { "type": "feat",     "release": "minor" },
+          { "type": "fix",      "release": "patch" },
+          { "type": "perf",     "release": "patch" },
+          { "type": "revert",   "release": "patch" },
+          { "type": "refactor", "release": "patch" },
+          { "type": "docs",     "release": false   },
+          { "type": "style",    "release": false   },
+          { "type": "test",     "release": false   },
+          { "type": "build",    "release": false   },
+          { "type": "ci",       "release": false   },
+          { "type": "chore",    "release": false   },
+          { "breaking": true,   "release": "major" }
+        ]
+      }
+    ],
+    [
+      "@semantic-release/release-notes-generator",
+      {
+        "preset": "conventionalcommits"
+      }
+    ],
+    "@semantic-release/changelog",
+    [
+      "@semantic-release/npm",
+      {
+        "npmPublish": false
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "npm run sync-version",
+        "publishCmd": "(cd nodejs && npm pack) && python -m build python/ && bash scripts/package-cpp.sh"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": [
+          "package.json",
+          "CHANGELOG.md",
+          "rust/Cargo.toml",
+          "rust/Cargo.lock",
+          "python/pyproject.toml",
+          "nodejs/package.json"
+        ],
+        "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          { "path": "nodejs/*.tgz",         "label": "Node.js package (.tgz)" },
+          { "path": "python/dist/*.whl",     "label": "Python wheel (.whl)" },
+          { "path": "python/dist/*.tar.gz",  "label": "Python source distribution (.tar.gz)" },
+          { "path": "cpp/machine-config-cpp-*.tar.gz", "label": "C++ package (.tar.gz, find_package-based — see docs/cpp.md)" }
+        ],
+        "successComment": false,
+        "failComment": false,
+        "releasedLabels": false
+      }
+    ]
+  ]
+}

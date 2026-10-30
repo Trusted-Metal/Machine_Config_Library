@@ -11,9 +11,25 @@ import jsonschema
 import yaml
 
 from .builder import MockConfigBuilder, YamlConfigBuilder
+from .hash import compute_configuration_hash
 from .reader import MachineConfigReader, config_from_dict
 from .schema import SCHEMA
 from .writer import MachineConfigWriter
+
+
+def _elide_dataset_data(value) -> None:
+    """Drop the ``data`` array of every extension dataset so ``inspect -v`` stays readable."""
+    if isinstance(value, dict):
+        datasets = value.get("datasets")
+        if isinstance(datasets, dict):
+            for ds in datasets.values():
+                if isinstance(ds, dict):
+                    ds.pop("data", None)
+        for v in value.values():
+            _elide_dataset_data(v)
+    elif isinstance(value, list):
+        for v in value:
+            _elide_dataset_data(v)
 
 
 @click.group()
@@ -89,6 +105,7 @@ def inspect(path: str, verbose: bool) -> None:
 
     if verbose:
         config_dict = reader._config_to_dict(config)
+        _elide_dataset_data(config_dict)
         click.echo("\n--- Full Configuration ---")
         click.echo(
             yaml.dump(
@@ -157,9 +174,8 @@ def validate(path: str) -> None:
     is_flag=True,
     default=False,
     help=(
-        "Include correction arrays and raw .fc3 bytes in the output. "
-        "Produces large output (~14 MB for a 2-laser config). "
-        "Default: metadata and scalar fields only."
+        "Include the raw .fc3 bytes in the output. "
+        "Extension datasets (ClearBox correction grids) are always included in full."
     ),
 )
 def export_json(path: str, output: str | None, indent: int, include_binary: bool) -> None:
@@ -189,6 +205,24 @@ def write(json_path: str, output: str) -> None:
     try:
         data = json.loads(Path(json_path).read_text(encoding="utf-8"))
         config = config_from_dict(data)
+        MachineConfigWriter(config).write(output)
+        click.echo(f"Written to {output}")
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# copy-hdf5
+# ---------------------------------------------------------------------------
+
+@main.command("copy-hdf5")
+@click.argument("input_path", metavar="INPUT", type=click.Path(exists=True))
+@click.option("--output", "-o", required=True, type=click.Path(), help="Output HDF5 file.")
+def copy_hdf5(input_path: str, output: str) -> None:
+    """Copy an HDF5 machine config file, preserving all binary data (correction grids, fc3 bytes)."""
+    try:
+        config = MachineConfigReader(input_path).parse()
         MachineConfigWriter(config).write(output)
         click.echo(f"Written to {output}")
     except Exception as exc:  # noqa: BLE001
@@ -248,15 +282,52 @@ def correction_hash(path: str, train: int, inverse: bool) -> None:
     import hashlib
     import numpy as np  # noqa: PLC0415
     try:
-        reader = MachineConfigReader(path)
-        arr: np.ndarray = (
-            reader.get_inverse_correction_data(train)
-            if inverse
-            else reader.get_correction_data(train)
-        )
+        config = MachineConfigReader(path).parse()
+        name = "Inverse_Correction_Data" if inverse else "Correction_Data"
+        train_id = f"Optical_Train_{train + 1:02d}"
+        clearbox = config.extensions.get("ClearBox")
+        grid = clearbox.children.get(train_id) if clearbox else None
+        dataset = grid.datasets.get(name) if grid else None
+        if dataset is None:
+            raise ValueError(f"no ClearBox {name} for {train_id}")
+        if dataset.dtype != "f64":
+            raise ValueError(f"ClearBox {name} for {train_id} is not float64")
         # Explicit little-endian float64 for cross-platform determinism.
-        digest = hashlib.sha256(arr.astype("<f8").tobytes()).hexdigest()
+        digest = hashlib.sha256(np.array(dataset.data, dtype="<f8").tobytes()).hexdigest()
         click.echo(digest)
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# configuration-hash
+# ---------------------------------------------------------------------------
+
+@main.command(name="configuration-hash")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--quiet", is_flag=True, default=False, help="Print only the recomputed hex digest.")
+def configuration_hash(path: str, quiet: bool) -> None:
+    """Recompute the configuration hash and compare it to the stored value.
+
+    Never treats a mismatch as an error at the library level — the file is
+    always fully readable either way. This command exits 1 on mismatch as a
+    scripting/CI convenience only.
+    """
+    try:
+        reader = MachineConfigReader(path)
+        config = reader.parse()
+        stored = config.meta.configuration_hash
+        recomputed = compute_configuration_hash(config)
+        valid = bool(config.meta.is_valid)
+        if quiet:
+            click.echo(recomputed)
+        else:
+            click.echo(f"stored: {stored}")
+            click.echo(f"recomputed: {recomputed}")
+            click.echo(f"valid: {'true' if valid else 'false'}")
+        if not valid:
+            sys.exit(1)
     except Exception as exc:  # noqa: BLE001
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)

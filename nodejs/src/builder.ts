@@ -8,12 +8,13 @@ import type {
   LightSource,
   Collimator,
   ScannerCard,
-  ClearBox,
-  OptionalComponents,
   ScanFieldCorrectionFile,
 } from './models.js';
 import { SCHEMA_VERSION } from './schema.js';
 import { MachineConfigWriter } from './writer.js';
+import { forwardPowerCharacterizationPoints } from './powerCharacterization.js';
+import { emptyExtensionTree, type ExtensionTree } from './extensions/contract.js';
+import { CLEARBOX_EXTENSION_NAME, clearboxFromV1_0Trains } from './clearboxLegacy.js';
 
 export interface MockConfigBuilderOptions {
   /** Number of optical trains (lasers) to generate. Default 2. */
@@ -72,23 +73,21 @@ const MOCK_EXPORT_DATE = '2026-01-01T00:00:00.000Z';
 const CORRECTION_N = 257;
 
 /**
- * Smooth 2-D Gaussian warp pattern, shape [257][257][2]. Non-zero by design —
- * zeros would hide bugs in downstream consumers. `scale` multiplies the whole
- * grid (used to derive the inverse grid at 0.9× the forward grid, matching
- * the Rust builder and the Python builder's on-disk output).
+ * Smooth 2-D Gaussian warp pattern, flat row-major for shape [257, 257, 2]. Non-zero by design —
+ * zeros would hide bugs in downstream consumers. `scale` multiplies the whole grid (used to derive
+ * the inverse grid at 0.9× the forward grid, matching the Rust builder).
  */
-function gaussianCorrectionGrid(scale: number): number[][][] {
+function gaussianCorrectionGrid(scale: number): Float64Array {
   const n = CORRECTION_N;
-  const grid: number[][][] = [];
+  const grid = new Float64Array(n * n * 2);
   for (let i = 0; i < n; i++) {
     const x = -1.0 + (2.0 * i) / (n - 1);
-    const row: number[][] = [];
     for (let j = 0; j < n; j++) {
       const y = -1.0 + (2.0 * j) / (n - 1);
       const warp = 2.0 * Math.exp(-(x * x + y * y) / 0.5) * scale;
-      row.push([warp, warp * 0.8]);
+      grid[(i * n + j) * 2] = warp;
+      grid[(i * n + j) * 2 + 1] = warp * 0.8;
     }
-    grid.push(row);
   }
   return grid;
 }
@@ -109,29 +108,33 @@ function mockAxis(bitRes = 20): AxisConfig {
   };
 }
 
-function mockClearBox(index: number): ClearBox {
-  return {
-    ip_address: `192.168.1.${10 + index}`,
-    serial_number: String(index + 1).padStart(3, '0'),
-    data_port: 5001,
-    server_port: 20101,
-    actual_timing_offset: -8,
-    commanded_timing_offset: 50,
-    correction_data: gaussianCorrectionGrid(1.0),
-    inverse_correction_data: gaussianCorrectionGrid(0.9),
-    manufacturer: null,
-    model: null,
-    output_path: '/recordings/',
-    selected_camera: 'Default',
-    custom_video_format: 'MP4',
-    video_output: 'HDMI',
-    show_console: false,
-    software_trigger_delay: 3000,
-    volts_to_watts_algorithm: 'LINEAR',
-    volts_to_watts_params: '50.0,100.0',
-    correction_grid_domain_shape: null,
-    inverse_grid_domain_shape: null,
+/** One train's ClearBox group, authored the way a File_Version 1.0 file stores it. */
+function mockClearBox(index: number): ExtensionTree {
+  const tree = emptyExtensionTree();
+  const text = (name: string, value: string): void => {
+    tree.attrs[name] = { dtype: 'utf8', value };
   };
+  const int = (name: string, value: number): void => {
+    tree.attrs[name] = { dtype: 'i64', value: BigInt(value) };
+  };
+  text('Ip_Address', `192.168.1.${10 + index}`);
+  text('Serial_Number', String(index + 1).padStart(3, '0'));
+  int('Data_Port', 5001);
+  int('Server_Port', 20101);
+  int('Actual_Timing_Offset', -8);
+  int('Commanded_Timing_Offset', 50);
+  text('Output_Path', '/recordings/');
+  text('Selected_Camera', 'Default');
+  text('Custom_Video_Format', 'MP4');
+  text('Video_Output', 'HDMI');
+  int('Show_Console', 0);
+  int('Software_Trigger_Delay', 3000);
+  text('Volts_To_Watts_Algorithm', 'LINEAR');
+  text('Volts_To_Watts_Params', '50.0,100.0');
+  const shape = [CORRECTION_N, CORRECTION_N, 2];
+  tree.datasets['Correction_Data'] = { dtype: 'f64', shape, data: gaussianCorrectionGrid(1.0), attrs: {} };
+  tree.datasets['Inverse_Correction_Data'] = { dtype: 'f64', shape, data: gaussianCorrectionGrid(0.9), attrs: {} };
+  return tree;
 }
 
 function mockSfcf(index: number): ScanFieldCorrectionFile {
@@ -181,6 +184,10 @@ function mockTrain(
     y_axis: mockAxis(),
     z_axis: mockAxis(),
     focus: null,
+    invert_actual_x: false,
+    invert_actual_y: false,
+    invert_commanded_x: false,
+    invert_commanded_y: false,
   };
 
   const lightSource: LightSource = {
@@ -199,8 +206,7 @@ function mockTrain(
     power_min_nominal_unit: 'W',
     power_bit_resolution: null,
     power_bit_resolution_unit: 'bits',
-    watts_to_volts_algorithm: 'LINEAR',
-    watts_to_volts_params: '[1,100,10,1000]',
+    power_characterization: forwardPowerCharacterizationPoints('LINEAR', '[1,100,10,1000]') ?? undefined,
   };
 
   const collimator: Collimator = {
@@ -218,10 +224,6 @@ function mockTrain(
     communication_protocol: 'SL2-100',
     sample_period: 10.0,
     sample_period_unit: 'μs',
-  };
-
-  const optional_components: OptionalComponents = {
-    clearbox: includeClearbox ? mockClearBox(index) : null,
   };
 
   return {
@@ -259,7 +261,6 @@ function mockTrain(
     light_source: lightSource,
     collimator,
     scanner_card: scannerCard,
-    optional_components,
     scan_field_correction_file: includeClearbox ? mockSfcf(index) : null,
   };
 }
@@ -306,6 +307,7 @@ export class MockConfigBuilder {
       build_plate_radius_unit: null,
       gas_flow_direction: 'Y+',
       recoat_direction: 'X+',
+      recoater_blade_type: 'Standard',
     };
 
     const meta: MachineConfigMeta = {
@@ -325,7 +327,14 @@ export class MockConfigBuilder {
       optical_trains.push(mockTrain(i, o.includeClearbox, o.workingDistanceUnit));
     }
 
-    return { meta, machine, optical_trains };
+    const config: MachineConfig = { meta, machine, optical_trains };
+    if (o.includeClearbox) {
+      // Each train's ClearBox is authored as a File_Version 1.0 file stores it, then shimmed.
+      const groups: Array<[string, ExtensionTree]> = optical_trains.map((t, i) => [t.train_id, mockClearBox(i)]);
+      const clearbox = clearboxFromV1_0Trains(groups);
+      if (clearbox !== null) config.extensions = { [CLEARBOX_EXTENSION_NAME]: clearbox };
+    }
+    return config;
   }
 
   /**

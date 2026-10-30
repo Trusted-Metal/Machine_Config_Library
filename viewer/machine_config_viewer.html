@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Machine Configuration Viewer</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+        integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <!-- jsfive loaded dynamically — pure-JS HDF5 reader, no WASM, works via file:// -->
 <style>
 :root {
@@ -528,16 +530,21 @@ select {
 //  Works from file:// — no separate .wasm fetch needed.
 // ─────────────────────────────────────────────────────────────
 const H5WASM_CDN = 'https://cdn.jsdelivr.net/npm/h5wasm@0.10.3/dist/iife/h5wasm.js';
+// Must be regenerated whenever H5WASM_CDN's version changes.
+const H5WASM_SRI = 'sha384-aTwh/FuQtcJd8ZKNGmoaUAXO8xDHXruMNlIXSL5FcavrkZ17sYyYy+oosr/yDsnf';
 
 let _h5wasmReady   = false;
 let _h5wasmFS      = null;
 let _h5wasmDirMade = false;
 
-function loadScript(src) {
+function loadScript(src, integrity) {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
     const el = document.createElement('script');
     el.src     = src;
+    el.integrity = integrity;
+    el.crossOrigin = 'anonymous';
+    el.referrerPolicy = 'no-referrer';
     el.onload  = resolve;
     el.onerror = () => reject(new Error('Failed to load ' + src));
     document.head.appendChild(el);
@@ -548,7 +555,7 @@ async function ensureH5Wasm() {
   if (_h5wasmReady) return;
   setLoadMsg('Loading h5wasm…');
   try {
-    await loadScript(H5WASM_CDN);
+    await loadScript(H5WASM_CDN, H5WASM_SRI);
   } catch (e) {
     setLoadMsg('');
     throw new Error('Could not load h5wasm from CDN.\n\nCheck your internet connection.\n\nError: ' + e.message);

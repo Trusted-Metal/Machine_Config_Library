@@ -1,0 +1,93 @@
+{
+  "attrs": {
+    "Schema": {
+      "dtype": "utf8",
+      "value": "1.2"
+    },
+    "Flag": {
+      "dtype": "u32",
+      "value": 1
+    },
+    "Float_Flag": {
+      "dtype": "f64",
+      "value": 1.0
+    },
+    "Small": {
+      "dtype": "i8",
+      "value": -5
+    },
+    "Wide": {
+      "dtype": "i64",
+      "value": "-9007199254740993"
+    },
+    "Huge": {
+      "dtype": "u64",
+      "value": "18446744073709551615"
+    },
+    "Ratio": {
+      "dtype": "f32",
+      "value": 0.5
+    },
+    "Pair": {
+      "dtype": "f64",
+      "value": [
+        1.5,
+        -2.5
+      ]
+    },
+    "Ids": {
+      "dtype": "u32",
+      "value": [
+        1,
+        2,
+        3
+      ]
+    }
+  },
+  "children": {
+    "Job Start": {
+      "attrs": {
+        "Label": {
+          "dtype": "utf8",
+          "value": "Job Start"
+        }
+      },
+      "children": {
+        "Condition 1": {
+          "attrs": {
+            "Value": {
+              "dtype": "utf8",
+              "value": "running"
+            }
+          },
+          "children": {},
+          "datasets": {}
+        }
+      },
+      "datasets": {}
+    }
+  },
+  "datasets": {
+    "Grid": {
+      "dtype": "f64",
+      "shape": [
+        2,
+        3
+      ],
+      "data": [
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+        6.5
+      ],
+      "attrs": {
+        "Units": {
+          "dtype": "utf8",
+          "value": "mm"
+        }
+      }
+    }
+  }
+}

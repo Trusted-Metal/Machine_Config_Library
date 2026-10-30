@@ -1,0 +1,520 @@
+# Python — Machine Config Library
+
+The reference implementation. Lives in `python/` (package `machine_config`).
+Python is the source of truth for fixture generation, the golden file, and schema definition.
+
+← [Back to index](../USAGE.md)
+
+---
+
+## Contents
+
+- [Installation](#installation)
+- [Use case 1 — Parse a machine config file](#use-case-1--parse-a-machine-config-file)
+- [Use case 2 — Export to canonical JSON](#use-case-2--export-to-canonical-json)
+- [Use case 3 — Reconstruct a config from JSON](#use-case-3--reconstruct-a-config-from-json)
+- [Use case 4 — Write a config back to HDF5](#use-case-4--write-a-config-back-to-hdf5)
+- [Use case 5 — Edit a field and save to a new file](#use-case-5--edit-a-field-and-save-to-a-new-file)
+- [Use case 6 — Generate a synthetic test config](#use-case-6--generate-a-synthetic-test-config)
+- [Use case 7 — Build a config from a YAML specification](#use-case-7--build-a-config-from-a-yaml-specification)
+- [Use case 8 — Read OPCUA telemetry configuration](#use-case-8--read-opcua-telemetry-configuration)
+- [Use case 9 — Access ClearBox correction arrays](#use-case-9--access-clearbox-correction-arrays)
+- [Use case 10 — Validate a config against the schema](#use-case-10--validate-a-config-against-the-schema)
+- [CLI reference](#cli-reference)
+- [Quickstart example](#quickstart-example)
+- [Full workflow example](#full-workflow-example)
+- [Running the Python test suite](#running-the-python-test-suite)
+- [External validation status](#external-validation-status)
+- [Capability API (stable model facade)](#capability-api-stable-model-facade)
+
+---
+
+## Capability API (stable model facade)
+
+Preferred for applications. The library peeks root `File_Version`, dispatches
+to that version's adapter, and returns stable models. On-disk paths, HDF5
+parse/write, and the `MachineConfigFileV1_0` facade live in
+`python/src/machine_config/capabilities/v1_0/`. Shared dispatch is
+`capabilities/__init__.py`. Full-model get/set with `SetMode.MERGE` /
+`SetMode.REPLACE`:
+
+```python
+from machine_config import open_machine_config, create_machine_config, SetMode
+
+opened = open_machine_config("machine.h5")
+file = opened.value
+scanner = file.optical_train(0).value.get_scanner()
+file.optical_train(0).value.set_scanner(
+    {**scanner, "working_distance": 680}, SetMode.MERGE
+)
+file.save("out.h5")
+file.close()
+```
+
+See [USAGE.md](../USAGE.md) and `schema/capabilities/`.
+
+---
+
+## Installation
+
+**One-time setup (from repo root):**
+
+```powershell
+# PowerShell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e python/
+```
+
+```bash
+# Git Bash / Linux / macOS
+python -m venv .venv
+source .venv/Scripts/activate   # Windows Git Bash
+# source .venv/bin/activate     # Linux / macOS
+pip install -e python/
+```
+
+The `machine-config` CLI command is installed automatically alongside the package.
+
+> **VS Code tip**: Select `.venv\Scripts\python.exe` as the workspace interpreter. VS Code's
+> integrated terminal will then activate the venv automatically on every new terminal.
+
+### As a dependency
+
+```bash
+# Pin to a specific tag
+pip install "git+https://github.com/Trusted-Metal/Machine_Config_Library.git@v0.2.0-rc.1#subdirectory=python"
+
+# Track main
+pip install "git+https://github.com/Trusted-Metal/Machine_Config_Library.git#subdirectory=python"
+
+# From a release wheel (requires gh CLI — `gh auth login` once)
+gh release download v0.2.0-rc.1 --repo Trusted-Metal/Machine_Config_Library --pattern "*.whl"
+pip install machine_config_library-0.2.0rc1-py3-none-any.whl
+```
+
+Pin in `pyproject.toml`:
+```toml
+dependencies = [
+    "machine-config-library @ git+https://github.com/Trusted-Metal/Machine_Config_Library.git@v0.2.0-rc.1#subdirectory=python",
+]
+```
+
+> Note: PEP 440 normalises `0.2.0-rc.1` → `0.2.0rc1` in wheel filenames.
+
+---
+
+## Use case 1 — Parse a machine config file
+
+```python
+from machine_config import MachineConfigReader
+
+reader = MachineConfigReader("fixtures/reference_config.h5")
+config = reader.parse()
+
+print(config.meta.machine_name)          # "TM-LPBF-02: AconityMIDI+_OG"
+print(config.meta.configuration_hash)    # 64-character hex string
+
+bp = config.machine.build_plate
+print(f"{bp.x} x {bp.y} x {bp.z} {bp.x_unit}")  # 250.0 x 250.0 x 20.0 mm
+
+for i, train in enumerate(config.optical_trains):
+    s = train.scanner
+    print(f"Train {i+1}: WD={s.working_distance} {s.working_distance_unit}  "
+          f"offset=({s.scan_head_offset_x}, {s.scan_head_offset_y}) mm  "
+          f"axis_config={s.axis_configuration}")
+    # x_axis, y_axis always present; z_axis present for '3D'/'3D+Focus';
+    # focus present only for '3D+Focus'
+    print(f"  X smoothing_kernel: {s.x_axis.smoothing_kernel}")
+    if s.z_axis is not None:
+        print(f"  Z bit_resolution: {s.z_axis.actual_bit_resolution} {s.z_axis.actual_bit_resolution_unit}")
+```
+
+---
+
+## Use case 2 — Export to canonical JSON
+
+By default, `to_json()` produces a compact, human-readable JSON snapshot containing all
+**scalar and metadata fields** plus every extension tree, including `extensions["ClearBox"]` with its
+correction grids (`dtype`, `shape` and the flat row-major `data`). Only the raw `.fc3`
+scan-field correction bytes are excluded; pass `include_binary=True` to add them.
+
+```python
+from machine_config import MachineConfigReader
+import pathlib
+
+reader = MachineConfigReader("fixtures/reference_config.h5")
+
+# Default: metadata + scalars only (~13 KB for a typical 2-laser config)
+print(reader.to_json(indent=2))
+pathlib.Path("output.json").write_text(reader.to_json(indent=2), encoding="utf-8")
+
+# With binary data included: adds raw_bytes (base64-encoded .fc3 file bytes).
+# The ClearBox correction grids are extension datasets and are always included, so the
+# output is large either way (~14 MB for a 2-laser config).
+pathlib.Path("output_full.json").write_text(
+    reader.to_json(indent=2, include_binary=True), encoding="utf-8"
+)
+```
+
+> **Accessing binary data without JSON**: ClearBox grids are in the `ClearBox` extension tree (see
+> use case 9) and `reader.get_scan_field_correction_bytes(train_index)` returns the raw `.fc3`
+> `bytes`. These are the recommended paths for numerical work.
+
+---
+
+## Use case 3 — Reconstruct a config from JSON
+
+Useful when you have a JSON file (e.g. from `export-json`) and need to write it back to HDF5,
+or when passing configs between services as JSON.
+
+```python
+import json, pathlib
+from machine_config import MachineConfigReader, MachineConfigWriter, config_from_dict
+
+data = json.loads(pathlib.Path("output.json").read_text(encoding="utf-8"))
+config = config_from_dict(data)
+
+MachineConfigWriter(config).write("reconstructed.h5")
+
+config2 = MachineConfigReader("reconstructed.h5").parse()
+assert config2.meta.configuration_hash == config.meta.configuration_hash
+```
+
+---
+
+## Use case 4 — Write a config back to HDF5
+
+```python
+from machine_config import MachineConfigReader, MachineConfigWriter
+
+config = MachineConfigReader("original.h5").parse()
+
+# MachineConfig is immutable (dataclasses). Use dataclasses.replace() to change fields,
+# then write the modified config to a new file.
+MachineConfigWriter(config).write("copy.h5")
+```
+
+---
+
+## Use case 5 — Edit a field and save to a new file
+
+```python
+from machine_config.builder import ConfigEditor
+
+editor = ConfigEditor("original.h5")
+
+# Adjust scanner offsets for optical train 0 (0-based index)
+editor.set_scanner_offset(train_index=0, x=-90.0, y=25.0)
+
+# Write the modified config — original.h5 is never touched
+editor.save("adjusted.h5")
+```
+
+---
+
+## Use case 6 — Generate a synthetic test config
+
+```python
+from machine_config.builder import MockConfigBuilder
+
+# 2-laser config with ClearBox and correction files
+MockConfigBuilder(n_lasers=2).save("test_config.h5")
+
+# 1-laser, no ClearBox, custom build plate
+MockConfigBuilder(
+    n_lasers=1,
+    include_clearbox=False,
+    build_plate_x=300.0,
+    build_plate_y=300.0,
+    machine_name="TestMachine",
+).save("single_laser.h5")
+```
+
+---
+
+## Use case 7 — Build a config from a YAML specification
+
+```python
+from machine_config.builder import YamlConfigBuilder
+
+YamlConfigBuilder("spec.yaml").save("config.h5")
+```
+
+**Minimal `spec.yaml`:**
+
+```yaml
+machine:
+  name: "My-LPBF-01"
+  manufacturer: "Acme"
+  model: "AcmeMIDI+"
+  build_plate_x: 250
+  build_plate_y: 250
+  gas_flow_direction: "Y+"
+  recoat_direction: "X+"
+
+optical_trains:
+  - scanner:
+      working_distance: 670
+      scan_head_offset_x: -87.5
+      scan_head_offset_y: 23.5
+      scan_field_x: 600
+      scan_field_y: 600
+    light_source:
+      wavelength: 1070
+      power_max_nominal: 1000
+```
+
+Any key not present in the YAML gets `null` in the output.
+ClearBox and scan field correction file groups are not written by `YamlConfigBuilder`.
+
+---
+
+## Use case 8 — Read OPCUA telemetry configuration
+
+Core no longer models OPC UA. The legacy `OPCUA/` group (File_Version 1.0) or `Extensions/TM_OPCUA/`
+(1.1) is returned verbatim as the opaque extension `config.extensions["TM_OPCUA"]` (an
+`ExtensionTree`, see `docs/EXTENSION_CONTRACT.md`); a separate extension library interprets it.
+Use `get_raw_group()` for ad-hoc inspection of any path:
+
+```python
+from machine_config import MachineConfigReader, canonical_digest
+
+reader = MachineConfigReader("fixtures/reference_config_opcua.h5")
+config = reader.parse()
+
+opcua = config.extensions.get("TM_OPCUA")
+if opcua:
+    print(list(opcua.children))                              # ['Client', 'Pipe', 'Triggers']
+    print(opcua.children["Client"].attrs["Server_URL"])      # Attr(dtype='utf8', value='opc.tcp://...')
+    print(canonical_digest(opcua))                           # identical in every language
+
+# Raw attribute map — returns {} for missing paths, never raises
+client = reader.get_raw_group("OPCUA/Client")
+print(client["Server_URL"])
+
+result = reader.get_raw_group("does/not/exist")   # {}
+```
+
+---
+
+## Use case 9 — Access ClearBox correction arrays
+
+ClearBox is not a typed model in core: it is the opaque `ClearBox` extension tree
+(`config.extensions["ClearBox"]`), in the File_Version 1.1 layout for both file versions (see
+[EXTENSION_CONTRACT.md](EXTENSION_CONTRACT.md#clearbox)). Each train has a child
+`Optical_Train_NN` with `Correction_Data` / `Inverse_Correction_Data` datasets, stored as
+`(257, 257, 2)` float64 with `NaN` for out-of-field points, in a flat row-major `data` list.
+
+```python
+from machine_config import MachineConfigReader
+import numpy as np
+
+config = MachineConfigReader("fixtures/reference_config.h5").parse()
+
+root = config.extensions["ClearBox"]
+train = root.children["Optical_Train_01"]
+ds = train.datasets["Correction_Data"]
+arr = np.asarray(ds.data, dtype=np.float64).reshape(ds.shape)   # (257, 257, 2)
+print(f"Non-finite cells: {np.sum(~np.isfinite(arr))}")
+centre = arr[128, 128]                                          # X and Y channel at centre
+
+# Per-train scalars are extension attrs (with their stored dtypes); shared values are on the root:
+print(train.attrs["Ip_Address"].value, root.attrs["Output_Path"].value)
+
+# Power characterization is a child group with two tables:
+pc = train.children["Power_Characterization"]
+constants = pc.tables["Derivation_Equation_Constants"].columns   # {"name": [...], "value": [...]}
+```
+
+---
+
+## Use case 10 — Validate a config against the schema
+
+```python
+import json, jsonschema
+from machine_config import MachineConfigReader
+from machine_config.schema import SCHEMA
+
+reader = MachineConfigReader("fixtures/reference_config.h5")
+output = json.loads(reader.to_json())
+jsonschema.validate(output, SCHEMA)   # raises ValidationError if invalid
+print("Schema valid.")
+```
+
+---
+
+## CLI reference
+
+```powershell
+# PowerShell
+
+# Inspect a config — brief summary
+.\.venv\Scripts\machine-config.exe inspect fixtures/reference_config.h5
+
+# Inspect with full YAML dump of every field
+.\.venv\Scripts\machine-config.exe inspect fixtures/reference_config.h5 --verbose
+
+# Validate against the schema
+.\.venv\Scripts\machine-config.exe validate fixtures/reference_config.h5
+
+# Export canonical JSON to stdout (metadata + scalars only, ~13 KB)
+.\.venv\Scripts\machine-config.exe export-json fixtures/reference_config.h5
+
+# Export canonical JSON to a file
+.\.venv\Scripts\machine-config.exe export-json fixtures/reference_config.h5 --output out.json
+
+# Include correction arrays and raw .fc3 bytes (large output, ~14 MB)
+.\.venv\Scripts\machine-config.exe export-json fixtures/reference_config.h5 --include-binary --output full.json
+
+# Write a canonical JSON file back to HDF5
+.\.venv\Scripts\machine-config.exe write out.json --output reconstructed.h5
+
+# Build from a YAML spec
+.\.venv\Scripts\machine-config.exe build --from-yaml spec.yaml --output config.h5
+
+# Build a synthetic 2-laser mock config
+.\.venv\Scripts\machine-config.exe build --mock --output test_config.h5
+
+# Build a synthetic 1-laser mock config
+.\.venv\Scripts\machine-config.exe build --mock --lasers 1 --output single.h5
+
+# Generate a synthetic config and print its full JSON (no files needed)
+.\.venv\Scripts\machine-config.exe demo
+```
+
+```bash
+# Git Bash
+.venv/Scripts/machine-config.exe inspect fixtures/reference_config.h5
+.venv/Scripts/machine-config.exe validate fixtures/reference_config.h5
+.venv/Scripts/machine-config.exe export-json fixtures/reference_config.h5
+.venv/Scripts/machine-config.exe export-json fixtures/reference_config.h5 --output out.json
+.venv/Scripts/machine-config.exe export-json fixtures/reference_config.h5 --include-binary --output full.json
+.venv/Scripts/machine-config.exe write out.json --output reconstructed.h5
+.venv/Scripts/machine-config.exe build --from-yaml spec.yaml --output config.h5
+.venv/Scripts/machine-config.exe build --mock --output test_config.h5
+.venv/Scripts/machine-config.exe demo
+```
+
+---
+
+## Quickstart example
+
+```powershell
+# PowerShell — from repo root
+.\.venv\Scripts\python.exe examples/quickstart/python/main.py
+```
+
+```bash
+# Git Bash
+.venv/Scripts/python.exe examples/quickstart/python/main.py
+```
+
+Expected output:
+
+```
+=== Machine Config Quickstart ===
+
+File version   : 1.0
+Machine name   : ExampleDummy-2Train
+Optical trains : 2
+  Train 0  wd=670.0 mm  offset x=-87.5, y=23.5
+           clearbox: present
+  Train 1  wd=670.0 mm  offset x=87.5, y=-23.5
+           clearbox: present
+Correction grid: (257, 257, 2)   (train 0)
+
+Written to     : <tmp>.h5
+
+PASS
+```
+
+---
+
+## Full workflow example
+
+**Scenario:** a field calibration has produced new scanner-head positions. Load the current
+config, apply the updated offsets for both trains, write a modified config, and verify the
+changes persisted alongside the binary correction data.
+
+```powershell
+# PowerShell
+.venv\Scripts\python.exe examples/full_workflow/python/main.py
+```
+
+```bash
+# Git Bash
+.venv/Scripts/python.exe examples/full_workflow/python/main.py
+```
+
+Expected output:
+
+```
+=== Full Workflow: Calibration Adjustment ===
+
+Machine : ExampleDummy-2Train
+Trains  : 2
+
+Before calibration:
+  Train 1  offset x=-87.5, y=23.5
+           correction grid 257×257×2
+  Train 2  offset x=87.5, y=-23.5
+           correction grid 257×257×2
+
+Written to : <tmp>.h5
+
+After calibration:
+  Train 1  offset x=-91.5, y=24.0
+  Train 2  offset x=91.5, y=-24.0
+
+PASS
+```
+
+Source: [examples/full_workflow/python/main.py](../examples/full_workflow/python/main.py). Uses `ConfigEditor` for immutable-style struct updates.
+
+---
+
+## Running the Python test suite
+
+```powershell
+# PowerShell — full suite (310 tests)
+.\.venv\Scripts\python.exe -m pytest python/tests/ -v
+
+# Individual suites
+.\.venv\Scripts\python.exe -m pytest python/tests/test_reader.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_writer.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_writer_roundtrip.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_extensions.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_builder.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_cli.py -v
+.\.venv\Scripts\python.exe -m pytest python/tests/test_schema.py -v
+```
+
+```bash
+# Git Bash
+.venv/Scripts/python.exe -m pytest python/tests/ -v
+```
+
+| Suite | Tests | What it covers |
+|---|---|---|
+| `test_reader.py` | — | Full parse of real AconityMIDI fixtures; all HDF5→model field mappings; OPCUA group as an extension; `get_raw_group`; `include_binary` flag |
+| `test_writer.py` | — | HDF5 write→re-parse roundtrip for machine name, hash, build plate, ClearBox scalars, schema validity |
+| `test_writer_roundtrip.py` | — | Every scalar field; all 18 ClearBox scalar attributes; NaN↔None; axis configurations |
+| `test_extensions.py` | — | Extension contract: validation, pinned digest, JSON form, HDF5 round trips, Node/Rust fixtures, legacy OPCUA group, hash |
+| `test_builder.py` | — | `MockConfigBuilder`; `YamlConfigBuilder` roundtrip; `ConfigEditor` offset mutation |
+| `test_cli.py` | — | `inspect`, `validate`, `export-json`, `write`, `build --mock`, `build --from-yaml`, `demo` |
+| `test_schema.py` | — | Schema parses as JSON; draft 2020-12 meta-validation; all `required` constraints; golden file validation |
+
+### External validation status
+
+Separate from the pytest suite above: this branch also ran the full external
+"validation app" checklist — installing the packaged wheel into a standalone
+project outside this repo and exercising it as a real consumer would,
+including every version-dispatch edge case and the mock v1.1 adapter migration
+tests.
+
+**Result:** ✅ 20/20 scenarios passing. See
+[docs/validation/python/PASS_FAIL.md](../docs/validation/python/PASS_FAIL.md) for
+the full verdict list and
+[docs/validation/python/results.md](../docs/validation/python/results.md) for
+verbatim output.

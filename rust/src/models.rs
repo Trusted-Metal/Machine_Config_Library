@@ -15,53 +15,9 @@
 // the reader's `validate()` step (Phase 3.5), not in these plain data structs.
 
 use indexmap::IndexMap;
+use mcf_extension_contract::ExtensionTree;
 use serde::{Deserialize, Serialize};
-
-/// Raw correction grid read directly from a ClearBox HDF5 dataset.
-///
-/// Values are stored in **row-major (C-order)** layout — the same memory order
-/// used by HDF5 and NumPy. Given a shape `[d0, d1, d2]`, the element at
-/// `(i, j, k)` lives at index `i * d1 * d2 + j * d2 + k`.
-///
-/// For an AconityMIDI machine the shape is `[257, 257, 2]`: 257 × 257 spatial
-/// positions with an X-correction and a Y-correction value at each position.
-/// Cells outside the scan-field boundary are encoded as IEEE 754 NaN.
-///
-/// # Why not `ndarray::Array3<f64>`?
-///
-/// Returning `Array3` in the public API would expose `ndarray` as an implicit
-/// version constraint on every downstream crate. By returning a plain-`std`
-/// type instead, this library stays version-agnostic: consumers may use any
-/// `ndarray` release they like and reconstruct the array with a single call:
-///
-/// ```rust
-/// # use machine_config::models::CorrectionData;
-/// # let cd = CorrectionData { data: vec![0.0_f64; 257 * 257 * 2], shape: [257, 257, 2] };
-/// let arr = ndarray::Array3::from_shape_vec(cd.shape, cd.data)
-///     .expect("shape is always consistent");
-/// assert_eq!(arr.shape(), &[257, 257, 2]);
-/// ```
-///
-/// # Accessing elements without ndarray
-///
-/// ```rust
-/// # use machine_config::models::CorrectionData;
-/// # let cd = CorrectionData { data: vec![1.0_f64; 257 * 257 * 2], shape: [257, 257, 2] };
-/// # let (i, j, k) = (10_usize, 20_usize, 1_usize);
-/// // value at (i, j, k)
-/// let [_, d1, d2] = cd.shape;
-/// let val = cd.data[i * d1 * d2 + j * d2 + k];
-/// # assert_eq!(val, 1.0);
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct CorrectionData {
-    /// Flat, row-major buffer of `f64` values.
-    /// `data.len() == shape[0] * shape[1] * shape[2]` is always true.
-    /// NaN values represent out-of-field cells.
-    pub data: Vec<f64>,
-    /// Array dimensions as `[d0, d1, d2]`, e.g. `[257, 257, 2]`.
-    pub shape: [usize; 3],
-}
+use std::collections::BTreeMap;
 
 /// Arbitrary, non-schema HDF5 attributes preserved verbatim.
 /// `IndexMap` (not `HashMap`) to preserve HDF5 attribute enumeration order,
@@ -85,34 +41,46 @@ pub struct ScanFieldCorrectionFile {
     pub raw_bytes: Option<Vec<u8>>,
 }
 
-/// Optional ClearBox add-on component. HDF5 source: `.../Optional_Components/ClearBox/`.
+/// One named equation constant for a power characterization's equation
+/// (e.g. `a`/`b` for a Log-Linear fit: `log(ppm) = a*mA + b`). HDF5 source:
+/// one row of the `Derivation_Equation_Constants` compound dataset. A named
+/// row rather than a positional array so a reader never has to infer which
+/// index means what from `algorithm_type` alone, and so adding a constant is
+/// an additive row rather than an ordering hazard.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ClearBox {
-    pub ip_address: String,
-    pub serial_number: Option<String>,
-    pub data_port: Option<i64>,
-    pub server_port: Option<i64>,
-    pub actual_timing_offset: Option<i64>,
-    pub commanded_timing_offset: Option<i64>,
-    /// `(257, 257, 2)` float64 grid; out-of-field NaN cells become `None`.
-    /// Only present when read via `parse_with_binary()` — omitted from JSON otherwise.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub correction_data: Option<Vec<Vec<Vec<Option<f64>>>>>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub inverse_correction_data: Option<Vec<Vec<Vec<Option<f64>>>>>,
-    pub manufacturer: Option<String>,
-    pub model: Option<String>,
-    pub output_path: Option<String>,
-    pub selected_camera: Option<String>,
-    pub custom_video_format: Option<String>,
-    pub video_output: Option<String>,
-    /// HDF5 int 0/1.
-    pub show_console: Option<bool>,
-    pub software_trigger_delay: Option<i64>,
-    pub volts_to_watts_algorithm: Option<String>,
-    pub volts_to_watts_params: Option<String>,
-    pub correction_grid_domain_shape: Option<String>,
-    pub inverse_grid_domain_shape: Option<String>,
+pub struct EquationConstant {
+    pub name: String,
+    pub value: f64,
+}
+
+/// One calibration sample pair. HDF5 source: one row of a `Calibration_Points` or
+/// `Characterization_Points` compound dataset.
+///
+/// `input_value` is in the sensor's `input_type` unit; `output_value` is in
+/// the sensor's `sensor_output_space` unit (**not** `units_derived_quantity`)
+/// — every row of a given sensor's calibration curve is in the same units by
+/// construction. Confirmed against the ZR800 reference example: both points
+/// satisfy `algorithm_equation` exactly in log-space
+/// (`0.4375 * 4 - 2.75 == -1.0`, `0.4375 * 20 - 2.75 == 6.0`), not linear ppm.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CalibrationPoint {
+    pub input_value: f64,
+    pub output_value: f64,
+}
+
+/// v1.1 addition (Changes 3/4): a structured algorithm + equation + constants
+/// + characterization points describing a power conversion. Used by
+/// `LightSource.power_characterization` (Light_Source's Watts→Volts fit). ClearBox's own
+/// Volts→Watts fit has the same shape but lives in the opaque `ClearBox` extension tree. See
+/// `docs/migrations/v1_0_to_v1_1.md` Changes 3/4 for the full derivation rules.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerCharacterization {
+    pub algorithm_type: Option<String>,
+    pub algorithm_equation: Option<String>,
+    pub input_type: Option<String>,
+    pub units_derived_quantity: Option<String>,
+    pub derivation_equation_constants: Vec<EquationConstant>,
+    pub characterization_points: Vec<CalibrationPoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -178,6 +146,23 @@ pub struct Scanner {
     pub y_axis: AxisConfig,
     pub z_axis: Option<AxisConfig>,
     pub focus: Option<AxisConfig>,
+    /// Plain `bool`, not `Option<bool>` — deliberately different from every
+    /// other bool field in this schema. Defaults to `false` whether the
+    /// on-disk attribute is absent or explicitly `0`; the API never
+    /// distinguishes those two cases (user-confirmed, 2026-08-21). Read
+    /// faithfully (0/1/absent all map correctly on read), but serialised
+    /// AND written back to HDF5 only when `true` — `false` never appears in
+    /// any output, MCF or JSON, so a write→read round-trip is lossy for an
+    /// explicit `false` specifically (it becomes indistinguishable from
+    /// "never set"), by design.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_actual_x: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_actual_y: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_commanded_x: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert_commanded_y: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -198,16 +183,9 @@ pub struct LightSource {
     /// HDF5 stores this attribute as a string; the reader parses it to `f64`.
     pub power_bit_resolution: Option<f64>,
     pub power_bit_resolution_unit: Option<String>,
-    pub watts_to_volts_algorithm: Option<String>,
-    pub watts_to_volts_params: Option<String>,
-}
-
-/// Optional add-on hardware that may or may not be installed on an optical train.
-/// Maps to the `Optional_Components` HDF5 group under each `Optical_Train_NN`.
-/// Always present on `OpticalTrain` (the group always exists); contents vary.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OptionalComponents {
-    pub clearbox: Option<ClearBox>,
+    /// The only representation of this concept, for files of either version.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub power_characterization: Option<PowerCharacterization>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -251,7 +229,6 @@ pub struct OpticalTrain {
     pub collimator: Collimator,
     /// Required; see Rule 7 (§0.5) — a train missing a scanner card is invalid.
     pub scanner_card: ScannerCard,
-    pub optional_components: OptionalComponents,
     pub scan_field_correction_file: Option<ScanFieldCorrectionFile>,
 }
 
@@ -275,6 +252,7 @@ pub struct Machine {
     pub build_plate_radius_unit: Option<String>,
     pub gas_flow_direction: Option<String>,
     pub recoat_direction: Option<String>,
+    pub recoater_blade_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -287,58 +265,31 @@ pub struct MachineConfigMeta {
     pub file_version: String,
     pub export_date: String,
     pub configuration_hash: String,
+    /// TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+    /// Not a real schema field, never serialized for a v1.0 config — only the
+    /// mock v1.1 reader/writer (test-only, not part of this crate) ever
+    /// populates it. `skip_serializing_if` keeps it out of every real JSON
+    /// export unless explicitly set, matching Python's/Node's behavior for
+    /// the same fixture fields.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub facility_id: Option<String>,
+    /// TEST FIXTURE for the mock v1.1 adapter — see `facility_id` above.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub config_author: Option<String>,
+    /// Reader-computed, in-memory only: `Some(true)`/`Some(false)` once a
+    /// `MachineConfigReader` has recomputed the configuration hash and
+    /// compared it to the on-disk value; `None` until then. Never set by a
+    /// writer or by `MockConfigBuilder`. Unconditionally excluded from
+    /// serialization (`skip`, not `skip_serializing_if` — this field, unlike
+    /// `facility_id`/`config_author`, is genuinely populated on every real
+    /// read, so a conditional skip would stop excluding it) — never written
+    /// to HDF5, never part of the interop contract. A mismatch is never an
+    /// error: the file remains fully readable either way (see `hash.rs`).
+    #[serde(skip, default)]
+    pub is_valid: Option<bool>,
     /// Preserves any non-typed root HDF5 attrs.
     #[serde(default)]
     pub extra: ExtraAttrs,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OpcuaClientConfig {
-    pub server_url: String,
-    pub auth_mode: String,
-    pub security_mode: String,
-    pub security_policy: String,
-    pub bfs_max_depth: i64,
-    pub publish_interval: i64,
-    pub sampling_interval: i64,
-    pub session_timeout: i64,
-    /// Preserves any non-typed HDF5 attrs.
-    #[serde(default)]
-    pub extra: ExtraAttrs,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OpcuaPipeConfig {
-    /// HDF5 int 0/1.
-    pub pipe_enabled: bool,
-    pub buffer_size: i64,
-    /// Preserves any non-typed HDF5 attrs.
-    #[serde(default)]
-    pub extra: ExtraAttrs,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OpcuaTrigger {
-    pub id: Option<String>,
-    pub signal: Option<String>,
-    pub subsystem: Option<String>,
-    /// HDF5 int 0/1.
-    pub rule_enabled: Option<bool>,
-    pub start_value: Option<String>,
-    pub stop_value: Option<String>,
-    #[serde(default)]
-    pub extra: ExtraAttrs,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OpcuaConfig {
-    pub client: OpcuaClientConfig,
-    pub pipe: OpcuaPipeConfig,
-    /// Key = trigger label (HDF5 sub-group name under `OPCUA/Triggers/`).
-    /// `IndexMap` preserves HDF5 group enumeration order.
-    pub triggers: IndexMap<String, OpcuaTrigger>,
-    /// HDF5 float64 `0.0`/`1.0` on the `OPCUA/Triggers` group attrs — not an int.
-    pub triggers_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -346,10 +297,13 @@ pub struct MachineConfig {
     pub meta: MachineConfigMeta,
     pub machine: Machine,
     pub optical_trains: Vec<OpticalTrain>,
-    /// Machine connectivity configuration, outside the canonical schema (§0.2).
-    /// Omitted from JSON entirely when absent (not serialised as `null`).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub opcua: Option<OpcuaConfig>,
+    /// Opaque extension trees keyed by their group name under `Extensions/`. Read and written
+    /// verbatim by core, so extensions core has no model for (including private ones) survive a
+    /// read-modify-write; only the matching extension library interprets them. ClearBox is one of
+    /// these (`extensions["ClearBox"]`), in its File_Version 1.1 layout for either file version.
+    /// Omitted from JSON when empty.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
+    pub extensions: BTreeMap<String, ExtensionTree>,
 }
 
 #[cfg(test)]
@@ -429,6 +383,10 @@ mod tests {
                 y_axis: sample_axis(),
                 z_axis: Some(sample_axis()),
                 focus: None,
+                invert_actual_x: false,
+                invert_actual_y: false,
+                invert_commanded_x: false,
+                invert_commanded_y: false,
             },
             light_source: LightSource {
                 manufacturer: "IPG".into(),
@@ -446,8 +404,7 @@ mod tests {
                 power_min_nominal_unit: None,
                 power_bit_resolution: None,
                 power_bit_resolution_unit: None,
-                watts_to_volts_algorithm: None,
-                watts_to_volts_params: None,
+                power_characterization: None,
             },
             collimator: Collimator {
                 manufacturer: "Aconity3D".into(),
@@ -464,7 +421,6 @@ mod tests {
                 sample_period: None,
                 sample_period_unit: None,
             },
-            optional_components: OptionalComponents { clearbox: None },
             scan_field_correction_file: None,
         }
     }
@@ -480,6 +436,9 @@ mod tests {
                 file_version: "1.0".into(),
                 export_date: "2026-06-09T19:01:02.123Z".into(),
                 configuration_hash: "9".repeat(64),
+                facility_id: None,
+                config_author: None,
+                is_valid: None,
                 extra: IndexMap::new(),
             },
             machine: Machine {
@@ -498,9 +457,10 @@ mod tests {
                 build_plate_radius_unit: Some("mm".into()),
                 gas_flow_direction: Some("Y+".into()),
                 recoat_direction: Some("X+".into()),
+                recoater_blade_type: Some("Standard".into()),
             },
             optical_trains: vec![sample_train()],
-            opcua: None,
+            extensions: Default::default(),
         }
     }
 
@@ -519,98 +479,17 @@ mod tests {
     }
 
     #[test]
-    fn absent_opcua_is_omitted_not_null() {
-        let config = sample_config();
-        let json = serde_json::to_string(&config).unwrap();
-        assert!(!json.contains("\"opcua\""), "opcua key must be omitted when None");
-    }
-
-    #[test]
-    fn present_opcua_serialises_as_object() {
+    fn extensions_are_omitted_when_empty_and_roundtrip_through_json() {
         let mut config = sample_config();
-        let mut triggers = IndexMap::new();
-        triggers.insert(
-            "Laser Emission Interlock".to_string(),
-            OpcuaTrigger {
-                id: None,
-                signal: Some("E-Stop".into()),
-                subsystem: None,
-                rule_enabled: Some(true),
-                start_value: None,
-                stop_value: None,
-                extra: IndexMap::new(),
-            },
-        );
-        config.opcua = Some(OpcuaConfig {
-            client: OpcuaClientConfig {
-                server_url: "opc.tcp://localhost:4840".into(),
-                auth_mode: "Anonymous".into(),
-                security_mode: "None".into(),
-                security_policy: "None".into(),
-                bfs_max_depth: 16,
-                publish_interval: 100,
-                sampling_interval: 100,
-                session_timeout: 60000,
-                extra: IndexMap::new(),
-            },
-            pipe: OpcuaPipeConfig {
-                pipe_enabled: true,
-                buffer_size: 4096,
-                extra: IndexMap::new(),
-            },
-            triggers,
-            triggers_enabled: Some(true),
-        });
-
         let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("\"extensions\""), "extensions key must be omitted when empty");
+
+        let mut tree = ExtensionTree::default();
+        tree.attrs.insert("Flag".into(), mcf_extension_contract::Attr::scalar(1u32));
+        config.extensions.insert("Private_Ext".into(), tree);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"extensions\""));
         let roundtripped: MachineConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(config, roundtripped);
-        let opcua = roundtripped.opcua.unwrap();
-        assert_eq!(opcua.triggers_enabled, Some(true));
-        assert!(opcua.triggers.contains_key("Laser Emission Interlock"));
-    }
-
-    #[test]
-    fn binary_fields_omitted_by_default_and_present_when_set() {
-        let mut train = sample_train();
-        train.optional_components.clearbox = Some(ClearBox {
-            ip_address: "192.168.1.50".into(),
-            serial_number: None,
-            data_port: None,
-            server_port: None,
-            actual_timing_offset: None,
-            commanded_timing_offset: None,
-            correction_data: None,
-            inverse_correction_data: None,
-            manufacturer: None,
-            model: None,
-            output_path: None,
-            selected_camera: None,
-            custom_video_format: None,
-            video_output: None,
-            show_console: None,
-            software_trigger_delay: None,
-            volts_to_watts_algorithm: None,
-            volts_to_watts_params: None,
-            correction_grid_domain_shape: None,
-            inverse_grid_domain_shape: None,
-        });
-        let mut config = sample_config();
-        config.optical_trains = vec![train];
-
-        let json_without_binary = serde_json::to_string(&config).unwrap();
-        assert!(!json_without_binary.contains("correction_data"));
-
-        // clearbox itself is always present (possibly null) — only the
-        // correction grids are conditionally omitted.
-        assert!(json_without_binary.contains("\"clearbox\""));
-
-        config.optical_trains[0].optional_components.clearbox.as_mut().unwrap().correction_data =
-            Some(vec![vec![vec![Some(1.0), None]]]);
-        let json_with_binary = serde_json::to_string(&config).unwrap();
-        assert!(json_with_binary.contains("\"correction_data\""));
-
-        let roundtripped: MachineConfig = serde_json::from_str(&json_with_binary).unwrap();
         assert_eq!(config, roundtripped);
     }
 

@@ -1,0 +1,509 @@
+// Catch2 tests for the stable model facade (File_Version 1.0).
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+
+#include <highfive/H5File.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <memory>
+#include <set>
+#include <string>
+
+#include "machine_config/capabilities.hpp"
+#include "machine_config/reader.hpp"
+#include "machine_config/writer.hpp"
+
+#ifndef FIXTURES_DIR
+#  error "FIXTURES_DIR must be defined by tests/CMakeLists.txt"
+#endif
+#ifndef VALIDATION_FIXTURES_DIR
+#  error "VALIDATION_FIXTURES_DIR must be defined by tests/CMakeLists.txt"
+#endif
+
+using machine_config::MachineConfigReader;
+using machine_config::MachineConfigWriter;
+using machine_config::capabilities::MachineConfigFileV1_0;
+using machine_config::capabilities::MachineConfigFileV1_1;
+using machine_config::capabilities::SetMode;
+using machine_config::capabilities::createMachineConfig;
+using machine_config::capabilities::openMachineConfig;
+using machine_config::capabilities::supportedFileVersions;
+
+static const std::string REF       = std::string(FIXTURES_DIR) + "/reference_config.h5";
+static const std::string REFERENCE_V1_1 = std::string(FIXTURES_DIR) + "/reference_config_v1_1.h5";
+static const std::string OPCUA_REF = std::string(FIXTURES_DIR) + "/reference_config_opcua.h5";
+static const std::string SENSORS_REF =
+    std::string(FIXTURES_DIR) + "/reference_config_synchronous_sensors.h5";
+
+static std::filesystem::path tmpPath(const std::string& tag) {
+    return std::filesystem::temp_directory_path() /
+           ("mc_cap_test_" + tag + ".h5");
+}
+
+// Writes only the root File_Version attribute — enough for peekFileVersion()
+// to route through the dispatcher, nothing else needed since these tests
+// never actually parse the file (DISPATCH_REGISTRY_PLAN.md's fake registry
+// entries never touch the path they're given).
+static std::filesystem::path writeFileVersionOnly(const std::string& version, const std::string& tag) {
+    auto path = tmpPath(tag);
+    HighFive::File f(path.string(),
+        HighFive::File::ReadWrite | HighFive::File::Create | HighFive::File::Truncate);
+    f.createAttribute<std::string>("File_Version", HighFive::DataSpace::Scalar()).write(version);
+    f.flush();
+    return path;
+}
+
+// ---------------------------------------------------------------------------
+// Fakes for DISPATCH_REGISTRY_PLAN.md's registry-injection tests. None of
+// these bodies are ever exercised — the tests only prove that a version
+// string routes to the fake's *type* via a locally-built registry, never the
+// real "1.0" adapter. Real values would be dead weight here.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+class FakeReaderAdapter : public machine_config::ReaderAdapter {
+public:
+    machine_config::MachineConfig parse() const override { return {}; }
+    machine_config::MachineConfig parseWithBinary() const override { return {}; }
+    std::string toJson(int, bool) const override { return "{}"; }
+    nlohmann::json getRawGroup(const std::string&) const override { return nlohmann::json::object(); }
+    std::vector<uint8_t> getScanFieldCorrectionBytes(size_t) const override { return {}; }
+};
+
+class FakeWriterAdapter : public machine_config::WriterAdapter {
+public:
+    void write(std::filesystem::path) const override {}
+};
+
+class FakeMachineConfigFile : public machine_config::capabilities::IMachineConfigFile {
+public:
+    using Result = machine_config::capabilities::Result<void>;
+    template <typename T>
+    using ResultT = machine_config::capabilities::Result<T>;
+    using SetMode = machine_config::capabilities::SetMode;
+
+    std::string fileVersion() const override { return "9.9-test"; }
+    std::size_t opticalTrainCount() const override { return 0; }
+    machine_config::MachineConfigMeta getMeta() const override { return {}; }
+    Result setMeta(const machine_config::MachineConfigMeta&, SetMode) override { return Result::Ok(); }
+    machine_config::Machine getMachine() const override { return {}; }
+    Result setMachine(const machine_config::Machine&, SetMode) override { return Result::Ok(); }
+    ResultT<machine_config::OpticalTrain> getTrain(std::size_t) const override {
+        return ResultT<machine_config::OpticalTrain>::Err("NotPresent", "fake");
+    }
+    ResultT<machine_config::Scanner> getScanner(std::size_t) const override {
+        return ResultT<machine_config::Scanner>::Err("NotPresent", "fake");
+    }
+    Result setScanner(std::size_t, const machine_config::Scanner&, SetMode) override { return Result::Ok(); }
+    ResultT<machine_config::LightSource> getLightSource(std::size_t) const override {
+        return ResultT<machine_config::LightSource>::Err("NotPresent", "fake");
+    }
+    Result setLightSource(std::size_t, const machine_config::LightSource&, SetMode) override { return Result::Ok(); }
+    ResultT<machine_config::Collimator> getCollimator(std::size_t) const override {
+        return ResultT<machine_config::Collimator>::Err("NotPresent", "fake");
+    }
+    Result setCollimator(std::size_t, const machine_config::Collimator&, SetMode) override { return Result::Ok(); }
+    ResultT<machine_config::ScannerCard> getScannerCard(std::size_t) const override {
+        return ResultT<machine_config::ScannerCard>::Err("NotPresent", "fake");
+    }
+    Result setScannerCard(std::size_t, const machine_config::ScannerCard&, SetMode) override { return Result::Ok(); }
+    bool isValid() const override { return false; }
+    Result save(const std::string* = nullptr) override { return Result::Ok(); }
+    void close() override {}
+};
+
+}  // namespace
+
+TEST_CASE("CapabilityOpenGetScannerMatchesReader") {
+    auto opened = MachineConfigFileV1_0::open(REF);
+    REQUIRE(opened.ok());
+    auto file = opened.value();
+    REQUIRE(file->fileVersion() == "1.0");
+
+    auto json = MachineConfigReader(REF).parse();
+    auto scanner = file->getScanner(0);
+    REQUIRE(scanner.ok());
+    REQUIRE(scanner.value().working_distance == json.optical_trains[0].scanner.working_distance);
+    REQUIRE(scanner.value().manufacturer == json.optical_trains[0].scanner.manufacturer);
+    file->close();
+}
+
+TEST_CASE("CapabilityMergeSetScannerRoundtrip") {
+    auto opened = MachineConfigFileV1_0::open(REF);
+    REQUIRE(opened.ok());
+    auto file = opened.value();
+    auto before = file->getScanner(0);
+    REQUIRE(before.ok());
+    const auto manufacturer = before.value().manufacturer;
+
+    auto patched = before.value();
+    patched.working_distance = 123.5;
+    REQUIRE(file->setScanner(0, patched, SetMode::Merge).ok());
+
+    auto out = tmpPath("merge");
+    std::string out_s = out.string();
+    REQUIRE(file->save(&out_s).ok());
+    file->close();
+
+    auto again = MachineConfigFileV1_0::open(out);
+    REQUIRE(again.ok());
+    auto after = again.value()->getScanner(0);
+    REQUIRE(after.ok());
+    REQUIRE_THAT(*after.value().working_distance, Catch::Matchers::WithinRel(123.5));
+    REQUIRE(after.value().manufacturer == manufacturer);
+    again.value()->close();
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityReplaceSetScanner") {
+    auto opened = MachineConfigFileV1_0::open(REF);
+    REQUIRE(opened.ok());
+    auto file = opened.value();
+    auto before = file->getScanner(0);
+    REQUIRE(before.ok());
+    REQUIRE(before.value().scan_field_x.has_value());
+
+    auto replacement = before.value();
+    replacement.manufacturer = "ReplaceCo";
+    replacement.working_distance = 1.0;
+    replacement.scan_field_x = std::nullopt;
+    REQUIRE(file->setScanner(0, replacement, SetMode::Replace).ok());
+
+    auto after = file->getScanner(0);
+    REQUIRE(after.ok());
+    REQUIRE(after.value().manufacturer == "ReplaceCo");
+    REQUIRE_THAT(*after.value().working_distance, Catch::Matchers::WithinRel(1.0));
+    REQUIRE_FALSE(after.value().scan_field_x.has_value());
+    file->close();
+}
+
+TEST_CASE("CapabilityInvalidIndex") {
+    auto opened = MachineConfigFileV1_0::open(REF);
+    REQUIRE(opened.ok());
+    auto bad = opened.value()->getTrain(999);
+    REQUIRE_FALSE(bad.ok());
+    REQUIRE(bad.errorCode() == "InvalidIndex");
+    REQUIRE(opened.value()->opticalTrainCount() >= 1);
+    opened.value()->close();
+}
+
+// The openMachineConfig() dispatcher re-wraps MachineConfigFileV1_0::open()'s
+// error into a Result<shared_ptr<IMachineConfigFile>>. This line used to drop
+// errorDetails() during that re-wrap. No real caller can reach that bug
+// today — open()'s own two error paths (UnsupportedVersion, IoError) never
+// populate details — so this test isolates the exact re-wrap expression with
+// a manually-constructed Result instead of exercising it through a real
+// file, to prove the fixed line itself is correct.
+TEST_CASE("CapabilityErrorRewrapPreservesDetails") {
+    using machine_config::capabilities::Result;
+    using ConfigPtr = std::shared_ptr<machine_config::capabilities::MachineConfigFileV1_0>;
+
+    auto inner = Result<ConfigPtr>::Err(
+        "ValidationError", "missing required field(s)",
+        {"Machine_Profile", "Root_Node"});
+
+    // Same pattern as the fixed line in capabilities/file.hpp.
+    auto rewrapped = Result<std::shared_ptr<machine_config::capabilities::IMachineConfigFile>>::Err(
+        inner.errorCode(), inner.errorMessage(), inner.errorDetails());
+
+    REQUIRE(rewrapped.errorCode() == inner.errorCode());
+    REQUIRE(rewrapped.errorMessage() == inner.errorMessage());
+    REQUIRE(rewrapped.errorDetails() == inner.errorDetails());
+    REQUIRE(rewrapped.errorDetails().size() == 2);
+}
+
+TEST_CASE("CapabilityClearBoxExtensionSurvivesASessionOpenAndSave") {
+    for (const char* fixture : {REF.c_str(), REFERENCE_V1_1.c_str()}) {
+        auto before = MachineConfigReader{fixture}.parse();
+        const auto want = machine_config::extension::canonicalDigest(before.extensions.at("ClearBox"));
+
+        auto opened = openMachineConfig(fixture);
+        REQUIRE(opened.ok());
+        auto file = opened.value();
+        auto scanner = file->getScanner(0);
+        REQUIRE(scanner.ok());
+        auto edited = scanner.value();
+        edited.working_distance = 77.5;
+        REQUIRE(file->setScanner(0, edited, SetMode::Merge).ok());
+
+        auto out = tmpPath("clearbox_session");
+        const std::string outS = out.string();
+        REQUIRE(file->save(&outS).ok());
+        file->close();
+
+        auto after = MachineConfigReader{out}.parse();
+        REQUIRE(machine_config::extension::canonicalDigest(after.extensions.at("ClearBox")) == want);
+        std::filesystem::remove(out);
+    }
+}
+
+TEST_CASE("CapabilityCreateBasedInstanceCarriesTheClearBoxExtension") {
+    auto created = createMachineConfig("1.0");
+    REQUIRE(created.ok());
+    auto file = created.value();
+    auto out = tmpPath("created_clearbox");
+    const std::string outS = out.string();
+    REQUIRE(file->save(&outS).ok());
+    file->close();
+
+    auto back = MachineConfigReader{out}.parse();
+    REQUIRE(back.extensions.count("ClearBox") == 1);
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityCreateSetMetaSaveReopen") {
+    auto created = createMachineConfig("1.0");
+    REQUIRE(created.ok());
+    auto file = created.value();
+    REQUIRE(file->fileVersion() == "1.0");
+
+    auto meta = file->getMeta();
+    meta.machine_name = "CreatedMachine";
+    REQUIRE(file->setMeta(meta, SetMode::Merge).ok());
+
+    auto out = tmpPath("created");
+    std::string out_s = out.string();
+    REQUIRE(file->save(&out_s).ok());
+    file->close();
+
+    auto again = MachineConfigFileV1_0::open(out);
+    REQUIRE(again.ok());
+    REQUIRE(again.value()->fileVersion() == "1.0");
+    REQUIRE(again.value()->getMeta().machine_name == "CreatedMachine");
+    again.value()->close();
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityOpenMachineConfigDispatch") {
+    auto opened = openMachineConfig(REF);
+    REQUIRE(opened.ok());
+    REQUIRE(opened.value()->fileVersion() == "1.0");
+    opened.value()->close();
+}
+
+TEST_CASE("CapabilitySupportedFileVersionsListsV1_0") {
+    auto versions = supportedFileVersions();
+    REQUIRE(std::find(versions.begin(), versions.end(), std::string("1.0")) != versions.end());
+}
+
+// ---------------------------------------------------------------------------
+// DISPATCH_REGISTRY_PLAN.md — registry-injection tests. Each proves the
+// mechanism is genuinely data-driven (unregistered version -> real error,
+// registered version -> the exact constructor registered for it) without
+// mutating any shared/global state — a locally-built registry is passed
+// straight into the registry-parameterized resolver.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ReaderRegistryRejectsUnregisteredVersion") {
+    REQUIRE_THROWS_AS(
+        machine_config::resolveReader("9.9-nope", REF, machine_config::productionReaderRegistry()),
+        std::runtime_error);
+}
+
+TEST_CASE("ReaderRegistryDispatchesViaInjectedTestAdapter") {
+    auto registry = machine_config::productionReaderRegistry();
+    registry["9.9-test"] = [](const std::filesystem::path&) -> std::unique_ptr<machine_config::ReaderAdapter> {
+        return std::make_unique<FakeReaderAdapter>();
+    };
+    auto adapter = machine_config::resolveReader("9.9-test", REF, registry);
+    REQUIRE(dynamic_cast<FakeReaderAdapter*>(adapter.get()) != nullptr);
+}
+
+TEST_CASE("WriterRegistryRejectsUnregisteredVersion") {
+    machine_config::MachineConfig cfg;
+    REQUIRE_THROWS_AS(
+        machine_config::resolveWriter("9.9-nope", cfg, machine_config::productionWriterRegistry()),
+        std::runtime_error);
+}
+
+TEST_CASE("WriterRegistryDispatchesViaInjectedTestAdapter") {
+    auto registry = machine_config::productionWriterRegistry();
+    registry["9.9-test"] = [](const machine_config::MachineConfig&) -> std::unique_ptr<machine_config::WriterAdapter> {
+        return std::make_unique<FakeWriterAdapter>();
+    };
+    machine_config::MachineConfig cfg;
+    auto adapter = machine_config::resolveWriter("9.9-test", cfg, registry);
+    REQUIRE(dynamic_cast<FakeWriterAdapter*>(adapter.get()) != nullptr);
+}
+
+TEST_CASE("CapabilityOpenRejectsUnregisteredVersion") {
+    auto out = writeFileVersionOnly("9.9-nope", "open_unreg");
+    auto result = openMachineConfig(out);
+    REQUIRE_FALSE(result.ok());
+    REQUIRE(result.errorCode() == "UnsupportedVersion");
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityOpenDispatchesViaInjectedRegistryEntry") {
+    using machine_config::capabilities::IMachineConfigFile;
+    using machine_config::capabilities::Result;
+    auto registry = machine_config::capabilities::productionOpenRegistry();
+    registry["9.9-test"] = [](const std::filesystem::path&) -> Result<std::shared_ptr<IMachineConfigFile>> {
+        return Result<std::shared_ptr<IMachineConfigFile>>::Ok(std::make_shared<FakeMachineConfigFile>());
+    };
+
+    auto out = writeFileVersionOnly("9.9-test", "open_inject");
+    auto result = machine_config::capabilities::openMachineConfigWithRegistry(out, registry);
+    REQUIRE(result.ok());
+    REQUIRE(dynamic_cast<FakeMachineConfigFile*>(result.value().get()) != nullptr);
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityCreateRejectsUnregisteredVersion") {
+    auto result = createMachineConfig("9.9-nope");
+    REQUIRE_FALSE(result.ok());
+    REQUIRE(result.errorCode() == "UnsupportedVersion");
+}
+
+TEST_CASE("CapabilityCreateDispatchesViaInjectedRegistryEntry") {
+    using machine_config::capabilities::IMachineConfigFile;
+    using machine_config::capabilities::Result;
+    auto registry = machine_config::capabilities::productionCreateRegistry();
+    registry["9.9-test"] = [](const std::string&) -> Result<std::shared_ptr<IMachineConfigFile>> {
+        return Result<std::shared_ptr<IMachineConfigFile>>::Ok(std::make_shared<FakeMachineConfigFile>());
+    };
+    auto result = machine_config::capabilities::createMachineConfigWithRegistry("9.9-test", registry);
+    REQUIRE(result.ok());
+    REQUIRE(dynamic_cast<FakeMachineConfigFile*>(result.value().get()) != nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// isValid() -- CAPABILITIES_HASH_INTEGRATION_PLAN.md
+// ---------------------------------------------------------------------------
+
+TEST_CASE("CapabilityIsValidFalseForExternallyAuthoredReferenceFixture") {
+    // Permanent regression guard, mirroring CONFIGURATION_HASH_PLAN.md's own
+    // equivalent at the MachineConfigReader layer: reference_config.h5 was
+    // authored externally, so MCF's recomputed hash will never match its
+    // stored value. Expected and correct, not a defect.
+    auto opened = MachineConfigFileV1_0::open(REF);
+    REQUIRE(opened.ok());
+    REQUIRE_FALSE(opened.value()->isValid());
+    opened.value()->close();
+}
+
+TEST_CASE("CapabilityIsValidTrueForSelfWrittenFile") {
+    auto created = createMachineConfig("1.0");
+    REQUIRE(created.ok());
+    auto file = created.value();
+    auto out = tmpPath("isvalid_self_written");
+    std::string out_s = out.string();
+    REQUIRE(file->save(&out_s).ok());
+    REQUIRE(file->isValid());
+    file->close();
+
+    auto reopened = MachineConfigFileV1_0::open(out);
+    REQUIRE(reopened.ok());
+    REQUIRE(reopened.value()->isValid());
+    reopened.value()->close();
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityIsValidFlipsLiveAcrossAnUnsavedEditThenASave") {
+    // The test this whole live-method design exists to satisfy: a cached,
+    // computed-once-at-open() value could never distinguish these states.
+    auto created = createMachineConfig("1.0");
+    REQUIRE(created.ok());
+    auto file = created.value();
+    auto out = tmpPath("isvalid_live_flip");
+    std::string out_s = out.string();
+    REQUIRE(file->save(&out_s).ok());
+    REQUIRE(file->isValid());
+
+    const auto stored_before = file->getMeta().configuration_hash;
+    auto scanner = file->getScanner(0);
+    REQUIRE(scanner.ok());
+    auto patched = scanner.value();
+    patched.working_distance = 999.5;
+    REQUIRE(file->setScanner(0, patched, SetMode::Merge).ok());
+
+    // Live-ness: an unsaved edit must be reflected immediately, with no
+    // save()/reopen in between. This is expected, not a corruption signal
+    // (see CAPABILITIES_HASH_INTEGRATION_PLAN.md's documented caveat).
+    REQUIRE_FALSE(file->isValid());
+
+    // The save->live round trip: isValid() must flip back to true from the
+    // *same session*, without reopening -- this is what catches a save()
+    // that forgets to update its own session state, which a test that only
+    // reopens fresh could never distinguish from a save() that does it
+    // correctly.
+    REQUIRE(file->save(&out_s).ok());
+    REQUIRE(file->isValid());
+    REQUIRE(file->getMeta().configuration_hash != stored_before);
+
+    // And a completely fresh session on the same path agrees.
+    auto reopened = MachineConfigFileV1_0::open(out);
+    REQUIRE(reopened.ok());
+    REQUIRE(reopened.value()->isValid());
+    REQUIRE(reopened.value()->getMeta().configuration_hash == file->getMeta().configuration_hash);
+
+    file->close();
+    reopened.value()->close();
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityV1_0SaveStillRoutesThroughRealHashComputation") {
+    // Regression guard for the one language/version combination that was
+    // already correct before this plan (v1.0's save() already used
+    // MachineConfigWriter) -- a future refactor must not silently
+    // reintroduce a bypass back to a raw per-version writer call.
+    auto opened = MachineConfigFileV1_0::open(REF);
+    REQUIRE(opened.ok());
+    auto file = opened.value();
+    const auto original_stored = file->getMeta().configuration_hash;
+    auto out = tmpPath("v1_0_real_hash");
+    std::string out_s = out.string();
+    REQUIRE(file->save(&out_s).ok());
+    file->close();
+
+    auto rt = MachineConfigFileV1_0::open(out);
+    REQUIRE(rt.ok());
+    const auto rt_hash = rt.value()->getMeta().configuration_hash;
+    REQUIRE(rt_hash.size() == 64);
+    REQUIRE(rt_hash != original_stored);
+    REQUIRE(rt.value()->isValid());
+    rt.value()->close();
+    std::filesystem::remove(out);
+}
+
+TEST_CASE("CapabilityV1_1SaveComputesRealHashAndUpdatesSession") {
+    // Targets the same class of bug this plan found and fixed in other
+    // languages' v1.1 adapters: save() must route through
+    // MachineConfigWriter (a fresh, real hash) rather than passing through
+    // whatever configuration_hash was already in memory.
+    auto opened = MachineConfigFileV1_1::open(REFERENCE_V1_1);
+    REQUIRE(opened.ok());
+    auto file = opened.value();
+    REQUIRE(file->fileVersion() == "1.1");
+    const auto original_stored = file->getMeta().configuration_hash;
+
+    auto scanner = file->getScanner(0);
+    REQUIRE(scanner.ok());
+    auto patched = scanner.value();
+    patched.working_distance = 555.0;
+    REQUIRE(file->setScanner(0, patched, SetMode::Merge).ok());
+    REQUIRE_FALSE(file->isValid());
+
+    auto out = tmpPath("v1_1_real_hash");
+    std::string out_s = out.string();
+    REQUIRE(file->save(&out_s).ok());
+
+    // Live, no reopen:
+    REQUIRE(file->isValid());
+    const auto saved_hash = file->getMeta().configuration_hash;
+    REQUIRE(saved_hash.size() == 64);
+    REQUIRE(saved_hash != original_stored);
+    file->close();
+
+    // Fresh session on the written file agrees:
+    auto reopened = MachineConfigFileV1_1::open(out);
+    REQUIRE(reopened.ok());
+    REQUIRE(reopened.value()->fileVersion() == "1.1");
+    REQUIRE(reopened.value()->isValid());
+    REQUIRE(reopened.value()->getMeta().configuration_hash == saved_hash);
+    reopened.value()->close();
+    std::filesystem::remove(out);
+}

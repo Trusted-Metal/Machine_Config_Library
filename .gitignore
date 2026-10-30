@@ -15,12 +15,29 @@ __pycache__/
 # Developer scratch scripts — personal/machine-specific, not for CI
 scratch/
 
-# Node / Rust / C++ build outputs
+# Node / Rust / C++ / Python build outputs
+node_modules/
 nodejs/node_modules/
 nodejs/dist/
+nodejs/schema/
+nodejs/*.tgz
+cpp/*.tar.gz
 rust/target/
+go/bin/
 cpp/build/
+cpp/pkg-build/
+cpp/pkg-install/
+docs/validation/cpp/app/build/
+docs/validation/cpp/tarball/consumer/build/
+python/dist/
+python/build/
 
 # Editor
 .vscode/
 *.egg-info/
+
+file_testing/
+
+# Implementation plan / audit docs — durable local working notes, not shipped
+# with the library and not tracked in version control.
+/implementation-plans/

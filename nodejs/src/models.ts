@@ -7,6 +7,8 @@
  * reference implementation.
  */
 
+import type { ExtensionTree } from "./extensions/contract.js";
+
 // ---------------------------------------------------------------------------
 // Sub-component types
 // ---------------------------------------------------------------------------
@@ -50,6 +52,18 @@ export interface Scanner {
   y_axis: AxisConfig | null;
   z_axis: AxisConfig | null;
   focus: AxisConfig | null;
+  /**
+   * Plain boolean, not `boolean | null` — deliberately different from every
+   * other field on this interface. Always `true` or `false` at the API
+   * layer (defaults to `false` whether the on-disk attribute is absent or
+   * explicitly 0); `false` never appears in JSON output (stripped by a
+   * `JSON.stringify` replacer in `toJson()`), only `true` does
+   * (user-confirmed, 2026-08-21).
+   */
+  invert_actual_x: boolean;
+  invert_actual_y: boolean;
+  invert_commanded_x: boolean;
+  invert_commanded_y: boolean;
 }
 
 export interface LightSource {
@@ -68,8 +82,10 @@ export interface LightSource {
   power_min_nominal_unit: string | null;
   power_bit_resolution: number | null;
   power_bit_resolution_unit: string | null;
-  watts_to_volts_algorithm: string | null;
-  watts_to_volts_params: string | null;
+  /** The only representation of the watts<->volts conversion concept, for
+   * files of either version. Omitted entirely (not `null`) when absent, which keeps v1.0 output
+   * byte-identical to before this field existed. */
+  power_characterization?: PowerCharacterization | null;
 }
 
 export interface Collimator {
@@ -89,33 +105,42 @@ export interface ScannerCard {
   sample_period_unit: string | null;
 }
 
-export interface ClearBox {
-  ip_address: string;
-  serial_number: string | null;
-  data_port: number | null;
-  server_port: number | null;
-  actual_timing_offset: number | null;
-  commanded_timing_offset: number | null;
-  /** Only present when include_binary=true. */
-  correction_data?: Array<Array<Array<number | null>>> | null;
-  /** Only present when include_binary=true. */
-  inverse_correction_data?: Array<Array<Array<number | null>>> | null;
-  manufacturer: string | null;
-  model: string | null;
-  output_path: string | null;
-  selected_camera: string | null;
-  custom_video_format: string | null;
-  video_output: string | null;
-  show_console: boolean | null;
-  software_trigger_delay: number | null;
-  volts_to_watts_algorithm: string | null;
-  volts_to_watts_params: string | null;
-  correction_grid_domain_shape: string | null;
-  inverse_grid_domain_shape: string | null;
+/**
+ * On-disk row for `Derivation_Equation_Constants` — a variable-row-count
+ * compound dataset naming an equation's constants (e.g. `a`/`b` for
+ * `LINEAR`, `c0`..`cN` for `POLYNOMIAL`). `name` is stored as a 64-byte
+ * fixed-length UTF-8 string on disk — see SYNCHRONOUS_SENSOR_PLAN.md's
+ * "Compound dataset string convention" for why (a cross-language HDF5
+ * restriction on variable-length strings inside compound-type members).
+ */
+export interface EquationConstant {
+  name: string;
+  value: number;
 }
 
-export interface OptionalComponents {
-  clearbox: ClearBox | null;
+/**
+ * On-disk row for `Calibration_Points` — a variable-row-count compound
+ * dataset of raw calibration pairs. `input_value` is in whatever unit
+ * `SynchronousSensor.input_type` implies; `output_value` is in whatever unit
+ * `SynchronousSensor.sensor_output_space` implies (no per-row unit tag).
+ */
+export interface CalibrationPoint {
+  input_value: number;
+  output_value: number;
+}
+
+/**
+ * A structured algorithm + equation + constants + characterization points describing a power
+ * conversion. `LightSource.power_characterization` uses it; ClearBox's own Power_Characterization
+ * is an opaque extension tree and is not typed here.
+ */
+export interface PowerCharacterization {
+  algorithm_type: string | null;
+  algorithm_equation: string | null;
+  input_type: string | null;
+  units_derived_quantity: string | null;
+  derivation_equation_constants: EquationConstant[];
+  characterization_points: CalibrationPoint[];
 }
 
 export interface ScanFieldCorrectionFile {
@@ -143,6 +168,21 @@ export interface MachineConfigMeta {
   file_version: string;
   export_date: string;
   configuration_hash: string;
+  // TEST FIXTURE for the mock v1.1 adapter (docs/migrations/mock_v1_0_to_v1_1.md).
+  // Not real schema fields — never wired into JSON export or the JSON schema.
+  facility_id?: string | null;
+  config_author?: string | null;
+  /**
+   * Reader-computed, in-memory only: `true`/`false` once a
+   * `MachineConfigReader` has recomputed the configuration hash and
+   * compared it to the on-disk value; absent until then. Never set by a
+   * writer or by `MockConfigBuilder`. Unconditionally excluded from JSON
+   * output by the `omitFalseInvertFlags` replacer in each capability's
+   * `hdf5.ts` — never written to HDF5, never part of the interop contract.
+   * A mismatch is never an error: the file remains fully readable either
+   * way (see `hash.ts`).
+   */
+  is_valid?: boolean;
   extra: Record<string, unknown>;
 }
 
@@ -166,6 +206,7 @@ export interface Machine {
   build_plate_radius_unit: string | null;
   gas_flow_direction: string | null;
   recoat_direction: string | null;
+  recoater_blade_type: string | null;
 }
 
 export interface OpticalTrain {
@@ -203,48 +244,7 @@ export interface OpticalTrain {
   light_source: LightSource;
   collimator: Collimator;
   scanner_card: ScannerCard;
-  /** Always present; clearbox is null when no ClearBox is installed. */
-  optional_components: OptionalComponents;
   scan_field_correction_file: ScanFieldCorrectionFile | null;
-}
-
-// ---------------------------------------------------------------------------
-// OPC-UA types
-// ---------------------------------------------------------------------------
-
-export interface OpcuaClientConfig {
-  server_url: string;
-  auth_mode: string;
-  security_mode: string;
-  security_policy: string;
-  bfs_max_depth: number;
-  publish_interval: number;
-  sampling_interval: number;
-  session_timeout: number;
-  extra: Record<string, unknown>;
-}
-
-export interface OpcuaPipeConfig {
-  pipe_enabled: boolean;
-  buffer_size: number;
-  extra: Record<string, unknown>;
-}
-
-export interface OpcuaTrigger {
-  id: string | null;
-  signal: string | null;
-  subsystem: string | null;
-  rule_enabled: boolean | null;
-  start_value: string | null;
-  stop_value: string | null;
-  extra: Record<string, unknown>;
-}
-
-export interface OpcuaConfig {
-  client: OpcuaClientConfig;
-  pipe: OpcuaPipeConfig;
-  triggers_enabled: boolean | null;
-  triggers: Record<string, OpcuaTrigger>;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +255,12 @@ export interface MachineConfig {
   meta: MachineConfigMeta;
   machine: Machine;
   optical_trains: OpticalTrain[];
-  /** OPC-UA configuration; omitted when no OPC-UA config is present. */
-  opcua?: OpcuaConfig;
+  /**
+   * Opaque extension trees keyed by their group name under `Extensions/`.
+   * Read and written verbatim by core, so extensions core has no model for
+   * (including private ones) survive a read-modify-write. Interpreted only by
+   * the matching extension library. ClearBox is one of them (always in its File_Version 1.1
+   * layout, for either file version).
+   */
+  extensions?: Record<string, ExtensionTree>;
 }

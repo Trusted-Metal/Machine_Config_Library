@@ -1,6 +1,5 @@
 """Phase 1.3 / 1.6 — MachineConfigReader tests against real AconityMIDI fixtures."""
 import json
-import warnings
 
 import numpy as np
 import pytest
@@ -8,6 +7,15 @@ import pytest
 from machine_config.builder import MockConfigBuilder
 from machine_config.reader import MachineConfigReader
 from machine_config.schema import SCHEMA
+
+from clearbox_helpers import (
+    attr,
+    clearbox,
+    clearbox_root,
+    grid,
+    integer,
+    text,
+)
 
 
 # ===========================================================================
@@ -105,6 +113,23 @@ class TestScanner:
     def test_axis_configuration_is_3D(self, reference_config):
         assert reference_config.optical_trains[0].scanner.axis_configuration == "3D"
 
+    def test_invert_flags_absent_from_fixture_read_as_false(self, reference_config):
+        # reference_config.h5 has none of the four Invert_* attributes at all.
+        s = reference_config.optical_trains[0].scanner
+        assert s.invert_actual_x is False
+        assert s.invert_actual_y is False
+        assert s.invert_commanded_x is False
+        assert s.invert_commanded_y is False
+
+    def test_invert_flags_omitted_from_json_when_false(self, reference_reader):
+        import json
+        d = json.loads(reference_reader.to_json())
+        scanner_d = d["optical_trains"][0]["scanner"]
+        assert "invert_actual_x" not in scanner_d
+        assert "invert_actual_y" not in scanner_d
+        assert "invert_commanded_x" not in scanner_d
+        assert "invert_commanded_y" not in scanner_d
+
     def test_x_axis_smoothing_kernel(self, reference_config):
         assert reference_config.optical_trains[0].scanner.x_axis.smoothing_kernel == "GAUSSIAN"
 
@@ -173,56 +198,114 @@ class TestScannerCard:
 
 
 # ===========================================================================
-# ClearBox
+# ClearBox — core exposes it as the opaque "ClearBox" extension tree
 # ===========================================================================
 
 class TestClearBox:
     def test_clearbox_present(self, reference_config):
-        for train in reference_config.optical_trains:
-            assert train.optional_components.clearbox is not None
-
-    def test_correction_data_shape(self, reference_config):
-        data = reference_config.optical_trains[0].optional_components.clearbox.correction_data
-        assert data is not None
-        assert len(data) == 257
-        assert len(data[0]) == 257
-        assert len(data[0][0]) == 2
-
-    def test_inverse_correction_data_shape(self, reference_config):
-        data = reference_config.optical_trains[0].optional_components.clearbox.inverse_correction_data
-        assert data is not None
-        assert len(data) == 257
-        assert len(data[0]) == 257
-        assert len(data[0][0]) == 2
-
-    def test_correction_data_values_are_float_or_none(self, reference_config):
-        data = reference_config.optical_trains[0].optional_components.clearbox.correction_data
-        # Sample a few cells to verify type contract
-        for i in range(0, 257, 64):
-            for j in range(0, 257, 64):
-                for k in range(2):
-                    v = data[i][j][k]
-                    assert v is None or isinstance(v, float), (
-                        f"Expected float or None at [{i}][{j}][{k}], got {type(v)}"
-                    )
-
-    def test_correction_data_numpy_api_unchanged(self, reference_reader):
-        """get_correction_data() still returns the raw numpy array."""
-        data = reference_reader.get_correction_data(0)
-        assert data.shape == (257, 257, 2)
-        assert data.dtype == np.float64
-
-    def test_inverse_correction_data_numpy_api_unchanged(self, reference_reader):
-        data = reference_reader.get_inverse_correction_data(0)
-        assert data.shape == (257, 257, 2)
-        assert data.dtype == np.float64
+        assert list(clearbox_root(reference_config).children) == ["Optical_Train_01", "Optical_Train_02"]
 
     def test_clearbox_ip_address(self, reference_config):
-        assert reference_config.optical_trains[0].optional_components.clearbox.ip_address != ""
+        assert text(clearbox(reference_config, 0), "Ip_Address")
 
     def test_clearbox_data_port_is_int(self, reference_config):
-        dp = reference_config.optical_trains[0].optional_components.clearbox.data_port
-        assert dp is None or isinstance(dp, int)
+        assert integer(clearbox(reference_config, 0), "Data_Port") is not None
+
+    def test_shared_values_live_on_the_extension_root_once(self, reference_config):
+        root = clearbox_root(reference_config)
+        assert text(root, "Output_Path")
+        assert integer(root, "Software_Trigger_Delay") is not None
+        assert "Output_Path" not in clearbox(reference_config, 0).attrs
+
+    def test_v1_0_only_attributes_ride_along_on_each_train(self, reference_config):
+        assert "Show_Console" in clearbox(reference_config, 0).attrs
+        assert "Volts_To_Watts_Algorithm" not in clearbox(reference_config, 0).attrs
+
+    def test_synchronous_sensors_absent_when_fixture_has_none(self, reference_config):
+        assert "Synchronous_Sensors" not in clearbox(reference_config, 0).children
+
+
+class TestClearBoxCorrectionGrids:
+    """The grids are ordinary extension datasets; they feed the ``correction-hash`` CLI."""
+
+    def test_forward_grid_shape(self, reference_config):
+        ds = clearbox(reference_config, 0).datasets["Correction_Data"]
+        assert ds.dtype == "f64"
+        assert ds.shape == [257, 257, 2]
+        assert len(ds.data) == 257 * 257 * 2
+
+    def test_inverse_grid_shape(self, reference_config):
+        ds = clearbox(reference_config, 0).datasets["Inverse_Correction_Data"]
+        assert ds.shape == [257, 257, 2]
+
+    def test_nan_is_preserved(self, reference_config):
+        assert np.isnan(grid(reference_config, 0, "Correction_Data")).any()
+
+    def test_forward_and_inverse_differ(self, reference_config):
+        fwd = grid(reference_config, 0, "Correction_Data")
+        inv = grid(reference_config, 0, "Inverse_Correction_Data")
+        assert not np.array_equal(fwd, inv, equal_nan=True)
+
+    def test_train_1_differs_from_train_0(self, reference_config):
+        a = grid(reference_config, 0, "Correction_Data")
+        b = grid(reference_config, 1, "Correction_Data")
+        assert not np.array_equal(a, b, equal_nan=True)
+
+
+# ===========================================================================
+# Synchronous sensors — reference_config_synchronous_sensors.h5, not
+# reference_config.h5, which deliberately has no sensors.
+# ===========================================================================
+
+def _sensors_of(cfg):
+    return clearbox(cfg, 0).children["Synchronous_Sensors"].children
+
+
+@pytest.fixture(scope="module")
+def sensor(sensors_reader):
+    """Module-level, not a class-instance-method fixture (avoids PytestRemovedIn10Warning)."""
+    sensors = _sensors_of(sensors_reader.parse())
+    assert list(sensors) == ["Oxygen Sensor"]
+    return sensors["Oxygen Sensor"]
+
+
+class TestSynchronousSensor:
+    def test_scalar_attributes_match_the_real_zr800_example(self, sensor):
+        assert text(sensor, "Sensor_Name") == "ZR800 Oxygen Analyzer"
+        assert attr(sensor, "Sensor_Output_Range_Low") == -1.0
+        assert attr(sensor, "Sensor_Output_Range_High") == 6.0
+        assert text(sensor, "Sensor_Output_Space") == "log10(ppm)"
+        assert text(sensor, "Sensor_Model") == "ZR810"
+        assert text(sensor, "Sensor_Manufacturer") == "Industrial Physics"
+        assert text(sensor, "Sensor_Scope") == "Global"
+        assert text(sensor, "Units_Derived_Quantity") == "ppm"
+        assert integer(sensor, "Port_ID") == 5
+        assert text(sensor, "Sensor_Type") == "Oxygen Sensor"
+        assert text(sensor, "Input_Type") == "4-20 mA"
+        assert text(sensor, "Algorithm_Type") == "Log-Linear"
+        assert text(sensor, "Algorithm_Equation") == "log(ppm) = a*mA + b"
+        assert text(sensor, "Calibration_Source") == "Datasheet"
+        assert attr(sensor, "Sample_Period") == 5.0
+        assert "100KHz" in text(sensor, "Metadata")
+
+    def test_derivation_equation_constants_in_order(self, sensor):
+        t = sensor.tables["Derivation_Equation_Constants"]
+        assert t.columns["name"] == ["a", "b"]
+        assert t.columns["value"] == [0.4375, -2.75]
+
+    def test_calibration_points_in_order_and_in_log_space(self, sensor):
+        points = sensor.tables["Calibration_Points"]
+        assert points.columns["input_value"] == [4.0, 20.0]
+        assert points.columns["output_value"] == [-1.0, 6.0]
+        a, b = sensor.tables["Derivation_Equation_Constants"].columns["value"]
+        for x, y in zip(points.columns["input_value"], points.columns["output_value"]):
+            assert abs(a * x + b - y) < 1e-9
+
+    def test_combined_opcua_and_sensors_fixture_has_both(self, opcua_sensors_reader):
+        config = opcua_sensors_reader.parse()
+        assert "TM_OPCUA" in config.extensions
+        t = _sensors_of(config)["Oxygen Sensor"].tables["Derivation_Equation_Constants"]
+        assert t.columns["name"] == ["a", "b"]
 
 
 # ===========================================================================
@@ -369,64 +452,31 @@ class TestOpcua:
 
 
 # ===========================================================================
-# OPCUA — model-level (parse() result on reference_config_opcua.h5)
-# These complement TestOpcua (get_raw_group level) and assert that parse()
-# now returns a fully-populated OpcuaConfig object.
+# Extensions - parse() exposes the legacy OPCUA group as an opaque "TM_OPCUA" tree
 # ===========================================================================
 
-class TestOpcuaModel:
-    def test_opcua_is_none_on_reference_config(self, reference_config):
-        """Standard fixture has no OPCUA group — config.opcua must be None."""
-        assert reference_config.opcua is None
+class TestExtensionsModel:
+    def test_only_clearbox_on_reference_config(self, reference_config):
+        assert list(reference_config.extensions) == ["ClearBox"]
 
-    def test_opcua_is_populated_on_opcua_fixture(self, opcua_reader):
+    def test_opcua_group_is_an_opaque_extension(self, opcua_reader):
         config = opcua_reader.parse()
-        assert config.opcua is not None
+        assert sorted(config.extensions) == ["ClearBox", "TM_OPCUA"]
+        tree = config.extensions["TM_OPCUA"]
+        assert set(tree.children) >= {"Client", "Pipe", "Triggers"}
 
-    def test_opcua_client_server_url(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.client.server_url == (
+    def test_opaque_attrs_keep_their_stored_dtype(self, opcua_reader):
+        client = opcua_reader.parse().extensions["TM_OPCUA"].children["Client"]
+        assert client.attrs["Server_URL"].dtype == "utf8"
+        assert client.attrs["Server_URL"].value == (
             "opc.tcp://172.17.20.240:62541/TM_OPCUA_DevTemplate_V0.1/TelemetryServer"
         )
+        assert client.attrs["Publish_Interval"].value == 250
 
-    def test_opcua_client_auth_mode(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.client.auth_mode == "UsernamePassword"
-
-    def test_opcua_client_integer_fields(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.client.bfs_max_depth == 16
-        assert config.opcua.client.publish_interval == 250
-        assert config.opcua.client.sampling_interval == 250
-        assert config.opcua.client.session_timeout == 60000
-
-    def test_opcua_pipe_enabled(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.pipe.pipe_enabled is True
-
-    def test_opcua_pipe_buffer_size(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.pipe.buffer_size == 65536
-
-    def test_opcua_triggers_enabled(self, opcua_reader):
-        config = opcua_reader.parse()
-        assert config.opcua.triggers_enabled is True
-
-    def test_opcua_trigger_laser_emission_interlock(self, opcua_reader):
-        config = opcua_reader.parse()
-        t = config.opcua.triggers["Laser Emission Interlock"]
-        assert t.id == "trigger_1"
-        assert t.signal == "yellow_light"
-        assert t.subsystem == "Chamber"
-        assert t.rule_enabled is True
-
-    def test_opcua_trigger_chamber_oxygen(self, opcua_reader):
-        config = opcua_reader.parse()
-        t = config.opcua.triggers["Chamber Oxygen Level"]
-        assert t.id == "trigger_2"
-        assert t.signal == "oxygen_level"
-        assert t.start_value == "700"
-        assert t.stop_value == "1000"
+    def test_trigger_groups_are_children(self, opcua_reader):
+        triggers = opcua_reader.parse().extensions["TM_OPCUA"].children["Triggers"]
+        assert "Laser Emission Interlock" in triggers.children
+        assert "Chamber Oxygen Level" in triggers.children
 
 
 # ===========================================================================
@@ -469,22 +519,33 @@ def test_unit_mismatch_raises_value_error(tmp_path):
         MachineConfigReader(out).parse()
 
 
-def test_absent_clearbox_is_none(tmp_path):
+def test_absent_clearbox_has_no_extension(tmp_path):
     builder = MockConfigBuilder(n_lasers=1, include_clearbox=False)
     out = tmp_path / "no_clearbox.h5"
     builder.save(out)
     config = MachineConfigReader(out).parse()
-    assert config.optical_trains[0].optional_components.clearbox is None
+    assert "ClearBox" not in config.extensions
 
 
-def test_file_version_warning(tmp_path):
-    builder = MockConfigBuilder(n_lasers=1, file_version="2.0")
+def test_unknown_file_version_does_not_use_v1_layout(tmp_path):
+    """Peek File_Version before walking groups — a v2 file with no Machine
+    group must not be parsed by the v1.0 adapter."""
+    import h5py
+
+    from machine_config.capabilities import open_machine_config
+    from machine_config.capabilities.file_version import UnsupportedFileVersion
+
     out = tmp_path / "future.h5"
-    builder.save(out)
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        MachineConfigReader(out).parse()
-    assert any("File_Version" in str(warning.message) for warning in w)
+    with h5py.File(out, "w") as f:
+        f.attrs["File_Version"] = "2.0"
+
+    with pytest.raises(UnsupportedFileVersion, match="2.0"):
+        MachineConfigReader(out)
+
+    result = open_machine_config(out)
+    assert not result.ok
+    assert result.error.code == "UnsupportedVersion"
+
 
 
 # ===========================================================================
@@ -492,35 +553,13 @@ def test_file_version_warning(tmp_path):
 # ===========================================================================
 
 class TestIncludeBinaryFlag:
-    """to_json() include_binary=False (default) omits correction arrays and
-    raw fc3 bytes; include_binary=True restores them."""
-
-    def test_default_excludes_correction_data(self, reference_reader):
-        output = json.loads(reference_reader.to_json())
-        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
-        assert "correction_data" not in cb
-
-    def test_default_excludes_inverse_correction_data(self, reference_reader):
-        output = json.loads(reference_reader.to_json())
-        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
-        assert "inverse_correction_data" not in cb
+    """to_json() include_binary=False (default) omits the raw fc3 bytes; True restores them.
+    ClearBox's correction grids are extension datasets and always appear in full."""
 
     def test_default_excludes_raw_bytes(self, reference_reader):
         output = json.loads(reference_reader.to_json())
         sfcf = output["optical_trains"][0]["scan_field_correction_file"]
         assert "raw_bytes" not in sfcf
-
-    def test_include_binary_adds_correction_data(self, reference_reader):
-        output = json.loads(reference_reader.to_json(include_binary=True))
-        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
-        assert "correction_data" in cb
-        assert len(cb["correction_data"]) > 0
-
-    def test_include_binary_adds_inverse_correction_data(self, reference_reader):
-        output = json.loads(reference_reader.to_json(include_binary=True))
-        cb = output["optical_trains"][0]["optional_components"]["clearbox"]
-        assert "inverse_correction_data" in cb
-        assert len(cb["inverse_correction_data"]) > 0
 
     def test_include_binary_adds_raw_bytes(self, reference_reader):
         output = json.loads(reference_reader.to_json(include_binary=True))
@@ -528,11 +567,9 @@ class TestIncludeBinaryFlag:
         assert "raw_bytes" in sfcf
         assert sfcf["raw_bytes"]  # non-empty base64 string
 
-    def test_clearbox_scalar_fields_present_regardless_of_flag(self, reference_reader):
-        """Scalar clearbox fields appear in both modes."""
+    def test_correction_grids_present_regardless_of_flag(self, reference_reader):
         for flag in (False, True):
             output = json.loads(reference_reader.to_json(include_binary=flag))
-            cb = output["optical_trains"][0]["optional_components"]["clearbox"]
-            assert "ip_address" in cb
-            assert "data_port" in cb
-            assert "correction_grid_domain_shape" in cb
+            train = output["extensions"]["ClearBox"]["children"]["Optical_Train_01"]
+            assert train["datasets"]["Correction_Data"]["shape"] == [257, 257, 2]
+            assert len(train["datasets"]["Inverse_Correction_Data"]["data"]) == 257 * 257 * 2
