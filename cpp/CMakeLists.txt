@@ -128,9 +128,18 @@ install(FILES
   ${CMAKE_CURRENT_BINARY_DIR}/MachineConfigConfigVersion.cmake
   DESTINATION lib/cmake/MachineConfig)
 
-# Tests
-enable_testing()
-add_subdirectory(tests)
+# Tests (on by default only when this is the top-level project, so consumers that
+# add_subdirectory() this library do not inherit its test suite)
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+  set(_mc_top_level ON)
+else()
+  set(_mc_top_level OFF)
+endif()
+option(MACHINE_CONFIG_BUILD_TESTS "Build the machine_config test suite" ${_mc_top_level})
+if(MACHINE_CONFIG_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
 
 # CLI executable (§4.8)
 add_executable(machine_config_cli src/main.cpp)

@@ -10,8 +10,9 @@ use crate::capabilities::v1_0::hdf5::Hdf5AdapterV1_0;
 use crate::capabilities::v1_1::hdf5::Hdf5AdapterV1_1;
 use crate::error::{MachineConfigError, Result};
 use crate::models::{ExtraAttrs, MachineConfig};
+use crate::source::FileSource;
 
-pub use crate::capabilities::v1_0::hdf5::peek_file_version;
+pub use crate::capabilities::v1_0::hdf5::{peek_file_version, peek_file_version_source};
 
 
 /// Version-agnostic reader adapter — mirrors `Hdf5AdapterV1_0`'s full public
@@ -31,18 +32,24 @@ type OpenFn = fn(&Path) -> Result<Box<dyn ReaderAdapter>>;
 /// never editing `MachineConfigReader` itself.
 pub type ReaderRegistry = HashMap<&'static str, OpenFn>;
 
-fn open_v1_0(path: &Path) -> Result<Box<dyn ReaderAdapter>> {
-    Hdf5AdapterV1_0::open(path).map(|a| Box::new(a) as Box<dyn ReaderAdapter>)
+type SourceOpenFn = fn(&FileSource) -> Result<Box<dyn ReaderAdapter>>;
+/// Like [`ReaderRegistry`], for constructors that take a [`FileSource`] (a path, or a path plus a
+/// FAPL hook such as an MCF stored inside an LBL container). This is the registry the production
+/// reader dispatches through: adding a version means adding an entry here.
+pub type SourceReaderRegistry = HashMap<&'static str, SourceOpenFn>;
+
+fn open_v1_0(source: &FileSource) -> Result<Box<dyn ReaderAdapter>> {
+    Hdf5AdapterV1_0::open_source(source.clone()).map(|a| Box::new(a) as Box<dyn ReaderAdapter>)
 }
 
-fn open_v1_1(path: &Path) -> Result<Box<dyn ReaderAdapter>> {
-    Hdf5AdapterV1_1::open(path).map(|a| Box::new(a) as Box<dyn ReaderAdapter>)
+fn open_v1_1(source: &FileSource) -> Result<Box<dyn ReaderAdapter>> {
+    Hdf5AdapterV1_1::open_source(source.clone()).map(|a| Box::new(a) as Box<dyn ReaderAdapter>)
 }
 
-static PRODUCTION_READER_REGISTRY: LazyLock<ReaderRegistry> = LazyLock::new(|| {
-    let mut m: ReaderRegistry = HashMap::new();
-    m.insert("1.0", open_v1_0 as OpenFn);
-    m.insert("1.1", open_v1_1 as OpenFn);
+static PRODUCTION_READER_REGISTRY: LazyLock<SourceReaderRegistry> = LazyLock::new(|| {
+    let mut m: SourceReaderRegistry = HashMap::new();
+    m.insert("1.0", open_v1_0 as SourceOpenFn);
+    m.insert("1.1", open_v1_1 as SourceOpenFn);
     m
 });
 
@@ -59,6 +66,18 @@ pub fn resolve_reader(
     }
 }
 
+/// [`resolve_reader`] for a [`SourceReaderRegistry`].
+pub fn resolve_reader_source(
+    version: &str,
+    source: &FileSource,
+    registry: &SourceReaderRegistry,
+) -> Result<Box<dyn ReaderAdapter>> {
+    match registry.get(version) {
+        Some(f) => f(source),
+        None => Err(MachineConfigError::UnsupportedVersion(version.to_string())),
+    }
+}
+
 /// Reads a machine-config HDF5 file into a [`MachineConfig`].
 ///
 /// Peeks root `File_Version` and dispatches to that version's adapter.
@@ -69,9 +88,15 @@ pub struct MachineConfigReader {
 impl MachineConfigReader {
     /// Opens the file, peeks `File_Version`, and selects the matching adapter.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref();
-        let version = peek_file_version(path)?;
-        let backend = resolve_reader(&version, path, &PRODUCTION_READER_REGISTRY)?;
+        Self::open_source(FileSource::new(path))
+    }
+
+    /// Like [`Self::open`], for a path or a FAPL-hook source (e.g. an MCF stored inside an LBL
+    /// container, see [`crate::source`]).
+    pub fn open_source(source: impl Into<FileSource>) -> Result<Self> {
+        let source = source.into();
+        let version = peek_file_version_source(&source)?;
+        let backend = resolve_reader_source(&version, &source, &PRODUCTION_READER_REGISTRY)?;
         Ok(Self { backend })
     }
 
@@ -169,6 +194,20 @@ mod tests {
         // all (without touching REFERENCE, a real "1.0" fixture) already
         // proves dispatch routed to the fake, not the real "1.0" adapter.
         drop(adapter);
+    }
+
+    #[test]
+    fn source_reader_registry_dispatches_via_injected_test_adapter() {
+        let mut registry: SourceReaderRegistry = HashMap::new();
+        registry.insert("9.9-test", |_source: &FileSource| {
+            Ok(Box::new(FakeReaderAdapter) as Box<dyn ReaderAdapter>)
+        });
+        let source = FileSource::new(REFERENCE);
+        assert!(resolve_reader_source("9.9-test", &source, &registry).is_ok());
+        assert!(matches!(
+            resolve_reader_source("9.9-nope", &source, &registry),
+            Err(MachineConfigError::UnsupportedVersion(ref v)) if v == "9.9-nope"
+        ));
     }
 
     #[test]

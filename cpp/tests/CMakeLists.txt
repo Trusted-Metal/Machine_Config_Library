@@ -12,6 +12,7 @@ add_executable(machine_config_tests
   test_extensions.cpp       # extension contract + HDF5 round trips
   test_extension_tables.cpp # compound tables (contract 0.1.1)
   test_hash.cpp             # CONFIGURATION_HASH_PLAN.md Step 5
+  test_file_source.cpp      # FAPL hook (MCF inside an LBL container)
 )
 
 target_link_libraries(machine_config_tests PRIVATE

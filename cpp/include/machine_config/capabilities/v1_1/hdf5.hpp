@@ -29,6 +29,7 @@
 // `capabilities::v1_1` avoids that entirely.
 
 #include "machine_config/adapters.hpp"
+#include "machine_config/file_source.hpp"
 #include "machine_config/models.hpp"
 #include "machine_config/capabilities/v1_1/compound_types.hpp"
 #include "machine_config/capabilities/v1_1/layout.hpp"
@@ -212,16 +213,16 @@ inline ExtraAttrs collectExtra(const Loc& loc,
 
 class Hdf5AdapterV1_1 : public ReaderAdapter {
 public:
-    explicit Hdf5AdapterV1_1(std::filesystem::path path)
-        : path_(std::move(path)) {}
+    explicit Hdf5AdapterV1_1(FileSource source)
+        : source_(std::move(source)) {}
 
     MachineConfig parse() const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+        HighFive::File f = source_.openReadOnly();
         return parseInner(f);
     }
 
     MachineConfig parseWithBinary() const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+        HighFive::File f = source_.openReadOnly();
         auto cfg = parseInner(f);
         for (size_t i = 0; i < cfg.optical_trains.size(); ++i) {
             auto& ot  = cfg.optical_trains[i];
@@ -243,7 +244,7 @@ public:
     }
 
     nlohmann::json getRawGroup(const std::string& hdf5_path) const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+        HighFive::File f = source_.openReadOnly();
         try {
             return collectExtra(f.getGroup(hdf5_path), {});
         } catch (...) {
@@ -252,7 +253,7 @@ public:
     }
 
     std::vector<uint8_t> getScanFieldCorrectionBytes(size_t train_index) const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+        HighFive::File f = source_.openReadOnly();
         auto tid = trainIdAt(f, train_index);
         auto ds  = f.getDataSet(scanFieldCorrectionFilePathById(tid));
         auto dims = ds.getSpace().getDimensions();
@@ -262,7 +263,7 @@ public:
     }
 
 private:
-    std::filesystem::path path_;
+    FileSource source_;
 
     MachineConfig parseInner(const HighFive::File& f) const {
         MachineConfig cfg;

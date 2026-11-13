@@ -18,9 +18,9 @@ namespace machine_config::capabilities {
 
 class MachineConfigFileV1_0 : public IMachineConfigFile {
  public:
-  static Result<std::shared_ptr<MachineConfigFileV1_0>> open(const std::filesystem::path& path) {
+  static Result<std::shared_ptr<MachineConfigFileV1_0>> open(const FileSource& source) {
     try {
-      v1_0::Hdf5AdapterV1_0 reader(path.string());
+      v1_0::Hdf5AdapterV1_0 reader(source);
       auto config = reader.parseWithBinary();
       std::string fv = config.meta.file_version;
       while (!fv.empty() && (fv.back() == ' ' || fv.back() == '\n' || fv.back() == '\r'))
@@ -33,7 +33,7 @@ class MachineConfigFileV1_0 : public IMachineConfigFile {
       }
       return Result<std::shared_ptr<MachineConfigFileV1_0>>::Ok(
           std::shared_ptr<MachineConfigFileV1_0>(
-              new MachineConfigFileV1_0(std::move(config), path, fv)));
+              new MachineConfigFileV1_0(std::move(config), savePath(source), fv)));
     } catch (const std::exception& e) {
       return Result<std::shared_ptr<MachineConfigFileV1_0>>::Err("IoError", e.what());
     }

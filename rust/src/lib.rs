@@ -10,6 +10,7 @@ pub mod hash;
 pub mod models;
 pub mod power_characterization;
 pub mod reader;
+pub mod source;
 pub mod writer;
 
 // Crate-root re-exports: consumers must never need `machine_config::models::X` or
@@ -18,6 +19,7 @@ pub use builder::MockConfigBuilder;
 pub use error::MachineConfigError;
 pub use models::*;
 pub use reader::MachineConfigReader;
+pub use source::{FaplHook, FileSource};
 pub use writer::MachineConfigWriter;
 
 // Extension contract: core carries extension data as opaque trees; extension libraries depend on
@@ -31,6 +33,6 @@ pub use mcf_extension_contract::{canonical_digest, ExtensionTree, EXTENSION_CONT
 // `result`, `v1_0`) as new crate-root paths, and `capabilities::result::Result`
 // is a different, two-parameter type from this crate's own `error::Result`.
 pub use capabilities::{
-    create_machine_config, open_machine_config, supported_file_versions, CapabilityError,
-    MachineConfigFile, MachineConfigFileV1_0, MachineConfigFileV1_1, SetMode,
+    create_machine_config, open_machine_config, open_machine_config_source, supported_file_versions,
+    CapabilityError, MachineConfigFile, MachineConfigFileV1_0, MachineConfigFileV1_1, SetMode,
 };

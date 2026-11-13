@@ -9,7 +9,9 @@
 //! or be removed later without affecting v1.1. See
 //! `docs/migrations/v1_0_to_v1_1.md` for the full migration manifest.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use crate::source::FileSource;
 
 use hdf5::types::{FixedUnicode, TypeDescriptor, VarLenAscii, VarLenUnicode};
 use hdf5::{Dataset, File as H5File, Group, Location};
@@ -229,35 +231,39 @@ fn require_group(parent: &Group, path: &str) -> Result<Group> {
 
 /// File_Version 1.1 HDF5 reader. Public [`crate::reader::MachineConfigReader`] dispatches here.
 pub struct Hdf5AdapterV1_1 {
-    path: PathBuf,
+    source: FileSource,
 }
 
 impl Hdf5AdapterV1_1 {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        H5File::open(&path)?;
-        Ok(Self { path })
+        Self::open_source(FileSource::new(path))
+    }
+
+    /// Like [`Self::open`], for a path or a FAPL-hook source (e.g. an MCF inside an LBL container).
+    pub fn open_source(source: FileSource) -> Result<Self> {
+        source.open()?;
+        Ok(Self { source })
     }
 
     pub fn parse(&self) -> Result<MachineConfig> {
-        let f = H5File::open(&self.path)?;
+        let f = self.source.open()?;
         self.parse_inner(&f, false)
     }
 
     pub fn parse_with_binary(&self) -> Result<MachineConfig> {
-        let f = H5File::open(&self.path)?;
+        let f = self.source.open()?;
         self.parse_inner(&f, true)
     }
 
     pub fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>> {
-        let f = H5File::open(&self.path)?;
+        let f = self.source.open()?;
         let tid = layout::train_id(train_index);
         let path = layout::scan_field_correction_file_path_by_id(&tid);
         Ok(f.dataset(&path)?.read_raw::<u8>()?)
     }
 
     pub fn get_raw_group(&self, hdf5_path: &str) -> Result<ExtraAttrs> {
-        let f = H5File::open(&self.path)?;
+        let f = self.source.open()?;
         let grp = match f.group(hdf5_path) {
             Ok(g) => g,
             Err(_) => return Ok(IndexMap::new()),

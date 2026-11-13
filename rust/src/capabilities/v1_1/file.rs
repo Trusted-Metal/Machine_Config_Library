@@ -14,6 +14,7 @@ use crate::models::{
     ScannerCard,
 };
 use crate::writer::MachineConfigWriter;
+use crate::source::FileSource;
 use std::path::{Path, PathBuf};
 
 use super::hdf5::Hdf5AdapterV1_1;
@@ -27,9 +28,15 @@ pub struct MachineConfigFileV1_1 {
 
 impl MachineConfigFileV1_1 {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, CapabilityError> {
-        let path = path.as_ref().to_path_buf();
+        Self::open_source(FileSource::new(path))
+    }
+
+    /// Like [`Self::open`], for a path or a FAPL-hook source (e.g. an MCF inside an LBL
+    /// container). A redirected source has no default save path.
+    pub fn open_source(source: FileSource) -> Result<Self, CapabilityError> {
+        let path = source.save_path();
         let reader =
-            Hdf5AdapterV1_1::open(&path).map_err(|e| CapabilityError::IoError(e.to_string()))?;
+            Hdf5AdapterV1_1::open_source(source).map_err(|e| CapabilityError::IoError(e.to_string()))?;
         let config = reader
             .parse_with_binary()
             .map_err(|e| CapabilityError::IoError(e.to_string()))?;
@@ -42,7 +49,7 @@ impl MachineConfigFileV1_1 {
                 "No adapter for File_Version \"{fv}\" (v1.1 facade)"
             )));
         }
-        Ok(Self { config, path: Some(path), file_version: fv, closed: false })
+        Ok(Self { config, path, file_version: fv, closed: false })
     }
 
     /// Builds a mock config via `MockConfigBuilder`, which now builds

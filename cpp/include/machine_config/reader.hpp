@@ -3,6 +3,7 @@
 // On-disk group paths and HDF5 attribute names live in the matching adapter.
 
 #include "machine_config/adapters.hpp"
+#include "machine_config/file_source.hpp"
 #include "machine_config/hash.hpp"
 #include "machine_config/models.hpp"
 #include "machine_config/capabilities/v1_0/hdf5.hpp"
@@ -22,8 +23,8 @@
 namespace machine_config {
 
 /// Read only the root File_Version attribute. Does not walk groups.
-inline std::string peekFileVersion(const std::filesystem::path& path) {
-    HighFive::File f(path.string(), HighFive::File::ReadOnly);
+inline std::string peekFileVersion(const FileSource& source) {
+    HighFive::File f = source.openReadOnly();
     if (!f.hasAttribute("File_Version")) return "1.0";
     std::string ver = readRequiredStr(f, "File_Version");
     auto first = ver.find_first_not_of(" \t\r\n");
@@ -36,17 +37,18 @@ inline std::string peekFileVersion(const std::filesystem::path& path) {
 // Version -> constructor for that version's ReaderAdapter. A real registry
 // (DISPATCH_REGISTRY_PLAN.md), not a hardcoded check: adding a version means
 // adding an entry here, never editing MachineConfigReader itself.
+// Entries receive a FileSource, which also converts to `const std::filesystem::path&`.
 using ReaderRegistry =
     std::unordered_map<std::string,
-                        std::function<std::unique_ptr<ReaderAdapter>(const std::filesystem::path&)>>;
+                        std::function<std::unique_ptr<ReaderAdapter>(const FileSource&)>>;
 
 inline const ReaderRegistry& productionReaderRegistry() {
     static const ReaderRegistry registry = {
-        {"1.0", [](const std::filesystem::path& path) -> std::unique_ptr<ReaderAdapter> {
-             return std::make_unique<capabilities::v1_0::Hdf5AdapterV1_0>(path);
+        {"1.0", [](const FileSource& source) -> std::unique_ptr<ReaderAdapter> {
+             return std::make_unique<capabilities::v1_0::Hdf5AdapterV1_0>(source);
          }},
-        {"1.1", [](const std::filesystem::path& path) -> std::unique_ptr<ReaderAdapter> {
-             return std::make_unique<capabilities::v1_1::Hdf5AdapterV1_1>(path);
+        {"1.1", [](const FileSource& source) -> std::unique_ptr<ReaderAdapter> {
+             return std::make_unique<capabilities::v1_1::Hdf5AdapterV1_1>(source);
          }},
     };
     return registry;
@@ -55,19 +57,20 @@ inline const ReaderRegistry& productionReaderRegistry() {
 // Registry-parameterized so tests can inject a fake entry without touching
 // global state — see DISPATCH_REGISTRY_PLAN.md's shared testing pattern.
 inline std::unique_ptr<ReaderAdapter> resolveReader(
-    const std::string& version, const std::filesystem::path& path, const ReaderRegistry& registry) {
+    const std::string& version, const FileSource& source, const ReaderRegistry& registry) {
     auto it = registry.find(version);
     if (it == registry.end()) {
         throw std::runtime_error(
             "No adapter registered for File_Version \"" + version + "\"");
     }
-    return it->second(path);
+    return it->second(source);
 }
 
 class MachineConfigReader {
 public:
-    explicit MachineConfigReader(std::filesystem::path path)
-        : path_(std::move(path)) {}
+    // A path, or a FileSource with a FAPL hook (e.g. an MCF stored inside an LBL container).
+    explicit MachineConfigReader(FileSource source)
+        : source_(std::move(source)) {}
 
     // Parses the file and recomputes Configuration_Hash from the content
     // just read, comparing it to the stored value to set meta.is_valid. A
@@ -93,11 +96,11 @@ public:
     }
 
 private:
-    std::filesystem::path path_;
+    FileSource source_;
 
     std::unique_ptr<ReaderAdapter> adapter() const {
-        std::string ver = peekFileVersion(path_);
-        return resolveReader(ver, path_, productionReaderRegistry());
+        std::string ver = peekFileVersion(source_);
+        return resolveReader(ver, source_, productionReaderRegistry());
     }
 
     static MachineConfig withValidatedHash(MachineConfig config) {

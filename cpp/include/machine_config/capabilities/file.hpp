@@ -21,15 +21,16 @@ namespace machine_config::capabilities {
 // the common IMachineConfigFile interface. A real registry
 // (DISPATCH_REGISTRY_PLAN.md): adding a version means adding an entry here,
 // never editing openMachineConfig itself.
+// Entries receive a FileSource, which also converts to `const std::filesystem::path&`.
 using OpenRegistry =
     std::unordered_map<std::string,
                         std::function<Result<std::shared_ptr<IMachineConfigFile>>(
-                            const std::filesystem::path&)>>;
+                            const FileSource&)>>;
 
 inline const OpenRegistry& productionOpenRegistry() {
   static const OpenRegistry registry = {
       {"1.0",
-       [](const std::filesystem::path& path) -> Result<std::shared_ptr<IMachineConfigFile>> {
+       [](const FileSource& path) -> Result<std::shared_ptr<IMachineConfigFile>> {
          auto r = MachineConfigFileV1_0::open(path);
          if (!r.ok()) {
            return Result<std::shared_ptr<IMachineConfigFile>>::Err(
@@ -39,7 +40,7 @@ inline const OpenRegistry& productionOpenRegistry() {
              std::static_pointer_cast<IMachineConfigFile>(r.value()));
        }},
       {"1.1",
-       [](const std::filesystem::path& path) -> Result<std::shared_ptr<IMachineConfigFile>> {
+       [](const FileSource& path) -> Result<std::shared_ptr<IMachineConfigFile>> {
          auto r = MachineConfigFileV1_1::open(path);
          if (!r.ok()) {
            return Result<std::shared_ptr<IMachineConfigFile>>::Err(
@@ -55,7 +56,7 @@ inline const OpenRegistry& productionOpenRegistry() {
 // Registry-parameterized so tests can inject a fake entry without touching
 // global state — see DISPATCH_REGISTRY_PLAN.md's shared testing pattern.
 inline Result<std::shared_ptr<IMachineConfigFile>> openMachineConfigWithRegistry(
-    const std::filesystem::path& path, const OpenRegistry& registry) {
+    const FileSource& path, const OpenRegistry& registry) {
   std::string fv;
   try {
     fv = ::machine_config::peekFileVersion(path);
@@ -71,8 +72,9 @@ inline Result<std::shared_ptr<IMachineConfigFile>> openMachineConfigWithRegistry
   return it->second(path);
 }
 
+// `path` may be a plain path or a FileSource with a FAPL hook (MCF stored inside an LBL container).
 inline Result<std::shared_ptr<IMachineConfigFile>> openMachineConfig(
-    const std::filesystem::path& path) {
+    const FileSource& path) {
   return openMachineConfigWithRegistry(path, productionOpenRegistry());
 }
 

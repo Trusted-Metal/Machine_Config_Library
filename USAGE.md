@@ -165,6 +165,42 @@ vendor-specific logic is encoded in the library.
 The canonical output is a JSON document that matches `schema/machine_config_v1.schema.json`.
 Any machine whose HDF5 export follows the schema structure is a valid input.
 
+### Reading an MCF that is not a plain file (`FileSource`, C++ and Rust)
+
+Every reader entry point also accepts a `FileSource`: a path plus an optional hook that configures
+the HDF5 file-access property list before the file is opened. Plain paths convert implicitly, so
+existing code is unchanged. The main use is reading an MCF stored inside a Lossless Build Log
+(`.lbl`) container in place, with no extraction; the LBL library provides the hook:
+
+```cpp
+auto log = lbl::BuildLog::open("build.lbl");
+auto archive = *log.archive();
+machine_config::FileSource src{archive.path(), archive.fapl_configurator(*log.machine_config_member())};
+lbl::Hdf5Lock lock;  // HighFive takes no lock; share LBL's
+auto cfg = machine_config::MachineConfigReader{src}.parse();
+auto session = machine_config::capabilities::openMachineConfig(src);
+```
+
+```rust
+let archive = std::sync::Arc::new(lbl::Archive::open("build.lbl")?);  // lbl crate, feature "hdf5-metno"
+let member = lbl::BuildLog::open("build.lbl")?.machine_config_member().unwrap();
+let a = archive.clone();
+let src = machine_config::FileSource::with_fapl_hook(archive.path(), move |fapl| {
+    a.fapl_set(member, fapl).map_err(|e| e.to_string())
+});
+let cfg = machine_config::MachineConfigReader::open_source(src.clone())?.parse()?;
+let session = machine_config::open_machine_config_source(src)?;
+```
+
+Rules:
+- The hook must use the same HDF5 shared library as this library (do not enable `static-hdf5`).
+- A session opened through a hook has no default `save()` path; pass an explicit path to write.
+- C++: `ReaderRegistry` / `OpenRegistry` entries now receive a `FileSource`, which converts to
+  `const std::filesystem::path&`, so existing lambdas still compile.
+- Rust: the path-based registries and `resolve_reader` / `resolve_open` are unchanged. The
+  production readers dispatch through the new `SourceReaderRegistry` / `SourceOpenRegistry`
+  (`resolve_reader_source` / `resolve_open_source`), whose entries take a `&FileSource`.
+
 ### The canonical JSON format
 
 Every language produces identical JSON from the same `.h5` file. This is enforced by the

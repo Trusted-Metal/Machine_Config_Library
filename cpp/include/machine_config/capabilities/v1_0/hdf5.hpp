@@ -3,6 +3,7 @@
 // Public MachineConfigReader peeks File_Version then dispatches here.
 
 #include "machine_config/adapters.hpp"
+#include "machine_config/file_source.hpp"
 #include "machine_config/clearbox_legacy.hpp"
 #include "machine_config/models.hpp"
 #include "machine_config/power_characterization.hpp"
@@ -204,16 +205,16 @@ namespace capabilities::v1_0 {
 
 class Hdf5AdapterV1_0 : public ReaderAdapter {
 public:
-    explicit Hdf5AdapterV1_0(std::filesystem::path path)
-        : path_(std::move(path)) {}
+    explicit Hdf5AdapterV1_0(FileSource source)
+        : source_(std::move(source)) {}
 
     MachineConfig parse() const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+        HighFive::File f = source_.openReadOnly();
         return parseInner(f);
     }
 
     MachineConfig parseWithBinary() const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+        HighFive::File f = source_.openReadOnly();
         auto cfg = parseInner(f);
         for (size_t i = 0; i < cfg.optical_trains.size(); ++i) {
             auto& ot  = cfg.optical_trains[i];
@@ -239,7 +240,7 @@ DS_SCAN_FIELD_CORRECTION_FILE);
     // Returns all HDF5 attributes at hdf5_path as a JSON object.
     // Returns an empty object (never throws) when the path does not exist.
     nlohmann::json getRawGroup(const std::string& hdf5_path) const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+        HighFive::File f = source_.openReadOnly();
         try {
             return collectExtra(f.getGroup(hdf5_path), {});
         } catch (...) {
@@ -249,7 +250,7 @@ DS_SCAN_FIELD_CORRECTION_FILE);
 
     // §4.11 — raw .fc3 bytes embedded as a uint8 dataset.
     std::vector<uint8_t> getScanFieldCorrectionBytes(size_t train_index) const override {
-        HighFive::File f(path_.string(), HighFive::File::ReadOnly);
+        HighFive::File f = source_.openReadOnly();
         auto tid = trainIdAt(f, train_index);
         auto ds  = f.getDataSet(trainPathById(tid) + "/" +
 DS_SCAN_FIELD_CORRECTION_FILE);
@@ -261,7 +262,7 @@ DS_SCAN_FIELD_CORRECTION_FILE);
     }
 
 private:
-    std::filesystem::path path_;
+    FileSource source_;
 
     MachineConfig parseInner(const HighFive::File& f) const {
         MachineConfig cfg;
