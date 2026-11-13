@@ -1,3 +1,10 @@
+## [1.0.0-rc.2](https://github.com/Trusted-Metal/Machine_Config_Library/compare/v1.0.0-rc.1...v1.0.0-rc.2) (2026-11-13)
+
+### Features
+
+* **cpp:** read an MCF through a FileSource with an optional HDF5 FAPL hook ([d8e48bb](https://github.com/Trusted-Metal/Machine_Config_Library/commit/d8e48bb1710246a1333b1b808f526418a86caa76))
+* **rust:** read an MCF through a FileSource with an optional HDF5 FAPL hook ([7b69722](https://github.com/Trusted-Metal/Machine_Config_Library/commit/7b69722da1eb7f7aacb73e0346e3e0a9b698d694))
+
 ## [1.0.0-rc.1](https://github.com/Trusted-Metal/Machine_Config_Library/compare/v0.2.0-rc.10...v1.0.0-rc.1) (2026-10-30)
 
 ### ⚠ BREAKING CHANGES
