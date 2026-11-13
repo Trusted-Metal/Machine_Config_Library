@@ -11,7 +11,9 @@
 // of the two to call. Extension trees (including ClearBox's correction grids)
 // are always read in full.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use crate::source::FileSource;
 
 use hdf5::types::{TypeDescriptor, VarLenAscii, VarLenUnicode};
 use hdf5::{Dataset, File as H5File, Group, Location};
@@ -239,12 +241,17 @@ fn require_group(parent: &Group, path: &str) -> Result<Group> {
 
 /// File_Version 1.0 HDF5 reader. Public [`crate::reader::MachineConfigReader`] dispatches here.
 pub struct Hdf5AdapterV1_0 {
-    path: PathBuf,
+    source: FileSource,
 }
 
 /// Read only the root `File_Version` attribute. Does not walk groups.
 pub fn peek_file_version<P: AsRef<Path>>(path: P) -> Result<String> {
-    let f = H5File::open(path)?;
+    peek_file_version_source(&FileSource::new(path))
+}
+
+/// [`peek_file_version`] for a path or a FAPL-hook source.
+pub fn peek_file_version_source(source: &FileSource) -> Result<String> {
+    let f = source.open()?;
     let version = read_required_str(&f, "File_Version").unwrap_or_default();
     let v = version.trim();
     if v.is_empty() {
@@ -257,25 +264,29 @@ pub fn peek_file_version<P: AsRef<Path>>(path: P) -> Result<String> {
 impl Hdf5AdapterV1_0 {
     /// Opens the file to validate it exists and is a readable HDF5 file.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        H5File::open(&path)?;
-        Ok(Self { path })
+        Self::open_source(FileSource::new(path))
+    }
+
+    /// Like [`Self::open`], for a path or a FAPL-hook source (e.g. an MCF inside an LBL container).
+    pub fn open_source(source: FileSource) -> Result<Self> {
+        source.open()?;
+        Ok(Self { source })
     }
 
     pub fn parse(&self) -> Result<MachineConfig> {
-        let f = H5File::open(&self.path)?;
+        let f = self.source.open()?;
         self.parse_inner(&f, false)
     }
 
     pub fn parse_with_binary(&self) -> Result<MachineConfig> {
-        let f = H5File::open(&self.path)?;
+        let f = self.source.open()?;
         self.parse_inner(&f, true)
     }
 
     /// Returns the raw `.fc3` bytes embedded as a `uint8` dataset for optical
     /// train `train_index` (0-indexed).
     pub fn get_scan_field_correction_bytes(&self, train_index: usize) -> Result<Vec<u8>> {
-        let f = H5File::open(&self.path)?;
+        let f = self.source.open()?;
         let path = layout::scan_field_correction_file_path(train_index);
         Ok(f.dataset(&path)?.read_raw::<u8>()?)
     }
@@ -284,7 +295,7 @@ impl Hdf5AdapterV1_0 {
     /// Returns an empty map (not an error) if the path does not exist.
     /// Use for non-schema groups: `OPCUA`, `Scanner/X_Axis`, etc. (Rule 5).
     pub fn get_raw_group(&self, hdf5_path: &str) -> Result<ExtraAttrs> {
-        let f = H5File::open(&self.path)?;
+        let f = self.source.open()?;
         let grp = match f.group(hdf5_path) {
             Ok(g) => g,
             Err(_) => return Ok(IndexMap::new()),

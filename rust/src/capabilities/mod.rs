@@ -17,7 +17,8 @@ pub use result::Result;
 pub use v1_0::MachineConfigFileV1_0;
 pub use v1_1::MachineConfigFileV1_1;
 
-use crate::capabilities::v1_0::hdf5::peek_file_version;
+use crate::capabilities::v1_0::hdf5::peek_file_version_source;
+use crate::source::FileSource;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -29,18 +30,24 @@ type OpenFn = fn(&Path) -> Result<Box<dyn MachineConfigFile>, CapabilityError>;
 /// never editing `open_machine_config` itself.
 pub type OpenRegistry = HashMap<&'static str, OpenFn>;
 
-fn open_v1_0(path: &Path) -> Result<Box<dyn MachineConfigFile>, CapabilityError> {
-    MachineConfigFileV1_0::open(path).map(|f| Box::new(f) as Box<dyn MachineConfigFile>)
+type SourceOpenFn = fn(&FileSource) -> Result<Box<dyn MachineConfigFile>, CapabilityError>;
+/// Like [`OpenRegistry`], for constructors that take a [`FileSource`] (a path, or a path plus a
+/// FAPL hook such as an MCF stored inside an LBL container). This is the registry the production
+/// open_machine_config* functions dispatch through: adding a version means adding an entry here.
+pub type SourceOpenRegistry = HashMap<&'static str, SourceOpenFn>;
+
+fn open_v1_0(source: &FileSource) -> Result<Box<dyn MachineConfigFile>, CapabilityError> {
+    MachineConfigFileV1_0::open_source(source.clone()).map(|f| Box::new(f) as Box<dyn MachineConfigFile>)
 }
 
-fn open_v1_1(path: &Path) -> Result<Box<dyn MachineConfigFile>, CapabilityError> {
-    MachineConfigFileV1_1::open(path).map(|f| Box::new(f) as Box<dyn MachineConfigFile>)
+fn open_v1_1(source: &FileSource) -> Result<Box<dyn MachineConfigFile>, CapabilityError> {
+    MachineConfigFileV1_1::open_source(source.clone()).map(|f| Box::new(f) as Box<dyn MachineConfigFile>)
 }
 
-static PRODUCTION_OPEN_REGISTRY: LazyLock<OpenRegistry> = LazyLock::new(|| {
-    let mut m: OpenRegistry = HashMap::new();
-    m.insert("1.0", open_v1_0 as OpenFn);
-    m.insert("1.1", open_v1_1 as OpenFn);
+static PRODUCTION_OPEN_REGISTRY: LazyLock<SourceOpenRegistry> = LazyLock::new(|| {
+    let mut m: SourceOpenRegistry = HashMap::new();
+    m.insert("1.0", open_v1_0 as SourceOpenFn);
+    m.insert("1.1", open_v1_1 as SourceOpenFn);
     m
 });
 
@@ -59,12 +66,35 @@ pub fn resolve_open(
     }
 }
 
+/// [`resolve_open`] for a [`SourceOpenRegistry`].
+pub fn resolve_open_source(
+    version: &str,
+    source: &FileSource,
+    registry: &SourceOpenRegistry,
+) -> Result<Box<dyn MachineConfigFile>, CapabilityError> {
+    match registry.get(version) {
+        Some(f) => f(source),
+        None => Err(CapabilityError::UnsupportedVersion(format!(
+            "No capability adapter registered for File_Version \"{version}\""
+        ))),
+    }
+}
+
 pub fn open_machine_config(
     path: impl AsRef<Path>,
 ) -> Result<Box<dyn MachineConfigFile>, CapabilityError> {
-    let path = path.as_ref();
-    let version = peek_file_version(path).map_err(|e| CapabilityError::IoError(e.to_string()))?;
-    resolve_open(&version, path, &PRODUCTION_OPEN_REGISTRY)
+    open_machine_config_source(FileSource::new(path))
+}
+
+/// Like [`open_machine_config`], for a path or a FAPL-hook source (e.g. an MCF stored inside an
+/// LBL container, see [`crate::source`]). Sessions opened through a hook have no default save path.
+pub fn open_machine_config_source(
+    source: impl Into<FileSource>,
+) -> Result<Box<dyn MachineConfigFile>, CapabilityError> {
+    let source = source.into();
+    let version =
+        peek_file_version_source(&source).map_err(|e| CapabilityError::IoError(e.to_string()))?;
+    resolve_open_source(&version, &source, &PRODUCTION_OPEN_REGISTRY)
 }
 
 type CreateFn = fn(&str) -> Result<Box<dyn MachineConfigFile>, CapabilityError>;
@@ -223,6 +253,19 @@ mod tests {
         }) as OpenFn);
         let file = resolve_open("9.9-test", Path::new(REFERENCE), &registry).unwrap();
         assert_eq!(file.file_version(), "9.9-test-sentinel");
+    }
+
+    #[test]
+    fn source_open_registry_dispatches_via_injected_test_file() {
+        let mut registry: SourceOpenRegistry = HashMap::new();
+        registry.insert("9.9-test", (|_source: &FileSource| {
+            Ok(Box::new(FakeMachineConfigFile) as Box<dyn MachineConfigFile>)
+        }) as SourceOpenFn);
+        let source = FileSource::new(REFERENCE);
+        let file = resolve_open_source("9.9-test", &source, &registry).unwrap();
+        assert_eq!(file.file_version(), "9.9-test-sentinel");
+        let missing = resolve_open_source("9.9-nope", &source, &registry);
+        assert!(matches!(missing, Err(CapabilityError::UnsupportedVersion(_))));
     }
 
     #[test]
